@@ -2,8 +2,8 @@
   "name": "CBE Exam Register",
   "short_name": "CBE Register",
   "description": "Exam register, results, broadsheets and report cards for CBE schools.",
-  "start_url": "/CBE-SYSTEM/",
-  "scope": "/CBE-SYSTEM/"
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "orientation": "any",
   "background_color": "#F5F6FB",
