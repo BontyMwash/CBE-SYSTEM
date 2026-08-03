@@ -27,10 +27,22 @@ Views.login = function (onSuccess) {
           <label>Email</label>
           <input type="email" id="loginEmail" autocomplete="username">
         </div>
-        <div class="field full">
-          <label>Password</label>
-          <input type="password" id="loginPassword" autocomplete="current-password">
-        </div>
+   <div class="field full">
+  <label>Password</label>
+  <div class="password-wrapper">
+    <input
+      type="password"
+      id="loginPassword"
+      autocomplete="current-password">
+
+    <button
+      type="button"
+      class="toggle-password"
+      id="togglePassword">
+      <i class="fa-solid fa-eye"></i>
+    </button>
+  </div>
+</div>
         <button class="btn btn-primary" id="loginBtn" style="width:100%; justify-content:center; margin-top:6px;">Log in</button>
         <div class="login-links">
           <button class="login-link" id="forgotBtn" type="button">Forgot password?</button>
@@ -67,6 +79,22 @@ Views.login = function (onSuccess) {
     });
     document.getElementById('forgotBtn').onclick = renderForgotForm;
     document.getElementById('loginEmail').focus();
+     const password = document.getElementById('loginPassword');
+const toggle = document.getElementById('togglePassword');
+
+toggle.addEventListener('click', () => {
+  const icon = toggle.querySelector('i');
+
+  if (password.type === 'password') {
+    password.type = 'text';
+    icon.classList.remove('fa-eye');
+    icon.classList.add('fa-eye-slash');
+  } else {
+    password.type = 'password';
+    icon.classList.remove('fa-eye-slash');
+    icon.classList.add('fa-eye');
+  }
+});
   }
 
   function renderForgotForm() {
