@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CBE Exam Register</title>
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#171B3A" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="CBE Register" />
+<link rel="icon" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<!-- Login screen (shown when nobody is logged in) -->
+<div id="loginRoot" class="login-screen" style="display:none;"></div>
+
+<!-- Main app shell (shown after login) -->
+<div class="app" id="appRoot" style="display:none;">
+
+  <!-- Mobile backdrop for the slide-in sidebar -->
+  <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <span class="brand-swatch"><span></span><span></span><span></span><span></span></span>
+      <span class="brand-mark">CBE</span>
+      <span class="brand-name">Exam Register</span>
+    </div>
+
+    <nav class="nav" id="navList">
+      <!-- populated by app.js based on role -->
+    </nav>
+
+    <div class="sidebar-foot" id="sidebarFoot">
+      <!-- populated by app.js -->
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <div class="frozen-banner" id="frozenBanner">
+      <span class="frozen-dot"></span>
+      <span>This school's account is frozen.</span>
+      <span class="detail" id="frozenBannerDetail">Contact the school administrator to restore access.</span>
+    </div>
+    <header class="topbar">
+      <div style="display:flex; align-items:center; gap:12px;">
+        <button class="menu-toggle" id="menuToggle" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 5H17M3 10H17M3 15H17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+        <h1 id="pageTitle">Dashboard</h1>
+      </div>
+      <div class="topbar-actions" id="topbarActions"></div>
+    </header>
+
+    <div class="content" id="content">
+      <!-- rendered by views.js -->
+    </div>
+  </main>
+</div>
+
+<!-- Modal root -->
+<div id="modalRoot"></div>
+
+<!-- Toast root -->
+<div id="toastRoot" class="toast-root"></div>
+
+<!-- Supabase JS SDK -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+
+<!-- SheetJS: parses .xlsx/.xls files for bulk student import. CSV import
+     works fully offline; Excel needs this library loaded once per session. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<!-- App scripts, in dependency order -->
+<script src="js/supabaseClient.js"></script>
+<script src="js/data.js"></script>
+<script src="js/grading.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/import.js"></script>
+<script src="js/views.js"></script>
+<script src="js/classes.js"></script>
+<script src="js/auth-views.js"></script>
+<script src="js/broadsheet.js"></script>
+<script src="js/app.js"></script>
+
+<!-- PWA: register service worker for installability + offline app shell -->
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('service-worker.js').catch((err) => {
+        console.warn('Service worker registration failed:', err);
+      });
+    });
+  }
+
+  // Offer "Add to Home Screen" once, the first time the browser says it's
+  // installable, using the app's own toast so it matches the design.
+  let deferredInstallPrompt = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    if (sessionStorage.getItem('cbeInstallOffered')) return;
+    sessionStorage.setItem('cbeInstallOffered', '1');
+    setTimeout(() => {
+      if (!deferredInstallPrompt) return;
+      const root = document.getElementById('toastRoot');
+      if (!root) return;
+      const el = document.createElement('div');
+      el.className = 'toast';
+      el.style.cursor = 'pointer';
+      el.textContent = 'Install this app on your device — tap here';
+      el.addEventListener('click', async () => {
+        el.remove();
+        if (!deferredInstallPrompt) return;
+        deferredInstallPrompt.prompt();
+        await deferredInstallPrompt.userChoice;
+        deferredInstallPrompt = null;
+      });
+      root.appendChild(el);
+      setTimeout(() => el.remove(), 8000);
+    }, 2500);
+  });
+</script>
+</body>
+</html>
