@@ -932,3 +932,40 @@ table.ledger-table .num {
   table.ledger-table th:first-child, table.ledger-table td:first-child { padding-left: 16px; }
   .login-card { padding: 28px 22px; }
 }
+/* ===============================
+   Password Show/Hide Toggle
+   =============================== */
+
+.password-wrapper {
+    position: relative;
+    width: 100%;
+}
+
+.password-wrapper input {
+    width: 100%;
+    padding-right: 50px;
+}
+
+.toggle-password {
+    position: absolute;
+    top: 50%;
+    right: 15px;
+    transform: translateY(-50%);
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: #7a7a7a;
+    font-size: 18px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.toggle-password:hover {
+    color: #171B3A;
+}
+
+.toggle-password:focus {
+    outline: none;
+}
