@@ -333,7 +333,7 @@ Views.dashboard = async function () {
             <div class="intervention-card">
               <div style="display:flex; justify-content:space-between; align-items:center;">
                 <strong>${UI.esc(s.name)}</strong>
-                <span class="badge badge-BE">${s.average.toFixed(1)}%</span>
+               <span class="badge badge-BE">${s.avg.toFixed(1)}%</span>
               </div>
               <div class="lb-sub">${UI.esc(s.klass)}</div>
               <div class="lb-sub">Needs support in: ${weakSubjectsFor(s).map(UI.esc).join(', ') || 'general revision'}</div>
