@@ -20,8 +20,10 @@ const Store = {
   _mapClass: (r) => ({ id: r.id, name: r.name, stream: r.stream || '', label: r.stream ? `${r.name} ${r.stream}` : r.name }),
   _mapStudent: (r) => ({ id: r.id, name: r.name, admissionNo: r.admission_no || '', klass: r.klass }),
   _mapSubject: (r) => ({ id: r.id, name: r.name, code: r.code || '' }),
+  _mapExamType: (r) => ({ id: r.id, name: r.name, sortOrder: r.sort_order || 0 }),
   _mapExam: (r) => ({ id: r.id, type: r.type, term: r.term, year: r.year, klass: r.klass, subjectId: r.subject_id, totalMarks: Number(r.total_marks), date: r.exam_date || '' }),
   _mapResult: (r) => ({ id: r.id, examId: r.exam_id, studentId: r.student_id, marks: Number(r.marks) }),
+  _mapTeacherSubject: (r) => ({ id: r.id, teacherId: r.teacher_id, subjectId: r.subject_id }),
   _mapSchoolSettings: (r) => ({
     schoolName: r.name, motto: r.motto || '', term: r.term, year: r.year, gradingBands: r.grading_bands,
     frozen: !!r.frozen, frozenAt: r.frozen_at || null, frozenReason: r.frozen_reason || ''
@@ -35,32 +37,44 @@ const Store = {
   async current() {
     const schoolId = this.activeSchoolId;
     if (!schoolId) {
-      return { settings: { schoolName: '', motto: '', term: 'Term 1', year: new Date().getFullYear(), gradingBands: [] }, classes: [], students: [], subjects: [], exams: [], results: [] };
+      return {
+        settings: { schoolName: '', motto: '', term: 'Term 1', year: new Date().getFullYear(), gradingBands: [] },
+        classes: [], students: [], subjects: [], examTypes: [], exams: [], results: [], teacherSubjects: []
+      };
     }
 
-    const [schoolRes, classesRes, studentsRes, subjectsRes, examsRes, resultsRes] = await Promise.all([
+    const [schoolRes, classesRes, studentsRes, subjectsRes, examTypesRes, examsRes, resultsRes, teacherSubjectsRes] = await Promise.all([
       supabase.from('schools').select('*').eq('id', schoolId).single(),
       supabase.from('classes').select('*').eq('school_id', schoolId).order('name').order('stream'),
       supabase.from('students').select('*').eq('school_id', schoolId).order('name'),
       supabase.from('subjects').select('*').eq('school_id', schoolId).order('name'),
+      supabase.from('exam_types').select('*').eq('school_id', schoolId).order('sort_order').order('name'),
       supabase.from('exams').select('*').eq('school_id', schoolId),
-      supabase.from('results').select('*, exams!inner(school_id)').eq('exams.school_id', schoolId)
+      supabase.from('results').select('*, exams!inner(school_id)').eq('exams.school_id', schoolId),
+      // RLS scopes this automatically: admins see every assignment in the
+      // school (to manage them), teachers see only their own (to filter
+      // their own Results Entry / marks-editing screens).
+      supabase.from('teacher_subjects').select('*').eq('school_id', schoolId)
     ]);
 
     this._throwIfError('load school', schoolRes.error);
     this._throwIfError('load classes', classesRes.error);
     this._throwIfError('load students', studentsRes.error);
     this._throwIfError('load subjects', subjectsRes.error);
+    this._throwIfError('load exam types', examTypesRes.error);
     this._throwIfError('load exams', examsRes.error);
     this._throwIfError('load results', resultsRes.error);
+    this._throwIfError('load teacher subjects', teacherSubjectsRes.error);
 
     return {
       settings: this._mapSchoolSettings(schoolRes.data),
       classes: (classesRes.data || []).map(this._mapClass),
       students: (studentsRes.data || []).map(this._mapStudent),
       subjects: (subjectsRes.data || []).map(this._mapSubject),
+      examTypes: (examTypesRes.data || []).map(this._mapExamType),
       exams: (examsRes.data || []).map(this._mapExam),
-      results: (resultsRes.data || []).map(this._mapResult)
+      results: (resultsRes.data || []).map(this._mapResult),
+      teacherSubjects: (teacherSubjectsRes.data || []).map(this._mapTeacherSubject)
     };
   },
   // alias kept so any older call sites still work
@@ -210,6 +224,41 @@ const Store = {
     // exams (and their results) under this subject cascade-delete automatically
     const { error } = await supabase.from('subjects').delete().eq('id', id);
     this._throwIfError('delete subject', error);
+  },
+
+  // ---- Exam types (admin-defined sittings, e.g. Opener/Midterm/Endterm) ----
+  async addExamType(t) {
+    const { data, error } = await supabase.from('exam_types').insert({
+      school_id: this.activeSchoolId, name: t.name.trim(), sort_order: Number(t.sortOrder) || 0
+    }).select().single();
+    this._throwIfError('add exam type', error);
+    return this._mapExamType(data);
+  },
+  async updateExamType(id, patch) {
+    const dbPatch = {};
+    if (patch.name !== undefined) dbPatch.name = patch.name.trim();
+    if (patch.sortOrder !== undefined) dbPatch.sort_order = Number(patch.sortOrder) || 0;
+    const { data, error } = await supabase.from('exam_types').update(dbPatch).eq('id', id).select().single();
+    this._throwIfError('update exam type', error);
+    return this._mapExamType(data);
+  },
+  async deleteExamType(id) {
+    // Note: this only removes the exam-type entry itself — any exams
+    // already created with that type text are untouched (exams.type is
+    // stored as plain text, not a foreign key), matching how Classes work.
+    const { error } = await supabase.from('exam_types').delete().eq('id', id);
+    this._throwIfError('delete exam type', error);
+  },
+
+  // ---- Teacher <-> subject assignments ("see/edit their subjects only") ----
+  async setTeacherSubjects(teacherId, subjectIds) {
+    const { error: delErr } = await supabase.from('teacher_subjects').delete().eq('teacher_id', teacherId);
+    this._throwIfError('clear teacher subjects', delErr);
+    if (!subjectIds.length) return [];
+    const rows = subjectIds.map(subjectId => ({ school_id: this.activeSchoolId, teacher_id: teacherId, subject_id: subjectId }));
+    const { data, error } = await supabase.from('teacher_subjects').insert(rows).select();
+    this._throwIfError('save teacher subjects', error);
+    return (data || []).map(this._mapTeacherSubject);
   },
 
   // ---- Exams ----

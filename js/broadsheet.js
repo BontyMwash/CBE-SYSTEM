@@ -21,7 +21,7 @@ Views.broadsheet = async function () {
       <select id="bsClass"><option value="">Select class</option>${classes.map(c => `<option value="${UI.esc(c)}">${UI.esc(c)}</option>`).join('')}</select>
       <select id="bsType">
         <option value="">Select exam type</option>
-        ${['Opener', 'Midterm', 'Endterm'].map(t => `<option value="${t}">${t}</option>`).join('')}
+        ${st.examTypes.map(t => `<option value="${UI.esc(t.name)}">${UI.esc(t.name)}</option>`).join('')}
       </select>
       <select id="bsTerm">
         ${['Term 1', 'Term 2', 'Term 3'].map(t => `<option value="${t}" ${st.settings.term === t ? 'selected' : ''}>${t}</option>`).join('')}

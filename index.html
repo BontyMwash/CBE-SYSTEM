@@ -12,13 +12,25 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="CBE Register" />
-<link rel="icon" href="icons/icon-192.png" />
+<link rel="icon" href="favicon.ico" sizes="any" />
+<link rel="icon" href="icons/icon-192.png" type="image/png" />
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
 <link rel="stylesheet"
 href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/style.css" />
+<!-- Chart.js: powers the dashboard analytics charts -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script>
+  // Apply saved theme before paint, so there's no light-mode flash.
+  (function () {
+    try {
+      const saved = localStorage.getItem('cbeTheme');
+      if (saved === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    } catch (e) {}
+  })();
+</script>
 </head>
 <body>
 
@@ -34,7 +46,7 @@ href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css"
   <!-- Sidebar -->
   <aside class="sidebar" id="sidebar">
     <div class="brand">
-      <span class="brand-swatch"><span></span><span></span><span></span><span></span></span>
+      <img src="icons/logo-mark.png" alt="CBE Exam Register" class="brand-logo" width="34" height="34" />
       <span class="brand-mark">CBE</span>
       <span class="brand-name">Exam Register</span>
     </div>
@@ -60,9 +72,50 @@ href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css"
         <button class="menu-toggle" id="menuToggle" aria-label="Open menu">
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 5H17M3 10H17M3 15H17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         </button>
-        <h1 id="pageTitle">Dashboard</h1>
+        <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" aria-label="Collapse sidebar" title="Collapse sidebar">
+          <i class="fa-solid fa-bars-staggered"></i>
+        </button>
+        <div class="topbar-title-block">
+          <h1 id="pageTitle">Dashboard</h1>
+          <span class="topbar-welcome" id="topbarWelcome"></span>
+        </div>
       </div>
-      <div class="topbar-actions" id="topbarActions"></div>
+
+      <div class="topbar-center">
+        <div class="header-search">
+          <i class="fa-solid fa-magnifying-glass"></i>
+          <input type="text" id="globalSearch" placeholder="Search students by name or admission no…" aria-label="Search students">
+        </div>
+      </div>
+
+      <div class="topbar-actions" id="topbarActionsWrap">
+        <div id="topbarActions"></div>
+
+        <div class="header-anchor">
+          <button class="icon-btn" id="notifBellBtn" aria-label="Notifications" title="Notifications">
+            <i class="fa-regular fa-bell"></i>
+            <span class="notif-dot" id="notifDot"></span>
+          </button>
+          <div class="dropdown-panel" id="notifPanel"></div>
+        </div>
+
+        <button class="icon-btn" id="themeToggleBtn" aria-label="Toggle dark mode" title="Toggle dark mode">
+          <i class="fa-solid fa-moon" id="themeToggleIcon"></i>
+        </button>
+
+        <div class="header-anchor">
+          <div class="user-menu" id="userMenuBtn" title="Account">
+            <span class="avatar" id="userAvatar">--</span>
+            <span class="user-meta">
+              <span class="user-name" id="userMenuName">—</span><br>
+              <span class="user-role" id="userMenuRole">—</span>
+            </span>
+          </div>
+          <div class="dropdown-panel" id="userPanel"></div>
+        </div>
+
+        <span class="last-sync" id="lastSync"></span>
+      </div>
     </header>
 
     <div class="content" id="content">
@@ -70,6 +123,11 @@ href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css"
     </div>
   </main>
 </div>
+
+<!-- Floating action button: quick "Enter Marks" shortcut on mobile -->
+<button class="fab" id="fabEnterMarks" aria-label="Enter marks" title="Enter marks">
+  <i class="fa-solid fa-pen"></i>
+</button>
 
 <!-- Modal root -->
 <div id="modalRoot"></div>

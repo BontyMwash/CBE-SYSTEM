@@ -37,87 +37,467 @@ function showLoading() {
   document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">Loading…</div></div>`;
 }
 
+Views._charts = {}; // Chart.js instances, keyed by canvas id — destroyed/recreated on every render
+
+function destroyDashboardCharts() {
+  Object.values(Views._charts).forEach(c => { try { c.destroy(); } catch (e) {} });
+  Views._charts = {};
+}
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#999';
+}
+
+function showDashboardSkeleton() {
+  document.getElementById('content').innerHTML = `
+    <div class="grid grid-4 section-block">
+      ${Array.from({ length: 4 }).map(() => `<div class="skeleton skeleton-stat"></div>`).join('')}
+    </div>
+    <div class="chart-grid section-block">
+      <div class="skeleton skeleton-chart" style="grid-column:1/-1;"></div>
+      <div class="skeleton skeleton-chart"></div>
+      <div class="skeleton skeleton-chart"></div>
+    </div>
+    <div class="class-card-grid section-block">
+      ${Array.from({ length: 3 }).map(() => `<div class="skeleton skeleton-card"></div>`).join('')}
+    </div>
+  `;
+}
+
 /* ------------------------- DASHBOARD ------------------------- */
 
 Views.dashboard = async function () {
   setTopbarActions('');
-  showLoading();
+  showDashboardSkeleton();
   const st = await Store.current();
+  const allowed = Auth.allowedRoutes();
+  const canGo = (route) => allowed.includes(route);
 
+  // ---- header quick-action buttons (only routes this user can reach) ----
+  const headerActions = [
+    canGo('students') ? `<button class="btn" id="qaAddStudent"><i class="fa-solid fa-user-plus"></i> Add Student</button>` : '',
+    canGo('results') ? `<button class="btn" id="qaEnterMarks"><i class="fa-solid fa-pen"></i> Enter Marks</button>` : '',
+    canGo('reports') ? `<button class="btn" id="qaReports"><i class="fa-solid fa-file-lines"></i> Reports</button>` : '',
+    canGo('broadsheet') ? `<button class="btn btn-primary" id="qaExport"><i class="fa-solid fa-table-list"></i> Broadsheet</button>` : ''
+  ].join('');
+  setTopbarActions(headerActions);
+
+  // ---- derived data (all real — nothing fabricated) ----
+  const classes = classOptionLabels(st);
   const totalStudents = st.students.length;
-  const totalExams = st.exams.length;
   const totalSubjects = st.subjects.length;
+  const totalExams = st.exams.length;
   const totalResults = st.results.length;
-  const classes = classesFromStudents(st.students);
+  const bands = st.settings.gradingBands || [];
 
-  let classRows = '';
-  if (classes.length === 0) {
-    classRows = `<tr><td colspan="4" class="row-index">No classes yet — add students to see class performance.</td></tr>`;
-  } else {
-    classRows = classes.map(klass => {
-      const studentsInClass = st.students.filter(s => s.klass === klass);
-      const examsForClass = st.exams.filter(e => e.klass === klass);
-      const pcts = [];
-      examsForClass.forEach(exam => {
-        st.results.filter(r => r.examId === exam.id).forEach(r => {
-          pcts.push(Grading.percent(r.marks, exam.totalMarks));
-        });
-      });
-      const avg = Grading.average(pcts);
-      const band = avg === null ? null : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
-      return `<tr>
-        <td>${UI.esc(klass)}</td>
-        <td class="num">${studentsInClass.length}</td>
-        <td class="num">${examsForClass.length}</td>
-        <td>${avg === null ? '<span class="row-index">no data</span>' : `<span class="num">${avg.toFixed(1)}%</span> ${UI.badge(band)}`}</td>
-      </tr>`;
-    }).join('');
+  function pctsFor(examList) {
+    const pcts = [];
+    examList.forEach(exam => {
+      st.results.filter(r => r.examId === exam.id).forEach(r => pcts.push(Grading.percent(r.marks, exam.totalMarks)));
+    });
+    return pcts;
   }
+
+  const overallAvg = Grading.average(pctsFor(st.exams));
+
+  // Per-class stats (also drives the class comparison chart + class cards)
+  const classStats = classes.map(klass => {
+    const studentsInClass = st.students.filter(s => s.klass === klass);
+    const examsForClass = st.exams.filter(e => e.klass === klass);
+    const pcts = pctsFor(examsForClass);
+    const avg = Grading.average(pcts);
+    const band = avg === null ? null : Grading.levelForMarks(avg, 100, bands);
+    const expected = examsForClass.reduce((sum, e) => sum + studentsInClass.length, 0);
+    const entered = examsForClass.reduce((sum, e) => sum + st.results.filter(r => r.examId === e.id).length, 0);
+    return {
+      klass, students: studentsInClass.length, exams: examsForClass.length,
+      avg, band, high: pcts.length ? Math.max(...pcts) : null, low: pcts.length ? Math.min(...pcts) : null,
+      completion: expected > 0 ? (entered / expected) * 100 : null
+    };
+  });
+
+  // Per-subject stats (drives subject performance chart + "lowest subject" insight)
+  const subjectStats = st.subjects.map(subj => {
+    const examsForSubj = st.exams.filter(e => e.subjectId === subj.id);
+    const avg = Grading.average(pctsFor(examsForSubj));
+    return { subject: subj, avg };
+  });
+
+  // Overall completion: marks entered vs. marks expected across every exam
+  const expectedTotal = st.exams.reduce((sum, e) => sum + st.students.filter(s => s.klass === e.klass).length, 0);
+  const completionPct = expectedTotal > 0 ? Math.min(100, (totalResults / expectedTotal) * 100) : null;
+
+  const topClass = classStats.filter(c => c.avg !== null).sort((a, b) => b.avg - a.avg)[0] || null;
+  const lowestSubject = subjectStats.filter(s => s.avg !== null).sort((a, b) => a.avg - b.avg)[0] || null;
+
+  // Per-student averages (drives leaderboard + intervention list)
+  const studentAverages = st.students.map(s => {
+    const pcts = [];
+    st.results.filter(r => r.studentId === s.id).forEach(r => {
+      const exam = st.exams.find(e => e.id === r.examId);
+      if (exam) pcts.push(Grading.percent(r.marks, exam.totalMarks));
+    });
+    const avg = Grading.average(pcts);
+    const band = avg === null ? null : Grading.levelForMarks(avg, 100, bands);
+    return { ...s, avg, band, pcts };
+  }).filter(s => s.avg !== null);
+
+  const topStudents = [...studentAverages].sort((a, b) => b.avg - a.avg).slice(0, 5);
+  const atRisk = [...studentAverages].filter(s => s.avg < 50).sort((a, b) => a.avg - b.avg).slice(0, 6);
+
+  // Subjects each at-risk student is struggling in (their own pct < 50)
+  function weakSubjectsFor(student) {
+    const weak = [];
+    st.results.filter(r => r.studentId === student.id).forEach(r => {
+      const exam = st.exams.find(e => e.id === r.examId);
+      if (!exam) return;
+      const pct = Grading.percent(r.marks, exam.totalMarks);
+      if (pct !== null && pct < 50) {
+        const subj = st.subjects.find(s => s.id === exam.subjectId);
+        if (subj && !weak.includes(subj.name)) weak.push(subj.name);
+      }
+    });
+    return weak.slice(0, 3);
+  }
+
+  // CBC competency distribution across every individual result entered
+  const bandCounts = {};
+  bands.forEach(b => { bandCounts[b.code] = 0; });
+  st.results.forEach(r => {
+    const exam = st.exams.find(e => e.id === r.examId);
+    if (!exam) return;
+    const band = Grading.levelForMarks(r.marks, exam.totalMarks, bands);
+    if (band) bandCounts[band.code] = (bandCounts[band.code] || 0) + 1;
+  });
+
+  // Recent exams as a lightweight, real activity feed (no fabricated log)
+  const recentExams = [...st.exams].filter(e => e.date).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 6);
+
+  // Performance trend across exam types for the current term/year
+  const examTypeOrder = Grading.examTypeNames(st);
+  const trendPoints = examTypeOrder.map(type => {
+    const examsOfType = st.exams.filter(e => e.type === type && e.term === st.settings.term && String(e.year) === String(st.settings.year));
+    return { type, avg: Grading.average(pctsFor(examsOfType)) };
+  });
+
+  // ---- AI insights, computed from the numbers above only ----
+  const insights = [];
+  if (lowestSubject) insights.push(`<strong>${UI.esc(lowestSubject.subject.name)}</strong> has the lowest average of any subject, at ${lowestSubject.avg.toFixed(1)}%.`);
+  if (topClass) insights.push(`<strong>${UI.esc(topClass.klass)}</strong> is the top performing class, averaging ${topClass.avg.toFixed(1)}%.`);
+  if (atRisk.length) insights.push(`<strong>${atRisk.length}</strong> learner${atRisk.length === 1 ? '' : 's'} ${atRisk.length === 1 ? 'is' : 'are'} averaging below 50% and may need extra support.`);
+  if (completionPct !== null) insights.push(`<strong>${completionPct.toFixed(0)}%</strong> of expected marks have been entered so far this term.`);
+  if (!insights.length) insights.push('Add students, subjects and exam results to start seeing insights here.');
+
+  const gradeCards = classStats.length === 0 ? '' : classStats.map(c => `
+    <div class="class-card">
+      <div class="class-card-head">
+        <h4>${UI.esc(c.klass)}</h4>
+        ${c.band ? UI.badge(c.band) : '<span class="badge badge-none">—</span>'}
+      </div>
+      <div class="class-card-stats">
+        <div><span class="v">${c.students}</span><span class="k">Learners</span></div>
+        <div><span class="v">${c.high !== null ? c.high.toFixed(0) + '%' : '—'}</span><span class="k">Highest</span></div>
+        <div><span class="v">${c.low !== null ? c.low.toFixed(0) + '%' : '—'}</span><span class="k">Lowest</span></div>
+      </div>
+      <div>
+        <div class="progress-label"><span>Average</span><span>${c.avg !== null ? c.avg.toFixed(1) + '%' : 'no data'}</span></div>
+        <div class="progress-track"><div class="progress-fill ${c.avg !== null && c.avg < 30 ? 'danger' : c.avg !== null && c.avg < 50 ? 'warning' : 'success'}" style="width:${c.avg !== null ? c.avg.toFixed(1) : 0}%"></div></div>
+      </div>
+      <div>
+        <div class="progress-label"><span>Completion</span><span>${c.completion !== null ? c.completion.toFixed(0) + '%' : '—'}</span></div>
+        <div class="progress-track"><div class="progress-fill" style="width:${c.completion !== null ? Math.min(100, c.completion).toFixed(0) : 0}%"></div></div>
+      </div>
+      <button class="btn btn-sm btn-ghost view-class-btn" data-klass="${UI.esc(c.klass)}" style="align-self:flex-start;">View details &rarr;</button>
+    </div>
+  `).join('');
 
   const html = `
     <div class="grid grid-4 section-block">
-      <div class="card stat-card">
+      <div class="card stat-card grad-indigo">
+        <i class="fa-solid fa-user-graduate stat-icon"></i>
         <p class="stat-label">Students</p>
-        <p class="stat-value">${totalStudents}</p>
+        <p class="stat-value" id="cStudents">0</p>
         <p class="stat-sub">across ${classes.length} class${classes.length === 1 ? '' : 'es'}</p>
       </div>
-      <div class="card stat-card">
+      <div class="card stat-card grad-teal">
+        <i class="fa-solid fa-book stat-icon"></i>
         <p class="stat-label">Subjects</p>
-        <p class="stat-value">${totalSubjects}</p>
+        <p class="stat-value" id="cSubjects">0</p>
+        <p class="stat-sub">&nbsp;</p>
       </div>
-      <div class="card stat-card">
+      <div class="card stat-card grad-slate">
+        <i class="fa-solid fa-file-pen stat-icon"></i>
         <p class="stat-label">Exams recorded</p>
-        <p class="stat-value">${totalExams}</p>
-        <p class="stat-sub">${st.settings.term} · ${st.settings.year}</p>
+        <p class="stat-value" id="cExams">0</p>
+        <p class="stat-sub">${UI.esc(st.settings.term)} · ${UI.esc(String(st.settings.year))}</p>
       </div>
-      <div class="card stat-card">
-        <p class="stat-label">Marks entered</p>
-        <p class="stat-value">${totalResults}</p>
+      <div class="card stat-card ${overallAvg !== null && overallAvg < 50 ? 'grad-danger' : 'grad-success'}">
+        <i class="fa-solid fa-chart-line stat-icon"></i>
+        <p class="stat-label">Average score</p>
+        <p class="stat-value" id="cAvg">0%</p>
+        <p class="stat-sub">${totalResults} marks entered</p>
+      </div>
+    </div>
+
+    <div class="grid grid-4 section-block">
+      <div class="card stat-card plain hoverable">
+        <i class="fa-solid fa-trophy stat-icon"></i>
+        <p class="stat-label">Top class</p>
+        <p class="stat-value" style="font-size:20px;">${topClass ? UI.esc(topClass.klass) : '—'}</p>
+        <p class="stat-sub">${topClass ? topClass.avg.toFixed(1) + '% average' : 'no data yet'}</p>
+      </div>
+      <div class="card stat-card plain hoverable">
+        <i class="fa-solid fa-triangle-exclamation stat-icon"></i>
+        <p class="stat-label">Needs focus</p>
+        <p class="stat-value" style="font-size:20px;">${lowestSubject ? UI.esc(lowestSubject.subject.name) : '—'}</p>
+        <p class="stat-sub">${lowestSubject ? lowestSubject.avg.toFixed(1) + '% average' : 'no data yet'}</p>
+      </div>
+      <div class="card stat-card plain hoverable">
+        <i class="fa-solid fa-list-check stat-icon"></i>
+        <p class="stat-label">Completion</p>
+        <p class="stat-value" id="cCompletion">0%</p>
+        <p class="stat-sub">of expected marks entered</p>
+      </div>
+      <div class="card stat-card plain hoverable">
+        <i class="fa-solid fa-hand-holding-heart stat-icon"></i>
+        <p class="stat-label">Needing intervention</p>
+        <p class="stat-value" id="cAtRisk">0</p>
+        <p class="stat-sub">learners below 50%</p>
       </div>
     </div>
 
     <div class="section-block">
-      <h2 class="section-title">Class performance overview</h2>
-      <div class="ledger">
-        <div class="ledger-scroll">
-          <table class="ledger-table">
-            <thead><tr><th>Class</th><th>Students</th><th>Exams</th><th>Average</th></tr></thead>
-            <tbody>${classRows}</tbody>
-          </table>
+      <div class="section-title">Analytics</div>
+      <div class="chart-grid">
+        <div class="chart-card span-2">
+          <div class="chart-card-head"><h3>Overall performance trend</h3><span class="chart-icon"><i class="fa-solid fa-chart-line"></i></span></div>
+          <div class="chart-canvas-wrap"><canvas id="chartTrend"></canvas></div>
         </div>
+        <div class="chart-card">
+          <div class="chart-card-head"><h3>Subject performance</h3><span class="chart-icon"><i class="fa-solid fa-bars-progress"></i></span></div>
+          <div class="chart-canvas-wrap"><canvas id="chartSubjects"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-head"><h3>Class comparison</h3><span class="chart-icon"><i class="fa-solid fa-chart-column"></i></span></div>
+          <div class="chart-canvas-wrap"><canvas id="chartClasses"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-head"><h3>CBC competency distribution</h3><span class="chart-icon"><i class="fa-solid fa-chart-pie"></i></span></div>
+          <div class="chart-canvas-wrap short"><canvas id="chartBands"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-head"><h3>Marks entry progress</h3><span class="chart-icon"><i class="fa-solid fa-gauge"></i></span></div>
+          <div class="chart-canvas-wrap short" style="position:relative;">
+            <canvas id="chartProgress"></canvas>
+            <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; pointer-events:none;">
+              <span style="font-family:var(--font-display); font-weight:700; font-size:26px;">${completionPct !== null ? completionPct.toFixed(0) + '%' : '—'}</span>
+              <span style="font-size:11px; color:var(--ink-soft);">entered</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-block">
+      <div class="section-title">Class performance overview</div>
+      ${classStats.length === 0
+        ? `<div class="empty"><div class="empty-title">No classes yet</div><p>Add students to see class performance cards here.</p></div>`
+        : `<div class="class-card-grid">${gradeCards}</div>`}
+    </div>
+
+    <div class="grid grid-2 section-block">
+      <div>
+        <div class="section-title">Top students</div>
+        <div class="leaderboard">
+          ${topStudents.length === 0 ? `<div class="dropdown-empty" style="padding:24px;">No results recorded yet.</div>` : topStudents.map((s, i) => `
+            <div class="leaderboard-item">
+              <span class="rank-badge ${i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : ''}">${i + 1}</span>
+              <span class="avatar">${UI.initials(s.name)}</span>
+              <span>
+                <span class="lb-name">${UI.esc(s.name)}</span><br>
+                <span class="lb-sub">${UI.esc(s.klass)} · ${UI.esc(s.admissionNo) || 'no adm. no.'}</span>
+              </span>
+              <span class="lb-score">
+                <span class="v">${s.avg.toFixed(1)}%</span><br>
+                ${s.band ? UI.badge(s.band) : ''}
+              </span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      <div>
+        <div class="section-title">Learners needing support</div>
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          ${atRisk.length === 0 ? `<div class="card" style="text-align:center; color:var(--ink-soft);">No learners currently flagged — nice work.</div>` : atRisk.map(s => `
+            <div class="intervention-card">
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <strong>${UI.esc(s.name)}</strong>
+                <span class="badge badge-BE">${s.average.toFixed(1)}%</span>
+              </div>
+              <div class="lb-sub">${UI.esc(s.klass)}</div>
+              <div class="lb-sub">Needs support in: ${weakSubjectsFor(s).map(UI.esc).join(', ') || 'general revision'}</div>
+              <button class="btn btn-sm btn-danger intervention-btn" data-id="${s.id}" style="align-self:flex-start; margin-top:4px;">Plan intervention</button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-2 section-block">
+      <div class="insight-card">
+        <div class="section-title"><span><i class="fa-solid fa-wand-magic-sparkles"></i> AI Insights</span></div>
+        <ul class="insight-list">
+          ${insights.map(i => `<li class="insight-item"><i class="fa-solid fa-circle-dot"></i><span>${i}</span></li>`).join('')}
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="section-title">Recent activity</div>
+        <div class="activity-feed">
+          ${recentExams.length === 0 ? `<p class="stat-sub">Exam dates will show up here once you set them on the Exams page.</p>` : recentExams.map(e => {
+            const subj = st.subjects.find(s => s.id === e.subjectId);
+            return `<div class="activity-item">
+              <span class="activity-dot"><i class="fa-solid fa-file-pen"></i></span>
+              <div>
+                <div class="a-title">${UI.esc(e.type)} · ${UI.esc(subj ? subj.name : 'Subject')} — ${UI.esc(e.klass)}</div>
+                <div class="a-time">${UI.esc(e.date)}</div>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+    </div>
+
+    <div class="section-block">
+      <div class="section-title">Quick actions</div>
+      <div class="quick-action-grid">
+        ${canGo('results') ? `<button class="quick-action-btn" id="qaGridMarks"><i class="fa-solid fa-pen"></i> Enter Marks</button>` : ''}
+        ${canGo('reports') ? `<button class="quick-action-btn" id="qaGridReports"><i class="fa-solid fa-file-lines"></i> Report Cards</button>` : ''}
+        ${canGo('broadsheet') ? `<button class="quick-action-btn" id="qaGridBroadsheet"><i class="fa-solid fa-table-list"></i> Broadsheet</button>` : ''}
+        ${canGo('students') ? `<button class="quick-action-btn" id="qaGridStudents"><i class="fa-solid fa-user-graduate"></i> Manage Students</button>` : ''}
+        ${canGo('subjects') ? `<button class="quick-action-btn" id="qaGridSubjects"><i class="fa-solid fa-book"></i> Manage Subjects</button>` : ''}
+        ${canGo('exams') ? `<button class="quick-action-btn" id="qaGridExams"><i class="fa-solid fa-file-pen"></i> Manage Exams</button>` : ''}
+        ${canGo('users') ? `<button class="quick-action-btn" id="qaGridUsers"><i class="fa-solid fa-users-gear"></i> Manage Users</button>` : ''}
       </div>
     </div>
 
     ${totalStudents === 0 ? `
     <div class="card" style="text-align:center; padding:36px;">
-      <p class="section-title" style="margin-bottom:8px;">Get started</p>
-      <p class="stat-sub" style="margin-bottom:16px;">Add your students and subjects first, then create your Opener, Midterm or Endterm exams.</p>
+      <p class="section-title" style="margin-bottom:8px; justify-content:center;">Get started</p>
+      <p class="stat-sub" style="margin-bottom:16px;">Add your students and subjects first, then create exams for whichever sittings your school uses.</p>
       <button class="btn btn-primary" id="goStudents">Add students</button>
     </div>` : ''}
+
+    <div class="app-footer">
+      <span>CBE Exam Register v2.0</span>
+      <span>${UI.esc(st.settings.schoolName || '')}</span>
+      <span>${new Date().toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
+    </div>
   `;
+
   document.getElementById('content').innerHTML = html;
+
+  // ---- wire up quick actions ----
+  const go = (route) => () => App.navigate(route);
+  ['qaAddStudent'].forEach(id => { const el = document.getElementById(id); if (el) el.onclick = go('students'); });
+  ['qaEnterMarks', 'qaGridMarks'].forEach(id => { const el = document.getElementById(id); if (el) el.onclick = go('results'); });
+  ['qaReports', 'qaGridReports'].forEach(id => { const el = document.getElementById(id); if (el) el.onclick = go('reports'); });
+  ['qaExport', 'qaGridBroadsheet'].forEach(id => { const el = document.getElementById(id); if (el) el.onclick = go('broadsheet'); });
+  const qaStudents = document.getElementById('qaGridStudents'); if (qaStudents) qaStudents.onclick = go('students');
+  const qaSubjects = document.getElementById('qaGridSubjects'); if (qaSubjects) qaSubjects.onclick = go('subjects');
+  const qaExams = document.getElementById('qaGridExams'); if (qaExams) qaExams.onclick = go('exams');
+  const qaUsers = document.getElementById('qaGridUsers'); if (qaUsers) qaUsers.onclick = go('users');
   const goBtn = document.getElementById('goStudents');
-  if (goBtn) goBtn.onclick = () => App.navigate('students');
+  if (goBtn) goBtn.onclick = go('students');
+  document.querySelectorAll('.view-class-btn').forEach(btn => {
+    btn.onclick = () => App.navigate(canGo('broadsheet') ? 'broadsheet' : 'results');
+  });
+  document.querySelectorAll('.intervention-btn').forEach(btn => {
+    btn.onclick = () => App.navigate(canGo('reports') ? 'reports' : 'results');
+  });
+
+  // ---- animated counters ----
+  UI.animateCount(document.getElementById('cStudents'), totalStudents);
+  UI.animateCount(document.getElementById('cSubjects'), totalSubjects);
+  UI.animateCount(document.getElementById('cExams'), totalExams);
+  UI.animateCount(document.getElementById('cAvg'), overallAvg || 0, { decimals: 1, suffix: '%' });
+  UI.animateCount(document.getElementById('cCompletion'), completionPct || 0, { decimals: 0, suffix: '%' });
+  UI.animateCount(document.getElementById('cAtRisk'), atRisk.length);
+
+  // ---- charts ----
+  if (typeof Chart === 'undefined') return; // CDN blocked/offline — dashboard still fully usable without charts
+  destroyDashboardCharts();
+  const gridColor = cssVar('--paper-line-soft');
+  const inkSoft = cssVar('--ink-soft');
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+  Chart.defaults.color = inkSoft;
+
+  const trendCanvas = document.getElementById('chartTrend');
+  if (trendCanvas) {
+    Views._charts.trend = new Chart(trendCanvas, {
+      type: 'line',
+      data: {
+        labels: trendPoints.map(p => p.type),
+        datasets: [{
+          label: 'Average %', data: trendPoints.map(p => p.avg === null ? null : Number(p.avg.toFixed(1))),
+          borderColor: cssVar('--primary'), backgroundColor: 'rgba(79,70,229,0.12)',
+          fill: true, tension: 0.35, spanGaps: true, pointRadius: 4, pointBackgroundColor: cssVar('--primary')
+        }]
+      },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true, max: 100, grid: { color: gridColor } }, x: { grid: { display: false } } } }
+    });
+  }
+
+  const subjCanvas = document.getElementById('chartSubjects');
+  if (subjCanvas) {
+    const withData = subjectStats.filter(s => s.avg !== null);
+    Views._charts.subjects = new Chart(subjCanvas, {
+      type: 'bar',
+      data: {
+        labels: withData.map(s => s.subject.name),
+        datasets: [{ label: 'Average %', data: withData.map(s => Number(s.avg.toFixed(1))), backgroundColor: cssVar('--primary-soft'), borderRadius: 6 }]
+      },
+      options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+        scales: { x: { beginAtZero: true, max: 100, grid: { color: gridColor } }, y: { grid: { display: false } } } }
+    });
+  }
+
+  const classCanvas = document.getElementById('chartClasses');
+  if (classCanvas) {
+    const withData = classStats.filter(c => c.avg !== null);
+    Views._charts.classes = new Chart(classCanvas, {
+      type: 'bar',
+      data: {
+        labels: withData.map(c => c.klass),
+        datasets: [{ label: 'Average %', data: withData.map(c => Number(c.avg.toFixed(1))), backgroundColor: cssVar('--brass'), borderRadius: 6 }]
+      },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true, max: 100, grid: { color: gridColor } }, x: { grid: { display: false } } } }
+    });
+  }
+
+  const bandsCanvas = document.getElementById('chartBands');
+  if (bandsCanvas) {
+    const bandColors = { EE: cssVar('--band-ee'), ME: cssVar('--band-me'), AE: cssVar('--band-ae'), BE: cssVar('--band-be') };
+    const labels = bands.map(b => b.code);
+    Views._charts.bands = new Chart(bandsCanvas, {
+      type: 'doughnut',
+      data: { labels, datasets: [{ data: labels.map(c => bandCounts[c] || 0), backgroundColor: labels.map(c => bandColors[c] || '#999'), borderWidth: 0 }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, padding: 12 } } }, cutout: '62%' }
+    });
+  }
+
+  const progressCanvas = document.getElementById('chartProgress');
+  if (progressCanvas) {
+    const val = completionPct || 0;
+    Views._charts.progress = new Chart(progressCanvas, {
+      type: 'doughnut',
+      data: { labels: ['Entered', 'Remaining'], datasets: [{ data: [val, Math.max(0, 100 - val)], backgroundColor: [cssVar('--success'), gridColor], borderWidth: 0 }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { enabled: false } }, cutout: '74%', rotation: -90, circumference: 360 }
+    });
+  }
 };
 
 /* ------------------------- STUDENTS ------------------------- */
@@ -265,6 +645,13 @@ Views.students = async function () {
   document.getElementById('importStudentsBtn').onclick = () => Importer.openImportModal(() => Views.students());
   document.getElementById('classFilter').onchange = paint;
   document.getElementById('searchBox').oninput = paint;
+  // If the topbar search sent us here (App.navigate('students') after
+  // Enter in #globalSearch), pick up the pending term once and clear it.
+  if (App._pendingStudentSearch) {
+    document.getElementById('searchBox').value = App._pendingStudentSearch;
+    App._pendingStudentSearch = '';
+    paint();
+  }
   wireRowActions();
 };
 
@@ -394,7 +781,7 @@ Views.exams = async function () {
 
   function renderTable() {
     if (st.exams.length === 0) {
-      return `<div class="empty"><div class="empty-title">No exams yet</div><p>Create an Opener, Midterm or Endterm exam for a class and subject.</p></div>`;
+      return `<div class="empty"><div class="empty-title">No exams yet</div><p>Create an exam for a class and subject. Manage which exam types (Opener, Midterm, Endterm, etc.) are available from Settings.</p></div>`;
     }
     const rows = [...st.exams].sort((a, b) => (b.year - a.year) || a.term.localeCompare(b.term) || a.klass.localeCompare(b.klass));
     return `
@@ -450,6 +837,7 @@ Views.exams = async function () {
   function openForm(existing) {
     const isEdit = !!existing;
     if (st.subjects.length === 0) { UI.toast('Add a subject first'); return; }
+    if (st.examTypes.length === 0) { UI.toast('Add an exam type first, from Settings -> Exam types'); return; }
     const classOpts = classOptionLabels(st);
     const classField = classOpts.length
       ? `<select id="f_klass">
@@ -464,8 +852,9 @@ Views.exams = async function () {
         <div class="field">
           <label>Exam type</label>
           <select id="f_type">
-            ${['Opener', 'Midterm', 'Endterm'].map(t => `<option value="${t}" ${isEdit && existing.type === t ? 'selected' : ''}>${t}</option>`).join('')}
+            ${st.examTypes.map(t => `<option value="${UI.esc(t.name)}" ${isEdit && existing.type === t.name ? 'selected' : ''}>${UI.esc(t.name)}</option>`).join('')}
           </select>
+          <p class="field-hint">Manage the list of exam types from <a href="#settings">Settings</a>.</p>
         </div>
         <div class="field">
           <label>Term</label>
@@ -527,6 +916,7 @@ Views.exams = async function () {
 
   function openAllSubjectsForm() {
     if (st.subjects.length === 0) { UI.toast('Add a subject first'); return; }
+    if (st.examTypes.length === 0) { UI.toast('Add an exam type first, from Settings -> Exam types'); return; }
     const classOpts = classOptionLabels(st);
     const classField = classOpts.length
       ? `<select id="f_klass">
@@ -546,7 +936,7 @@ Views.exams = async function () {
         <div class="field">
           <label>Exam type</label>
           <select id="f_type">
-            ${['Opener', 'Midterm', 'Endterm'].map(t => `<option value="${t}">${t}</option>`).join('')}
+            ${st.examTypes.map(t => `<option value="${UI.esc(t.name)}">${UI.esc(t.name)}</option>`).join('')}
           </select>
         </div>
         <div class="field">
@@ -615,9 +1005,22 @@ Views.results = async function () {
   showLoading();
   setTopbarActions('');
   const st = await Store.current();
+  const user = Auth.currentUser();
+
+  // Teachers ("user" role) only see/edit exams for subjects assigned to
+  // them (see Users -> Manage subjects). Admins/superadmins see everything.
+  const isRestrictedTeacher = user && user.role === 'user';
+  const allowedSubjectIds = isRestrictedTeacher ? new Set(st.teacherSubjects.filter(ts => ts.teacherId === user.id).map(ts => ts.subjectId)) : null;
+  const visibleExams = isRestrictedTeacher ? st.exams.filter(e => allowedSubjectIds.has(e.subjectId)) : st.exams;
+  st.exams = visibleExams;
+
+  if (isRestrictedTeacher && allowedSubjectIds.size === 0) {
+    document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">No subjects assigned to you yet</div><p>Ask your administrator to assign your subjects from the Users page.</p></div>`;
+    return;
+  }
 
   if (st.exams.length === 0) {
-    document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">No exams to enter marks for</div><p>Create an exam first from the Exams page.</p></div>`;
+    document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">No exams to enter marks for</div><p>${isRestrictedTeacher ? 'No exams have been created yet for your assigned subjects.' : 'Create an exam first from the Exams page.'}</p></div>`;
     return;
   }
 
@@ -850,20 +1253,23 @@ Views.reports = async function (mode) {
     return;
   }
 
-  const activeMode = mode === 'exam' ? 'exam' : 'card';
+  const activeMode = (mode === 'exam' || mode === 'classes') ? mode : 'card';
 
   const tabsHtml = `
     <div class="filter-row no-print" style="margin-bottom:6px;">
       <button class="btn ${activeMode === 'card' ? 'btn-primary' : ''}" id="tabCard">Student report card</button>
       <button class="btn ${activeMode === 'exam' ? 'btn-primary' : ''}" id="tabExam">Single exam report</button>
+      <button class="btn ${activeMode === 'classes' ? 'btn-primary' : ''}" id="tabClasses">Class / stream performance</button>
     </div>
   `;
 
   document.getElementById('content').innerHTML = `<div id="tabsWrap">${tabsHtml}</div><div id="modeWrap"></div>`;
   document.getElementById('tabCard').onclick = () => Views.reports('card');
   document.getElementById('tabExam').onclick = () => Views.reports('exam');
+  document.getElementById('tabClasses').onclick = () => Views.reports('classes');
 
   if (activeMode === 'exam') { renderSingleExamReport(st); return; }
+  if (activeMode === 'classes') { renderClassPerformanceReport(st); return; }
   renderStudentReportCard(st);
 };
 
@@ -906,6 +1312,7 @@ function renderStudentReportCard(st) {
   [studentSel, termSel, yearSel].forEach(el => el.onchange = renderReport);
 
   function buildReportCardHTML(student, term, year) {
+    const examTypeNames = Grading.examTypeNames(st);
     const grid = Grading.buildStudentTermGrid(st, student.id, term, year);
     const overallAvg = Grading.average(grid.map(r => r.average).filter(v => v !== null));
     const overallBand = overallAvg === null ? null : Grading.levelForMarks(overallAvg, 100, st.settings.gradingBands);
@@ -920,9 +1327,7 @@ function renderStudentReportCard(st) {
       const avgBand = row.average === null ? null : Grading.levelForMarks(row.average, 100, st.settings.gradingBands);
       return `<tr>
         <td>${UI.esc(row.subject.name)}</td>
-        ${cellHtml('Opener')}
-        ${cellHtml('Midterm')}
-        ${cellHtml('Endterm')}
+        ${examTypeNames.map(cellHtml).join('')}
         <td class="num">${row.average === null ? '—' : row.average.toFixed(1) + '%'} ${UI.badge(avgBand)}</td>
       </tr>`;
     }).join('');
@@ -946,8 +1351,8 @@ function renderStudentReportCard(st) {
           <div><span class="k">Term average:</span>${overallAvg === null ? '—' : overallAvg.toFixed(1) + '%'}</div>
         </div>
         <table class="ledger-table" style="width:100%;">
-          <thead><tr><th>Subject</th><th>Opener</th><th>Midterm</th><th>Endterm</th><th>Average</th></tr></thead>
-          <tbody>${rowsHtml || `<tr><td colspan="5" class="row-index">No subjects added yet.</td></tr>`}</tbody>
+          <thead><tr><th>Subject</th>${examTypeNames.map(t => `<th>${UI.esc(t)}</th>`).join('')}<th>Average</th></tr></thead>
+          <tbody>${rowsHtml || `<tr><td colspan="${examTypeNames.length + 2}" class="row-index">No subjects added yet.</td></tr>`}</tbody>
         </table>
         <div class="report-footer">
           <div>
@@ -1146,7 +1551,171 @@ function renderSingleExamReport(st) {
   paint();
 }
 
+/* ---- Mode: class / stream performance — one row per class (which
+   already includes the stream, e.g. "Grade 7 East"), so admins and
+   teachers can compare how classes/streams stack up against each
+   other for a given term/year (and optionally one exam type). ---- */
+function renderClassPerformanceReport(st) {
+  if (st.students.length === 0) {
+    document.getElementById('modeWrap').innerHTML = `<div class="empty"><div class="empty-title">No students yet</div><p>Add students to see class/stream performance here.</p></div>`;
+    return;
+  }
+
+  const classes = classOptionLabels(st);
+  let picked = { term: st.settings.term, year: String(st.settings.year), type: '' };
+
+  function renderFilterRow() {
+    return `
+      <div class="filter-row no-print">
+        <select id="cpTerm">
+          ${['Term 1', 'Term 2', 'Term 3'].map(t => `<option value="${t}" ${picked.term === t ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+        <input type="number" id="cpYear" value="${UI.esc(picked.year)}" style="width:90px;">
+        <select id="cpType">
+          <option value="" ${picked.type === '' ? 'selected' : ''}>All exam types</option>
+          ${st.examTypes.map(t => `<option value="${UI.esc(t.name)}" ${picked.type === t.name ? 'selected' : ''}>${UI.esc(t.name)}</option>`).join('')}
+        </select>
+        <button class="btn btn-brass" id="cpPrintBtn">Print / Save as PDF</button>
+      </div>
+      <p class="field-hint no-print" style="margin-bottom:14px;">Compares every class/stream for the chosen term, year and (optionally) one exam type — leave "All exam types" selected for the whole term's picture.</p>
+    `;
+  }
+
+  function computeClassStats() {
+    const bands = st.settings.gradingBands || [];
+    return classes.map(klass => {
+      const studentsInClass = st.students.filter(s => s.klass === klass);
+      const examsForClass = st.exams.filter(e =>
+        e.klass === klass && e.term === picked.term && String(e.year) === picked.year &&
+        (picked.type === '' || e.type === picked.type)
+      );
+      const pcts = [];
+      examsForClass.forEach(exam => {
+        st.results.filter(r => r.examId === exam.id).forEach(r => pcts.push(Grading.percent(r.marks, exam.totalMarks)));
+      });
+      const avg = Grading.average(pcts);
+      const band = avg === null ? null : Grading.levelForMarks(avg, 100, bands);
+      const expected = examsForClass.length * studentsInClass.length;
+      const entered = examsForClass.reduce((sum, e) => sum + st.results.filter(r => r.examId === e.id).length, 0);
+      const bandCounts = {};
+      bands.forEach(b => { bandCounts[b.code] = 0; });
+      pcts.forEach(p => {
+        const b = Grading.levelForMarks(p, 100, bands);
+        if (b) bandCounts[b.code] = (bandCounts[b.code] || 0) + 1;
+      });
+      return {
+        klass, students: studentsInClass.length, examCount: examsForClass.length,
+        avg, band, high: pcts.length ? Math.max(...pcts) : null, low: pcts.length ? Math.min(...pcts) : null,
+        completion: expected > 0 ? (entered / expected) * 100 : null, bandCounts
+      };
+    });
+  }
+
+  function buildReportHTML() {
+    const bands = st.settings.gradingBands || [];
+    const stats = computeClassStats();
+    const ranked = [...stats].sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
+    const schoolMean = Grading.average(stats.map(c => c.avg).filter(v => v !== null));
+    const maxAvg = Math.max(1, ...stats.map(c => c.avg || 0));
+
+    return `
+      <div class="report-card" id="cpPrintArea">
+        <div class="report-header">
+          <div>
+            <h2>${UI.esc(st.settings.schoolName)}</h2>
+            <p class="stat-sub">${UI.esc(st.settings.motto)}</p>
+          </div>
+          <div style="text-align:right;">
+            <p class="stat-sub" style="margin:0;">Class / Stream Performance</p>
+            <p class="stat-sub" style="margin:0;">${picked.type ? UI.esc(picked.type) + ' · ' : ''}${UI.esc(picked.term)} ${UI.esc(picked.year)}</p>
+          </div>
+        </div>
+        <div class="report-meta-grid">
+          <div><span class="k">Classes/streams:</span>${stats.length}</div>
+          <div><span class="k">School mean:</span>${schoolMean === null ? '—' : schoolMean.toFixed(1) + '%'}</div>
+        </div>
+        <table class="ledger-table" style="width:100%;">
+          <thead><tr>
+            <th>Rank</th><th>Class / Stream</th><th>Learners</th><th>Entries</th>
+            <th>Mean %</th><th>Highest %</th><th>Lowest %</th><th>Level</th>
+            <th style="min-width:140px;">Comparison</th>
+          </tr></thead>
+          <tbody>
+            ${ranked.map((c, i) => `<tr>
+              <td class="num">${c.avg === null ? '—' : i + 1}</td>
+              <td>${UI.esc(c.klass)}</td>
+              <td class="num">${c.students}</td>
+              <td class="num">${c.completion === null ? '—' : c.completion.toFixed(0) + '%'}</td>
+              <td class="num">${c.avg === null ? '—' : c.avg.toFixed(1) + '%'}</td>
+              <td class="num">${c.high === null ? '—' : c.high.toFixed(1) + '%'}</td>
+              <td class="num">${c.low === null ? '—' : c.low.toFixed(1) + '%'}</td>
+              <td>${UI.badge(c.band)}</td>
+              <td>
+                <div class="progress-track" style="margin:0;">
+                  <div class="progress-fill ${c.avg !== null && c.avg < 30 ? 'danger' : c.avg !== null && c.avg < 50 ? 'warning' : 'success'}" style="width:${c.avg !== null ? Math.max(4, (c.avg / maxAvg) * 100).toFixed(1) : 0}%;"></div>
+                </div>
+              </td>
+            </tr>`).join('') || `<tr><td colspan="9" class="row-index">No classes to compare yet.</td></tr>`}
+          </tbody>
+        </table>
+
+        <div class="section-title" style="margin-top:18px;">Performance level distribution per class</div>
+        <table class="ledger-table" style="width:100%;">
+          <thead><tr><th>Class / Stream</th>${bands.map(b => `<th>${UI.esc(b.code)}</th>`).join('')}</tr></thead>
+          <tbody>
+            ${ranked.map(c => `<tr>
+              <td>${UI.esc(c.klass)}</td>
+              ${bands.map(b => `<td class="num">${c.bandCounts[b.code] || 0}</td>`).join('')}
+            </tr>`).join('') || `<tr><td colspan="${bands.length + 1}" class="row-index">No data yet.</td></tr>`}
+          </tbody>
+        </table>
+
+        <div class="report-footer">
+          <div class="signature-line">Prepared by</div>
+          <div class="signature-line">Head Teacher</div>
+        </div>
+      </div>
+    `;
+  }
+
+  function wireFilters() {
+    document.getElementById('cpPrintBtn').onclick = () => window.print();
+    document.getElementById('cpTerm').onchange = (e) => { picked.term = e.target.value; paint(); };
+    document.getElementById('cpYear').onchange = (e) => { picked.year = e.target.value; paint(); };
+    document.getElementById('cpType').onchange = (e) => { picked.type = e.target.value; paint(); };
+  }
+
+  function paint() {
+    document.getElementById('cpReportWrap').innerHTML = buildReportHTML();
+    document.getElementById('cpPrintBtn').onclick = () => window.print();
+  }
+
+  document.getElementById('modeWrap').innerHTML = `
+    <div id="cpFilterWrap">${renderFilterRow()}</div>
+    <div id="cpReportWrap"></div>
+  `;
+  wireFilters();
+  paint();
+}
+
 /* ------------------------- SETTINGS ------------------------- */
+
+function renderExamTypeRows(examTypes) {
+  if (examTypes.length === 0) {
+    return `<tr><td colspan="4" class="row-index">No exam types yet — add one below (e.g. Opener).</td></tr>`;
+  }
+  return [...examTypes].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)).map((t, i) => `
+    <tr>
+      <td class="row-index">${i + 1}</td>
+      <td><input type="text" data-et-name="${t.id}" value="${UI.esc(t.name)}"></td>
+      <td><input type="number" class="mark-input" style="width:70px;" data-et-order="${t.id}" value="${t.sortOrder}"></td>
+      <td>
+        <button class="btn btn-sm btn-ghost" data-et-save="${t.id}">Save</button>
+        <button class="btn btn-sm btn-danger" data-et-del="${t.id}">Delete</button>
+      </td>
+    </tr>
+  `).join('');
+}
 
 Views.settings = async function () {
   showLoading();
@@ -1196,6 +1765,23 @@ Views.settings = async function () {
     </div>
 
     <div class="section-block">
+      <h2 class="section-title">Exam types</h2>
+      <p class="field-hint" style="margin-bottom:12px;">The sittings your school records marks for (e.g. Opener, Midterm, Endterm — or your own names). These are the only options offered when creating an exam.</p>
+      <div class="ledger">
+        <div class="ledger-scroll">
+          <table class="ledger-table">
+            <thead><tr><th>#</th><th>Name</th><th>Order</th><th></th></tr></thead>
+            <tbody id="examTypesBody">${renderExamTypeRows(st.examTypes)}</tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-actions" style="border-top:none; margin-top:16px; justify-content:flex-start; gap:10px;">
+        <input type="text" id="newExamTypeName" placeholder="e.g. CAT 1" style="max-width:220px;">
+        <button class="btn btn-primary" id="addExamTypeBtn">+ Add exam type</button>
+      </div>
+    </div>
+
+    <div class="section-block">
       <h2 class="section-title">Grading bands (performance levels)</h2>
       <p class="field-hint" style="margin-bottom:12px;">Percentage ranges used to assign a performance level to each mark. Default follows the CBC 4-level scale — adjust as needed.</p>
       <div class="ledger">
@@ -1238,6 +1824,51 @@ Views.settings = async function () {
       </div>
     </div>
   `;
+
+  function wireExamTypeRows() {
+    document.querySelectorAll('[data-et-save]').forEach(btn => {
+      btn.onclick = async () => {
+        const id = btn.dataset.etSave;
+        const name = document.querySelector(`[data-et-name="${id}"]`).value.trim();
+        const sortOrder = Number(document.querySelector(`[data-et-order="${id}"]`).value) || 0;
+        if (!name) { UI.toast('Exam type name is required'); return; }
+        try {
+          await Store.updateExamType(id, { name, sortOrder });
+          UI.toast('Exam type updated');
+          Views.settings();
+        } catch (err) {
+          UI.toast('Could not save: ' + err.message);
+        }
+      };
+    });
+    document.querySelectorAll('[data-et-del]').forEach(btn => {
+      btn.onclick = () => {
+        UI.confirmAction('Delete this exam type? Exams already created with it are unaffected, but it will no longer appear when creating new exams.', async () => {
+          try {
+            await Store.deleteExamType(btn.dataset.etDel);
+            UI.toast('Exam type deleted');
+            Views.settings();
+          } catch (err) {
+            UI.toast('Could not delete: ' + err.message);
+          }
+        });
+      };
+    });
+  }
+  wireExamTypeRows();
+
+  document.getElementById('addExamTypeBtn').onclick = async () => {
+    const input = document.getElementById('newExamTypeName');
+    const name = input.value.trim();
+    if (!name) { UI.toast('Enter a name for the exam type'); return; }
+    try {
+      await Store.addExamType({ name, sortOrder: st.examTypes.length });
+      UI.toast('Exam type added');
+      Views.settings();
+    } catch (err) {
+      UI.toast('Could not add exam type: ' + err.message);
+    }
+  };
 
   document.getElementById('saveAccount').onclick = async () => {
     const pw = document.getElementById('acc_pw').value;

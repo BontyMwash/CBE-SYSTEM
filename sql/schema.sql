@@ -71,10 +71,23 @@ create table subjects (
   created_at  timestamptz not null default now()
 );
 
+-- Admin-defined exam types (e.g. "Opener", "Midterm", "Endterm", or
+-- whatever sittings a school actually uses). exams.type is free text
+-- validated against this list in the app rather than a hard-coded
+-- check constraint, so admins can add/rename/remove sittings.
+create table exam_types (
+  id          uuid primary key default gen_random_uuid(),
+  school_id   uuid not null references schools(id) on delete cascade,
+  name        text not null,
+  sort_order  int  not null default 0,
+  created_at  timestamptz not null default now(),
+  unique (school_id, name)
+);
+
 create table exams (
   id          uuid primary key default gen_random_uuid(),
   school_id   uuid not null references schools(id) on delete cascade,
-  type        text not null check (type in ('Opener','Midterm','Endterm')),
+  type        text not null,
   term        text not null check (term in ('Term 1','Term 2','Term 3')),
   year        int  not null,
   klass       text not null,
@@ -93,15 +106,29 @@ create table results (
   unique (exam_id, student_id)
 );
 
+-- Which subjects a "user" (teacher) login may see/edit exams and
+-- results for. Admins/superadmins are never restricted by this table.
+create table teacher_subjects (
+  id          uuid primary key default gen_random_uuid(),
+  school_id   uuid not null references schools(id) on delete cascade,
+  teacher_id  uuid not null references profiles(id) on delete cascade,
+  subject_id  uuid not null references subjects(id) on delete cascade,
+  created_at  timestamptz not null default now(),
+  unique (teacher_id, subject_id)
+);
+
 -- Helpful indexes
 create index idx_profiles_school on profiles(school_id);
 create index idx_classes_school on classes(school_id);
 create index idx_students_school on students(school_id);
 create index idx_subjects_school on subjects(school_id);
+create index idx_exam_types_school on exam_types(school_id);
 create index idx_exams_school on exams(school_id);
 create index idx_exams_lookup on exams(school_id, type, term, year, klass);
 create index idx_results_exam on results(exam_id);
 create index idx_results_student on results(student_id);
+create index idx_teacher_subjects_school on teacher_subjects(school_id);
+create index idx_teacher_subjects_teacher on teacher_subjects(teacher_id);
 
 -- ------------------------------------------------------------
 -- HELPER FUNCTIONS
@@ -142,17 +169,30 @@ language sql stable security definer set search_path = public as $$
     );
 $$;
 
+-- true when the calling teacher (role='user') has this subject
+-- assigned to them via teacher_subjects. Admins/superadmins are
+-- handled separately (they're never restricted by this).
+create or replace function public.teacher_has_subject(subj uuid)
+returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists(
+    select 1 from teacher_subjects where teacher_id = auth.uid() and subject_id = subj
+  );
+$$;
+
 -- ------------------------------------------------------------
 -- ROW LEVEL SECURITY
 -- ------------------------------------------------------------
 
-alter table schools  enable row level security;
-alter table profiles enable row level security;
-alter table classes  enable row level security;
-alter table students enable row level security;
-alter table subjects enable row level security;
-alter table exams    enable row level security;
-alter table results  enable row level security;
+alter table schools          enable row level security;
+alter table profiles         enable row level security;
+alter table classes          enable row level security;
+alter table students         enable row level security;
+alter table subjects         enable row level security;
+alter table exam_types       enable row level security;
+alter table exams            enable row level security;
+alter table results          enable row level security;
+alter table teacher_subjects enable row level security;
 
 -- ===== schools =====
 create policy "superadmin full access to schools" on schools
@@ -224,23 +264,42 @@ create policy "admin update subjects" on subjects
 create policy "admin delete subjects" on subjects
   for delete using (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id() and school_active()));
 
+-- ===== exam_types =====
+-- Every school manages its own list of exam sittings (Opener, Midterm,
+-- Endterm, or whatever names/order it wants) from Settings.
+create policy "select exam types in own school" on exam_types
+  for select using (is_superadmin() or school_id = current_school_id());
+
+create policy "admin insert exam types" on exam_types
+  for insert with check (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id() and school_active()));
+create policy "admin update exam types" on exam_types
+  for update using (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id() and school_active()));
+create policy "admin delete exam types" on exam_types
+  for delete using (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id() and school_active()));
+
 -- ===== exams =====
--- Admins create/delete exams; Admins AND Users (subject teachers) can
--- update an exam — this is what lets a teacher set "total marks (out of)"
--- for their subject from the Results Entry screen.
+-- Admins create/delete exams. Admins can always update an exam; Users
+-- (subject teachers) can only update exams for a subject assigned to
+-- them via teacher_subjects — this is what lets a teacher set "total
+-- marks (out of)" for their own subject from the Results Entry screen,
+-- without touching other teachers' subjects.
 create policy "select exams in own school" on exams
   for select using (is_superadmin() or school_id = current_school_id());
 
 create policy "admin insert exams" on exams
   for insert with check (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id() and school_active()));
 create policy "admin or user update exams" on exams
-  for update using (is_superadmin() or (app_current_role() in ('admin','user') and school_id = current_school_id() and school_active()));
+  for update using (
+    is_superadmin()
+    or (app_current_role() = 'admin' and school_id = current_school_id() and school_active())
+    or (app_current_role() = 'user' and school_id = current_school_id() and school_active() and teacher_has_subject(subject_id))
+  );
 create policy "admin delete exams" on exams
   for delete using (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id() and school_active()));
 
 -- ===== results =====
--- Admins and Users (subject teachers) can enter/edit/clear marks for
--- exams that belong to their own school.
+-- Admins can enter/edit/clear marks for any subject. Users (subject
+-- teachers) can only do so for a subject assigned to them.
 create policy "select results in own school" on results
   for select using (
     is_superadmin() or exists (
@@ -251,8 +310,12 @@ create policy "select results in own school" on results
 create policy "admin or user insert results" on results
   for insert with check (
     is_superadmin() or (
-      app_current_role() in ('admin','user') and school_active() and exists (
+      school_active() and exists (
         select 1 from exams e where e.id = results.exam_id and e.school_id = current_school_id()
+        and (
+          app_current_role() = 'admin'
+          or (app_current_role() = 'user' and teacher_has_subject(e.subject_id))
+        )
       )
     )
   );
@@ -260,8 +323,12 @@ create policy "admin or user insert results" on results
 create policy "admin or user update results" on results
   for update using (
     is_superadmin() or (
-      app_current_role() in ('admin','user') and school_active() and exists (
+      school_active() and exists (
         select 1 from exams e where e.id = results.exam_id and e.school_id = current_school_id()
+        and (
+          app_current_role() = 'admin'
+          or (app_current_role() = 'user' and teacher_has_subject(e.subject_id))
+        )
       )
     )
   );
@@ -269,8 +336,37 @@ create policy "admin or user update results" on results
 create policy "admin or user delete results" on results
   for delete using (
     is_superadmin() or (
-      app_current_role() in ('admin','user') and school_active() and exists (
+      school_active() and exists (
         select 1 from exams e where e.id = results.exam_id and e.school_id = current_school_id()
+        and (
+          app_current_role() = 'admin'
+          or (app_current_role() = 'user' and teacher_has_subject(e.subject_id))
+        )
       )
     )
   );
+
+-- ===== teacher_subjects =====
+-- Which subjects a teacher (role='user') login may see/edit exams and
+-- results for. Only admins manage these assignments; a teacher can
+-- read their own assignments (to filter their own Results Entry page).
+create policy "view own teacher subject assignments" on teacher_subjects
+  for select using (teacher_id = auth.uid());
+create policy "admin view teacher subject assignments" on teacher_subjects
+  for select using (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id()));
+
+create policy "admin insert teacher subject assignments" on teacher_subjects
+  for insert with check (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id() and school_active()));
+create policy "admin delete teacher subject assignments" on teacher_subjects
+  for delete using (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id() and school_active()));
+
+-- Seed every school with the three exam types it used to have hard-coded,
+-- so existing installs keep working immediately after this schema runs
+-- and admins can then rename/add/remove sittings from Settings.
+insert into exam_types (school_id, name, sort_order)
+select id, 'Opener', 1 from schools
+union all
+select id, 'Midterm', 2 from schools
+union all
+select id, 'Endterm', 3 from schools
+on conflict (school_id, name) do nothing;

@@ -46,6 +46,51 @@ const UI = {
     return `<span class="badge badge-${band.code}">${band.code}</span>`;
   },
 
+  // Two-letter initials for avatars, e.g. "Jane Doe" -> "JD".
+  initials(name) {
+    if (!name) return '?';
+    const parts = String(name).trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return '?';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  },
+
+  // Ripple effect for .btn clicks — delegated listener attached once
+  // in app.js init(), so every current and future button gets it for
+  // free without any other file needing to call this directly.
+  attachRipple(btn, evt) {
+    const rect = btn.getBoundingClientRect();
+    const size = Math.max(rect.width, rect.height);
+    const span = document.createElement('span');
+    span.className = 'ripple';
+    span.style.width = span.style.height = size + 'px';
+    span.style.left = (evt.clientX - rect.left - size / 2) + 'px';
+    span.style.top = (evt.clientY - rect.top - size / 2) + 'px';
+    btn.appendChild(span);
+    span.addEventListener('animationend', () => span.remove());
+  },
+
+  // Animates a number counting upward inside `el`. Purely cosmetic —
+  // the final value it settles on is always `target`, so nothing that
+  // reads the DOM value afterward is affected.
+  animateCount(el, target, opts) {
+    if (!el) return;
+    const decimals = (opts && opts.decimals) || 0;
+    const suffix = (opts && opts.suffix) || '';
+    const duration = (opts && opts.duration) || 900;
+    const start = 0;
+    const startTime = performance.now();
+    function tick(now) {
+      const p = Math.min(1, (now - startTime) / duration);
+      const eased = 1 - Math.pow(1 - p, 3);
+      const val = start + (target - start) * eased;
+      el.textContent = val.toFixed(decimals) + suffix;
+      if (p < 1) requestAnimationFrame(tick);
+    }
+    if (target === null || target === undefined || isNaN(target)) { el.textContent = '—'; return; }
+    requestAnimationFrame(tick);
+  },
+
   confirmAction(message, onConfirm) {
     UI.openModal(`
       <h2>Are you sure?</h2>

@@ -9,9 +9,7 @@ Views.login = function (onSuccess) {
   function brandBlock() {
     return `
       <div class="login-brand">
-        <span class="brand-swatch"><span></span><span></span><span></span><span></span></span>
-        <span class="brand-mark">CBE</span>
-        <span class="brand-name" style="color:var(--ink-soft);">Exam Register</span>
+        <img src="icons/logo-full.png" alt="CBE Exam Register — Record. Track. Result." class="login-logo" />
       </div>
     `;
   }
@@ -163,9 +161,7 @@ Views.setNewPassword = function (onDone) {
   root.innerHTML = `
     <div class="login-card">
       <div class="login-brand">
-        <span class="brand-swatch"><span></span><span></span><span></span><span></span></span>
-        <span class="brand-mark">CBE</span>
-        <span class="brand-name" style="color:var(--ink-soft);">Exam Register</span>
+        <img src="icons/logo-full.png" alt="CBE Exam Register — Record. Track. Result." class="login-logo" />
       </div>
       <h1>Set a new password</h1>
       <p class="login-subtitle">Choose a new password for your login.</p>
@@ -445,6 +441,14 @@ Views.users = async function () {
   showLoading();
 
   const users = await Store.listUsersForSchool(schoolId);
+  // Subjects + existing teacher->subject assignments, for the "Manage
+  // subjects" modal below (restricts what a teacher login can see/edit).
+  const st = await Store.current();
+  let teacherSubjects = st.teacherSubjects;
+
+  function subjectsForTeacher(teacherId) {
+    return new Set(teacherSubjects.filter(ts => ts.teacherId === teacherId).map(ts => ts.subjectId));
+  }
 
   function renderTable() {
     if (users.length === 0) {
@@ -454,14 +458,20 @@ Views.users = async function () {
       <div class="ledger">
         <div class="ledger-scroll">
           <table class="ledger-table">
-            <thead><tr><th>#</th><th>Name</th><th>Role</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>Name</th><th>Role</th><th>Subjects</th><th></th></tr></thead>
             <tbody>
               ${users.map((u, i) => `<tr>
                 <td class="row-index">${i + 1}</td>
                 <td>${UI.esc(u.name)}</td>
                 <td><span class="badge badge-${u.role === 'admin' ? 'ME' : 'EE'}">${u.role}</span></td>
+                <td>${u.role === 'user'
+                  ? (subjectsForTeacher(u.id).size
+                      ? [...subjectsForTeacher(u.id)].map(id => UI.esc(st.subjects.find(s => s.id === id)?.name || '?')).join(', ')
+                      : '<span class="row-index">none assigned</span>')
+                  : '<span class="row-index">—</span>'}</td>
                 <td>
                   <button class="btn btn-sm btn-ghost" data-edit="${u.id}">Edit name/role</button>
+                  ${u.role === 'user' ? `<button class="btn btn-sm btn-ghost" data-subjects="${u.id}">Manage subjects</button>` : ''}
                   <button class="btn btn-sm btn-ghost" data-reset="${u.id}">Reset password</button>
                   <button class="btn btn-sm btn-danger" data-del="${u.id}">Delete</button>
                 </td>
@@ -592,9 +602,55 @@ Views.users = async function () {
     });
   }
 
+  function openSubjectsForm(existing) {
+    const assigned = subjectsForTeacher(existing.id);
+    if (st.subjects.length === 0) {
+      UI.openModal(`
+        <h2>Manage subjects — ${UI.esc(existing.name)}</h2>
+        <p class="field-hint">No subjects exist yet. Add some from the Subjects page first.</p>
+        <div class="modal-actions"><button class="btn btn-ghost" id="cancelBtn">Close</button></div>
+      `, (root) => { root.querySelector('#cancelBtn').onclick = () => UI.closeModal(); });
+      return;
+    }
+    UI.openModal(`
+      <h2>Manage subjects — ${UI.esc(existing.name)}</h2>
+      <p class="field-hint" style="margin-bottom:12px;">Only the subjects checked below will be visible to ${UI.esc(existing.name)} on Results Entry, Report Cards and Exams for editing — this keeps each teacher scoped to their own subject(s).</p>
+      <div class="form-grid">
+        ${[...st.subjects].sort((a, b) => a.name.localeCompare(b.name)).map(s => `
+          <label class="field full" style="flex-direction:row; align-items:center; gap:10px;">
+            <input type="checkbox" data-subj-check="${s.id}" ${assigned.has(s.id) ? 'checked' : ''} style="width:auto;">
+            <span>${UI.esc(s.name)}${s.code ? ` <span class="row-index">(${UI.esc(s.code)})</span>` : ''}</span>
+          </label>
+        `).join('')}
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
+        <button class="btn btn-primary" id="saveBtn">Save subjects</button>
+      </div>
+    `, (root) => {
+      root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
+      root.querySelector('#saveBtn').onclick = async () => {
+        const subjectIds = Array.from(root.querySelectorAll('[data-subj-check]'))
+          .filter(cb => cb.checked)
+          .map(cb => cb.dataset.subjCheck);
+        try {
+          await Store.setTeacherSubjects(existing.id, subjectIds);
+          UI.toast('Subjects updated');
+          UI.closeModal();
+          Views.users();
+        } catch (err) {
+          UI.toast('Could not save: ' + err.message);
+        }
+      };
+    });
+  }
+
   function wireRowActions() {
     document.querySelectorAll('[data-edit]').forEach(btn => {
       btn.onclick = () => openEditForm(users.find(u => u.id === btn.dataset.edit));
+    });
+    document.querySelectorAll('[data-subjects]').forEach(btn => {
+      btn.onclick = () => openSubjectsForm(users.find(u => u.id === btn.dataset.subjects));
     });
     document.querySelectorAll('[data-reset]').forEach(btn => {
       btn.onclick = () => openResetForm(users.find(u => u.id === btn.dataset.reset));

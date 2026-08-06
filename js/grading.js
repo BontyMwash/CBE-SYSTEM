@@ -25,12 +25,23 @@ const Grading = {
     return nums.reduce((a, b) => a + b, 0) / nums.length;
   },
 
+  // Ordered list of exam type names for a school — from its own
+  // admin-defined exam_types list, falling back to whatever exam type
+  // text already shows up on its exams if none have been set up yet.
+  examTypeNames(st) {
+    if (st.examTypes && st.examTypes.length) return st.examTypes.map(t => t.name);
+    return [...new Set(st.exams.map(e => e.type))].sort();
+  },
+
   // For a student, build subject x examType grid of percentages for a given term/year.
   // `st` is the already-fetched school bundle {subjects, exams, results, ...} —
   // pass it in rather than fetching here, since Store.current() is now async.
+  // Exam types come from the school's own admin-defined list (st.examTypes)
+  // instead of a hard-coded Opener/Midterm/Endterm array, so this grid grows
+  // or shrinks with however many sittings the school actually uses.
   buildStudentTermGrid(st, studentId, term, year) {
     const subjects = st.subjects;
-    const examTypes = ['Opener', 'Midterm', 'Endterm'];
+    const examTypes = this.examTypeNames(st);
     const grid = subjects.map(subj => {
       const row = { subject: subj, cells: {} , average: null};
       const pcts = [];

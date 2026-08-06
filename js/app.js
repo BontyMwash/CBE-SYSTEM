@@ -15,12 +15,20 @@ const App = {
     this.renderShell();
   },
 
+  ROUTE_ICONS: {
+    dashboard: 'fa-gauge-high', classes: 'fa-chalkboard', students: 'fa-user-graduate',
+    subjects: 'fa-book', exams: 'fa-file-pen', results: 'fa-list-check',
+    reports: 'fa-file-lines', broadsheet: 'fa-table-list', users: 'fa-users-gear',
+    settings: 'fa-gear', schools: 'fa-school'
+  },
+
   buildNav() {
     const routes = Auth.allowedRoutes();
     const nav = document.getElementById('navList');
-    nav.innerHTML = routes.map((r, i) => `
+    nav.innerHTML = routes.map((r) => `
       <button class="nav-item" data-route="${r}">
-        <span class="nav-eyebrow">${String(i + 1).padStart(2, '0')}</span> ${Auth.ROUTE_LABELS[r]}
+        <span class="nav-icon"><i class="fa-solid ${this.ROUTE_ICONS[r] || 'fa-circle'}"></i></span>
+        <span>${Auth.ROUTE_LABELS[r]}</span>
       </button>
     `).join('');
     nav.querySelectorAll('.nav-item').forEach(btn => {
@@ -90,7 +98,73 @@ const App = {
       btn.classList.toggle('active', btn.dataset.route === route);
     });
     this.buildSidebarFoot();
+    this.buildHeaderExtras();
     (Views[route] || Views.dashboard)();
+  },
+
+  // Welcome message, avatar, role, last-sync time, and the
+  // notifications/user dropdowns in the topbar. Reads only from
+  // Auth.currentUser() (already cached) and Store, so it never
+  // triggers an extra network round trip beyond what Store.current()
+  // already does inside the view that's about to render.
+  async buildHeaderExtras() {
+    const user = Auth.currentUser();
+    const welcomeEl = document.getElementById('topbarWelcome');
+    const avatarEl = document.getElementById('userAvatar');
+    const nameEl = document.getElementById('userMenuName');
+    const roleEl = document.getElementById('userMenuRole');
+    const syncEl = document.getElementById('lastSync');
+    if (!user) return;
+
+    const hour = new Date().getHours();
+    const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+    if (welcomeEl) welcomeEl.textContent = `${greeting}, ${user.name.split(' ')[0]}`;
+    if (avatarEl) avatarEl.textContent = UI.initials(user.name);
+    if (nameEl) nameEl.textContent = user.name;
+    if (roleEl) roleEl.textContent = user.role;
+    if (syncEl) syncEl.textContent = `Synced ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+
+    // Notifications: low-performing learners needing intervention.
+    // Computed live from real results data — not a fabricated feed.
+    const notifPanel = document.getElementById('notifPanel');
+    const notifDot = document.getElementById('notifDot');
+    if (notifPanel && Store.activeSchoolId) {
+      try {
+        const st = await Store.current();
+        const atRisk = App.computeAtRiskStudents(st);
+        if (atRisk.length) {
+          notifDot.classList.add('show');
+          notifPanel.innerHTML = `<h4>Needs attention</h4>` + atRisk.slice(0, 6).map(s => `
+            <div class="dropdown-item">
+              <div class="d-title">${UI.esc(s.name)}</div>
+              <div class="d-sub">${UI.esc(s.klass)} · average ${s.average.toFixed(1)}%</div>
+            </div>
+          `).join('');
+        } else {
+          notifDot.classList.remove('show');
+          notifPanel.innerHTML = `<h4>Needs attention</h4><div class="dropdown-empty">No learners currently flagged — nice work.</div>`;
+        }
+      } catch (e) { /* dashboard view will surface any real load error */ }
+    } else if (notifPanel) {
+      notifPanel.innerHTML = `<div class="dropdown-empty">Nothing to show yet.</div>`;
+    }
+  },
+
+  // Students averaging below the "Approaching Expectation" band
+  // across every result they have on record. Shared by the header
+  // notification bell and the dashboard's intervention list.
+  computeAtRiskStudents(st) {
+    const out = [];
+    st.students.forEach(s => {
+      const pcts = [];
+      st.results.filter(r => r.studentId === s.id).forEach(r => {
+        const exam = st.exams.find(e => e.id === r.examId);
+        if (exam) pcts.push(Grading.percent(r.marks, exam.totalMarks));
+      });
+      const avg = Grading.average(pcts);
+      if (avg !== null && avg < 50) out.push({ ...s, average: avg });
+    });
+    return out.sort((a, b) => a.average - b.average);
   },
 
   openMobileNav() {
@@ -141,6 +215,78 @@ const App = {
   init() {
     document.getElementById('menuToggle').addEventListener('click', () => this.openMobileNav());
     document.getElementById('sidebarBackdrop').addEventListener('click', () => this.closeMobileNav());
+
+    // Desktop sidebar collapse (persisted).
+    const collapseBtn = document.getElementById('sidebarCollapseBtn');
+    if (collapseBtn) {
+      if (localStorage.getItem('cbeSidebarCollapsed') === '1') {
+        document.getElementById('appRoot').classList.add('sidebar-collapsed');
+      }
+      collapseBtn.addEventListener('click', () => {
+        const root = document.getElementById('appRoot');
+        const collapsed = root.classList.toggle('sidebar-collapsed');
+        localStorage.setItem('cbeSidebarCollapsed', collapsed ? '1' : '0');
+      });
+    }
+
+    // Dark mode toggle (persisted, applied pre-paint by the inline
+    // script in index.html — this just keeps the icon + storage in sync).
+    const themeBtn = document.getElementById('themeToggleBtn');
+    const themeIcon = document.getElementById('themeToggleIcon');
+    const syncThemeIcon = () => {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      if (themeIcon) themeIcon.className = dark ? 'fa-solid fa-sun' : 'fa-solid fa-moon';
+    };
+    syncThemeIcon();
+    if (themeBtn) {
+      themeBtn.addEventListener('click', () => {
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        if (isDark) { document.documentElement.removeAttribute('data-theme'); localStorage.setItem('cbeTheme', 'light'); }
+        else { document.documentElement.setAttribute('data-theme', 'dark'); localStorage.setItem('cbeTheme', 'dark'); }
+        syncThemeIcon();
+      });
+    }
+
+    // Button ripple, delegated so every .btn (existing or future) gets it.
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('.btn');
+      if (btn) UI.attachRipple(btn, e);
+    });
+
+    // Notification bell + user menu dropdowns.
+    const wireDropdown = (btnId, panelId) => {
+      const btn = document.getElementById(btnId);
+      const panel = document.getElementById(panelId);
+      if (!btn || !panel) return;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const willOpen = !panel.classList.contains('open');
+        document.querySelectorAll('.dropdown-panel.open').forEach(p => p.classList.remove('open'));
+        if (willOpen) panel.classList.add('open');
+      });
+    };
+    wireDropdown('notifBellBtn', 'notifPanel');
+    wireDropdown('userMenuBtn', 'userPanel');
+    document.addEventListener('click', () => {
+      document.querySelectorAll('.dropdown-panel.open').forEach(p => p.classList.remove('open'));
+    });
+
+    // Global header search: jumps to Students and pre-fills its filter.
+    const globalSearch = document.getElementById('globalSearch');
+    if (globalSearch) {
+      globalSearch.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        const q = globalSearch.value.trim();
+        this._pendingStudentSearch = q;
+        if (Auth.allowedRoutes().includes('students')) this.navigate('students');
+      });
+    }
+
+    // Mobile floating action button -> jump straight to Results entry.
+    const fab = document.getElementById('fabEnterMarks');
+    if (fab) fab.addEventListener('click', () => {
+      if (Auth.allowedRoutes().includes('results')) this.navigate('results');
+    });
 
     window.addEventListener('hashchange', () => {
       if (!Auth.currentUser()) return;
