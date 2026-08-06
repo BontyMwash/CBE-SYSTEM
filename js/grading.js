@@ -25,6 +25,42 @@ const Grading = {
     return nums.reduce((a, b) => a + b, 0) / nums.length;
   },
 
+  // Auto-generated remark for a report card, based purely on the
+  // learner's overall percentage (not a specific band code) so it
+  // still makes sense however a school has configured its grading
+  // bands. `role` is 'teacher' or 'head' — the head's remark reads a
+  // little more formal/summary-style than the class teacher's.
+  autoComment(pct, role) {
+    if (pct === null || pct === undefined || isNaN(pct)) {
+      return role === 'head'
+        ? 'Results for this sitting are not yet complete.'
+        : 'Not enough marks have been recorded yet to comment on performance.';
+    }
+    if (pct >= 80) {
+      return role === 'head'
+        ? 'An excellent overall result. Keep up this standard.'
+        : 'Excellent work this term — keep up the consistency and hard work.';
+    }
+    if (pct >= 65) {
+      return role === 'head'
+        ? 'A very good result. Encourage the learner to keep pushing.'
+        : 'A very good performance. A little more effort in weaker areas can push this even higher.';
+    }
+    if (pct >= 50) {
+      return role === 'head'
+        ? 'A satisfactory result overall.'
+        : 'A fair, solid performance. More consistent revision would help raise this further.';
+    }
+    if (pct >= 30) {
+      return role === 'head'
+        ? 'Performance is below expectation — needs closer support.'
+        : 'The learner is approaching expectation but needs closer guidance and more practice.';
+    }
+    return role === 'head'
+      ? 'Performance needs urgent attention and support.'
+      : 'The learner needs significant extra support and remedial attention to improve.';
+  },
+
   // Ordered list of exam type names for a school — from its own
   // admin-defined exam_types list, falling back to whatever exam type
   // text already shows up on its exams if none have been set up yet.

@@ -1336,7 +1336,7 @@ function renderStudentReportCard(st) {
         const c = row.cells[type];
         if (!c) return `<td class="num row-index">—</td>`;
         const band = Grading.levelForMarks(c.marks, c.totalMarks, st.settings.gradingBands);
-        return `<td class="num">${c.marks}/${c.totalMarks} ${UI.badge(band)}</td>`;
+        return `<td class="num">${c.pct.toFixed(1)}% ${UI.badge(band)}</td>`;
       };
       const avgBand = row.average === null ? null : Grading.levelForMarks(row.average, 100, st.settings.gradingBands);
       return `<tr>
@@ -1349,6 +1349,8 @@ function renderStudentReportCard(st) {
     const reportLabel = isSingle ? `${examType} Report` : 'Report Card';
     const avgLabel = isSingle ? `${examType} average` : 'Term average';
     const colCount = typesToShow.length + (isSingle ? 1 : 2);
+    const teacherComment = Grading.autoComment(overallAvg, 'teacher');
+    const headComment = Grading.autoComment(overallAvg, 'head');
 
     return `
       <div class="report-card">
@@ -1374,13 +1376,17 @@ function renderStudentReportCard(st) {
         </table>
         <div class="report-footer">
           <div>
-            <p class="stat-sub" style="margin:0 0 6px 0;"><strong>Overall performance:</strong> ${overallAvg === null ? 'Not enough data' : `${overallAvg.toFixed(1)}% `}${UI.badge(overallBand)}</p>
+            <p class="stat-sub" style="margin:0 0 6px 0;"><strong>Average performance:</strong> ${overallAvg === null ? 'Not enough data' : `${overallAvg.toFixed(1)}% `}${UI.badge(overallBand)}</p>
           </div>
           <div class="stamp badge-${overallBand ? overallBand.code : 'none'}" style="color:inherit;">${overallBand ? overallBand.code : '—'}</div>
         </div>
+        <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--paper-line); font-size:13.5px; color:var(--ink); line-height:1.6;">
+          <p style="margin:0 0 8px 0;"><strong>Class Teacher's comment:</strong> ${UI.esc(teacherComment)}</p>
+          <p style="margin:0;"><strong>Head of Institution's comment:</strong> ${UI.esc(headComment)}</p>
+        </div>
         <div class="report-footer">
           <div class="signature-line">Class Teacher</div>
-          <div class="signature-line">Head Teacher</div>
+          <div class="signature-line">Head of Institution</div>
         </div>
       </div>
     `;
@@ -1524,7 +1530,7 @@ function renderSingleExamReport(st) {
         </div>
         <div class="report-footer">
           <div class="signature-line">Subject Teacher</div>
-          <div class="signature-line">Head Teacher</div>
+          <div class="signature-line">Head of Institution</div>
         </div>
       </div>
     `;
@@ -1692,7 +1698,7 @@ function renderClassPerformanceReport(st) {
 
         <div class="report-footer">
           <div class="signature-line">Prepared by</div>
-          <div class="signature-line">Head Teacher</div>
+          <div class="signature-line">Head of Institution</div>
         </div>
       </div>
     `;
