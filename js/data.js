@@ -24,6 +24,7 @@ const Store = {
   _mapExam: (r) => ({ id: r.id, type: r.type, term: r.term, year: r.year, klass: r.klass, subjectId: r.subject_id, totalMarks: Number(r.total_marks), date: r.exam_date || '' }),
   _mapResult: (r) => ({ id: r.id, examId: r.exam_id, studentId: r.student_id, marks: Number(r.marks) }),
   _mapTeacherSubject: (r) => ({ id: r.id, teacherId: r.teacher_id, subjectId: r.subject_id }),
+  _mapPublished: (r) => ({ id: r.id, klass: r.klass, type: r.type, term: r.term, year: r.year, publishedAt: r.published_at, publishedBy: r.published_by }),
   _mapSchoolSettings: (r) => ({
     schoolName: r.name, motto: r.motto || '', term: r.term, year: r.year, gradingBands: r.grading_bands,
     frozen: !!r.frozen, frozenAt: r.frozen_at || null, frozenReason: r.frozen_reason || ''
@@ -39,11 +40,11 @@ const Store = {
     if (!schoolId) {
       return {
         settings: { schoolName: '', motto: '', term: 'Term 1', year: new Date().getFullYear(), gradingBands: [] },
-        classes: [], students: [], subjects: [], examTypes: [], exams: [], results: [], teacherSubjects: []
+        classes: [], students: [], subjects: [], examTypes: [], exams: [], results: [], teacherSubjects: [], published: []
       };
     }
 
-    const [schoolRes, classesRes, studentsRes, subjectsRes, examTypesRes, examsRes, resultsRes, teacherSubjectsRes] = await Promise.all([
+    const [schoolRes, classesRes, studentsRes, subjectsRes, examTypesRes, examsRes, resultsRes, teacherSubjectsRes, publishedRes] = await Promise.all([
       supabase.from('schools').select('*').eq('id', schoolId).single(),
       supabase.from('classes').select('*').eq('school_id', schoolId).order('name').order('stream'),
       supabase.from('students').select('*').eq('school_id', schoolId).order('name'),
@@ -54,7 +55,10 @@ const Store = {
       // RLS scopes this automatically: admins see every assignment in the
       // school (to manage them), teachers see only their own (to filter
       // their own Results Entry / marks-editing screens).
-      supabase.from('teacher_subjects').select('*').eq('school_id', schoolId)
+      supabase.from('teacher_subjects').select('*').eq('school_id', schoolId),
+      // Which (class, exam type, term, year) sittings the admin has
+      // published — this is what unlocks the Analysis page for teachers.
+      supabase.from('published_results').select('*').eq('school_id', schoolId)
     ]);
 
     this._throwIfError('load school', schoolRes.error);
@@ -65,6 +69,7 @@ const Store = {
     this._throwIfError('load exams', examsRes.error);
     this._throwIfError('load results', resultsRes.error);
     this._throwIfError('load teacher subjects', teacherSubjectsRes.error);
+    this._throwIfError('load published results', publishedRes.error);
 
     return {
       settings: this._mapSchoolSettings(schoolRes.data),
@@ -74,7 +79,8 @@ const Store = {
       examTypes: (examTypesRes.data || []).map(this._mapExamType),
       exams: (examsRes.data || []).map(this._mapExam),
       results: (resultsRes.data || []).map(this._mapResult),
-      teacherSubjects: (teacherSubjectsRes.data || []).map(this._mapTeacherSubject)
+      teacherSubjects: (teacherSubjectsRes.data || []).map(this._mapTeacherSubject),
+      published: (publishedRes.data || []).map(this._mapPublished)
     };
   },
   // alias kept so any older call sites still work
@@ -317,6 +323,23 @@ const Store = {
   async setGradingBands(bands) {
     const { error } = await supabase.from('schools').update({ grading_bands: bands }).eq('id', this.activeSchoolId);
     this._throwIfError('save grading bands', error);
+  },
+
+  // ---- Published results ("release" a sitting to teachers once every
+  // subject's marks are entered — see js/analysis.js for the UI) ----
+  async publishResults(klass, type, term, year) {
+    const { data, error } = await supabase.from('published_results')
+      .upsert({
+        school_id: this.activeSchoolId, klass, type, term, year: Number(year),
+        published_at: new Date().toISOString(), published_by: Auth.currentUser()?.id || null
+      }, { onConflict: 'school_id,klass,type,term,year' })
+      .select().single();
+    this._throwIfError('publish results', error);
+    return this._mapPublished(data);
+  },
+  async unpublishResults(id) {
+    const { error } = await supabase.from('published_results').delete().eq('id', id);
+    this._throwIfError('unpublish results', error);
   },
 
   // ---- Backup (export only — see README for why import/reset were dropped) ----

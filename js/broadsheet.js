@@ -74,10 +74,14 @@ Views.broadsheet = async function () {
         if (!res) return { marks: null, pct: null, totalMarks: col.exam.totalMarks };
         return { marks: res.marks, pct: Grading.percent(res.marks, col.exam.totalMarks), totalMarks: col.exam.totalMarks };
       });
-      const validPcts = cells.filter(c => c.pct !== null).map(c => c.pct);
-      const totalPct = validPcts.length ? validPcts.reduce((a, b) => a + b, 0) : null;
+      const enteredCells = cells.filter(c => c.marks !== null);
+      const validPcts = enteredCells.map(c => c.pct);
+      // Total marks = raw marks obtained across subjects sat (out of the raw
+      // marks possible for those same subjects) — not a percentage.
+      const totalObtained = enteredCells.length ? enteredCells.reduce((a, c) => a + Number(c.marks), 0) : null;
+      const totalPossible = enteredCells.length ? enteredCells.reduce((a, c) => a + Number(c.totalMarks), 0) : null;
       const meanPct = Grading.average(validPcts);
-      return { student: stu, cells, totalPct, meanPct };
+      return { student: stu, cells, totalObtained, totalPossible, meanPct };
     });
 
     // Rank by mean % (descending), ties share a rank
@@ -108,7 +112,7 @@ Views.broadsheet = async function () {
                 <th>Name</th>
                 <th>Adm. No.</th>
                 ${subjectCols.map(c => `<th title="${UI.esc(c.subject.name)}">${UI.esc(c.subject.code || c.subject.name)}</th>`).join('')}
-                <th>Total %</th>
+                <th>Total Marks</th>
                 <th>Mean %</th>
                 <th>Level</th>
               </tr>
@@ -121,7 +125,7 @@ Views.broadsheet = async function () {
                   <td>${UI.esc(r.student.name)}</td>
                   <td class="num">${UI.esc(r.student.admissionNo) || '—'}</td>
                   ${r.cells.map(c => `<td class="num" ${c.marks !== null ? `title="${c.marks}/${c.totalMarks} raw"` : ''}>${c.pct === null ? '<span class="row-index">—</span>' : c.pct.toFixed(1) + '%'}</td>`).join('')}
-                  <td class="num">${r.totalPct === null ? '—' : r.totalPct.toFixed(1) + '%'}</td>
+                  <td class="num">${r.totalObtained === null ? '—' : `${r.totalObtained}/${r.totalPossible}`}</td>
                   <td class="num">${r.meanPct === null ? '—' : r.meanPct.toFixed(1) + '%'}</td>
                   <td>${UI.badge(band)}</td>
                 </tr>`;

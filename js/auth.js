@@ -15,18 +15,18 @@ const Auth = {
 
   ROLE_ROUTES: {
     superadmin: ['schools'],
-    admin: ['dashboard', 'classes', 'students', 'subjects', 'exams', 'results', 'reports', 'broadsheet', 'users', 'settings'],
-    user: ['dashboard', 'results', 'reports', 'broadsheet']
+    admin: ['dashboard', 'classes', 'students', 'subjects', 'exams', 'results', 'reports', 'broadsheet', 'analysis', 'users', 'settings'],
+    user: ['dashboard', 'results', 'reports', 'broadsheet', 'analysis']
   },
 
   ROUTE_TITLES: {
     dashboard: 'Dashboard', classes: 'Classes', students: 'Students', subjects: 'Subjects', exams: 'Exams',
-    results: 'Results Entry', reports: 'Report Cards', broadsheet: 'Broadsheet',
+    results: 'Results Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', analysis: 'Published Results & Analysis',
     users: 'Users', settings: 'Settings', schools: 'Schools'
   },
   ROUTE_LABELS: {
     dashboard: 'Dashboard', classes: 'Classes', students: 'Students', subjects: 'Subjects', exams: 'Exams',
-    results: 'Results Entry', reports: 'Report Cards', broadsheet: 'Broadsheet',
+    results: 'Results Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', analysis: 'Analysis',
     users: 'Users', settings: 'Settings', schools: 'Schools'
   },
 

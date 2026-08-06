@@ -117,6 +117,23 @@ create table teacher_subjects (
   unique (teacher_id, subject_id)
 );
 
+-- One row per "sitting" (class + exam type + term + year) the admin has
+-- released to teachers. Teachers only see the Analysis page for sittings
+-- that show up here — this is what "publish once marks are all in" means
+-- in practice. Deleting the row (Unpublish) hides it from them again.
+create table published_results (
+  id            uuid primary key default gen_random_uuid(),
+  school_id     uuid not null references schools(id) on delete cascade,
+  klass         text not null,
+  type          text not null,
+  term          text not null check (term in ('Term 1','Term 2','Term 3')),
+  year          int  not null,
+  published_at  timestamptz not null default now(),
+  published_by  uuid references profiles(id) on delete set null,
+  created_at    timestamptz not null default now(),
+  unique (school_id, klass, type, term, year)
+);
+
 -- Helpful indexes
 create index idx_profiles_school on profiles(school_id);
 create index idx_classes_school on classes(school_id);
@@ -129,6 +146,7 @@ create index idx_results_exam on results(exam_id);
 create index idx_results_student on results(student_id);
 create index idx_teacher_subjects_school on teacher_subjects(school_id);
 create index idx_teacher_subjects_teacher on teacher_subjects(teacher_id);
+create index idx_published_results_school on published_results(school_id, klass, type, term, year);
 
 -- ------------------------------------------------------------
 -- HELPER FUNCTIONS
@@ -193,6 +211,7 @@ alter table exam_types       enable row level security;
 alter table exams            enable row level security;
 alter table results          enable row level security;
 alter table teacher_subjects enable row level security;
+alter table published_results enable row level security;
 
 -- ===== schools =====
 create policy "superadmin full access to schools" on schools
@@ -358,6 +377,21 @@ create policy "admin view teacher subject assignments" on teacher_subjects
 create policy "admin insert teacher subject assignments" on teacher_subjects
   for insert with check (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id() and school_active()));
 create policy "admin delete teacher subject assignments" on teacher_subjects
+  for delete using (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id() and school_active()));
+
+-- ===== published_results =====
+-- Admins publish a sitting (class + type + term + year) once every
+-- teacher has finished entering marks for it. Everyone in the school
+-- (admin and teachers alike) can then see it's published, which is
+-- what unlocks that sitting's Analysis page for teachers.
+create policy "select published results in own school" on published_results
+  for select using (is_superadmin() or school_id = current_school_id());
+
+create policy "admin publish results" on published_results
+  for insert with check (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id() and school_active()));
+create policy "admin update published results" on published_results
+  for update using (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id() and school_active()));
+create policy "admin unpublish results" on published_results
   for delete using (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id() and school_active()));
 
 -- Seed every school with the three exam types it used to have hard-coded,

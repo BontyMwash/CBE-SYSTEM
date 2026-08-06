@@ -1409,14 +1409,81 @@ table.ledger-table .num {
   width: 220px;
 }
 
+@page {
+  margin: 10mm;
+}
+
+/* Wide ledgers (broadsheet, single-exam, class-performance reports) ask
+   the browser for a landscape sheet so their columns aren't cut off.
+   Chrome/Edge honour the `page` property tying an element to a named
+   @page; browsers that don't support it just fall back to the default
+   page above, which is why the on-screen "choose Landscape" tip stays. */
+@page broadsheet-page {
+  size: landscape;
+  margin: 8mm;
+}
+
 @media print {
   .sidebar, .topbar, .topbar-actions, .frozen-banner, .no-print { display: none !important; }
   .app { display: block; }
   .main { display: block; }
-  .content { padding: 0; }
+  .content { padding: 0 !important; }
   body { background: #fff; }
   .report-card { border: none; box-shadow: none; padding: 0; max-width: 100%; margin-bottom: 0; page-break-after: always; }
   .report-card:last-child { page-break-after: auto; }
+
+  /* Broadsheet / ledger tables: let them shrink to fit the printed page
+     instead of being clipped by overflow-x scrolling, and ask for a
+     landscape page. */
+  #bsPrintArea, #cpPrintArea, .ledger {
+    page: broadsheet-page;
+    border: none;
+    box-shadow: none;
+    border-radius: 0;
+    width: 100%;
+    max-width: 100%;
+  }
+  .ledger-scroll {
+    overflow: visible !important;
+    width: 100%;
+  }
+  #bsPrintArea table.ledger-table,
+  #cpPrintArea table.ledger-table {
+    width: 100%;
+    table-layout: auto;
+    font-size: 10px;
+  }
+  #bsPrintArea table.ledger-table th,
+  #bsPrintArea table.ledger-table td,
+  #cpPrintArea table.ledger-table th,
+  #cpPrintArea table.ledger-table td {
+    padding: 4px 6px;
+    white-space: normal;
+  }
+  #bsPrintArea table.ledger-table th:first-child,
+  #bsPrintArea table.ledger-table td:first-child,
+  #cpPrintArea table.ledger-table th:first-child,
+  #cpPrintArea table.ledger-table td:first-child {
+    padding-left: 6px;
+  }
+  /* Single exam report and any other .report-card table also shrink
+     slightly so nothing gets clipped at the page edge. */
+  .report-card table.ledger-table {
+    font-size: 12px;
+  }
+
+  /* Published Results & Analysis: stack the stat/table grids to one
+     column and flatten card chrome so the printed page reads cleanly. */
+  #anPrintArea .grid-4, #anPrintArea .grid-2 {
+    grid-template-columns: 1fr;
+  }
+  #anPrintArea .card {
+    box-shadow: none;
+    border: 1px solid #ddd;
+  }
+  #anPrintArea table.ledger-table {
+    font-size: 12px;
+  }
 }
 
 /* ---------- Login screen ---------- */

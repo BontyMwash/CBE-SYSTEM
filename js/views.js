@@ -79,8 +79,7 @@ Views.dashboard = async function () {
     canGo('results') ? `<button class="btn" id="qaEnterMarks"><i class="fa-solid fa-pen"></i> Enter Marks</button>` : '',
     canGo('reports') ? `<button class="btn" id="qaReports"><i class="fa-solid fa-file-lines"></i> Reports</button>` : '',
     canGo('broadsheet') ? `<button class="btn btn-primary" id="qaExport"><i class="fa-solid fa-table-list"></i> Broadsheet</button>` : ''
-  ].join('');
-  setTopbarActions(headerActions);
+  ].join('');  setTopbarActions(headerActions);
 
   // ---- derived data (all real — nothing fabricated) ----
   const classes = classOptionLabels(st);
@@ -375,6 +374,7 @@ Views.dashboard = async function () {
         ${canGo('results') ? `<button class="quick-action-btn" id="qaGridMarks"><i class="fa-solid fa-pen"></i> Enter Marks</button>` : ''}
         ${canGo('reports') ? `<button class="quick-action-btn" id="qaGridReports"><i class="fa-solid fa-file-lines"></i> Report Cards</button>` : ''}
         ${canGo('broadsheet') ? `<button class="quick-action-btn" id="qaGridBroadsheet"><i class="fa-solid fa-table-list"></i> Broadsheet</button>` : ''}
+        ${canGo('analysis') ? `<button class="quick-action-btn" id="qaGridAnalysis"><i class="fa-solid fa-chart-column"></i> Published Results</button>` : ''}
         ${canGo('students') ? `<button class="quick-action-btn" id="qaGridStudents"><i class="fa-solid fa-user-graduate"></i> Manage Students</button>` : ''}
         ${canGo('subjects') ? `<button class="quick-action-btn" id="qaGridSubjects"><i class="fa-solid fa-book"></i> Manage Subjects</button>` : ''}
         ${canGo('exams') ? `<button class="quick-action-btn" id="qaGridExams"><i class="fa-solid fa-file-pen"></i> Manage Exams</button>` : ''}
@@ -404,6 +404,7 @@ Views.dashboard = async function () {
   ['qaEnterMarks', 'qaGridMarks'].forEach(id => { const el = document.getElementById(id); if (el) el.onclick = go('results'); });
   ['qaReports', 'qaGridReports'].forEach(id => { const el = document.getElementById(id); if (el) el.onclick = go('reports'); });
   ['qaExport', 'qaGridBroadsheet'].forEach(id => { const el = document.getElementById(id); if (el) el.onclick = go('broadsheet'); });
+  const qaAnalysis = document.getElementById('qaGridAnalysis'); if (qaAnalysis) qaAnalysis.onclick = go('analysis');
   const qaStudents = document.getElementById('qaGridStudents'); if (qaStudents) qaStudents.onclick = go('students');
   const qaSubjects = document.getElementById('qaGridSubjects'); if (qaSubjects) qaSubjects.onclick = go('subjects');
   const qaExams = document.getElementById('qaGridExams'); if (qaExams) qaExams.onclick = go('exams');
@@ -1288,7 +1289,11 @@ function renderStudentReportCard(st) {
         ${['Term 1', 'Term 2', 'Term 3'].map(t => `<option value="${t}" ${st.settings.term === t ? 'selected' : ''}>${t}</option>`).join('')}
       </select>
       <input type="number" id="yearSel" value="${st.settings.year}" style="width:90px;">
-      <button class="btn" id="printAllBtn" disabled>Merged report — whole class</button>
+      <select id="examTypeSel" title="Choose one sitting for an independent report, or All for the merged term report card">
+        <option value="">All exam types (merged)</option>
+        ${Grading.examTypeNames(st).map(t => `<option value="${UI.esc(t)}">${UI.esc(t)} report</option>`).join('')}
+      </select>
+      <button class="btn" id="printAllBtn" disabled>Whole class — print all</button>
       <button class="btn btn-brass" id="printBtn">Print / Save as PDF</button>
     </div>
     <div id="reportWrap"></div>
@@ -1299,6 +1304,7 @@ function renderStudentReportCard(st) {
   const studentSel = document.getElementById('studentSel');
   const termSel = document.getElementById('termSel');
   const yearSel = document.getElementById('yearSel');
+  const examTypeSel = document.getElementById('examTypeSel');
   const printAllBtn = document.getElementById('printAllBtn');
 
   classSel.onchange = () => {
@@ -1309,12 +1315,20 @@ function renderStudentReportCard(st) {
     document.getElementById('reportWrap').innerHTML = '';
   };
 
-  [studentSel, termSel, yearSel].forEach(el => el.onchange = renderReport);
+  [studentSel, termSel, yearSel, examTypeSel].forEach(el => el.onchange = renderReport);
 
-  function buildReportCardHTML(student, term, year) {
-    const examTypeNames = Grading.examTypeNames(st);
+  // examType is '' for the merged Opener+Midterm+Endterm(+...) report card,
+  // or one admin-defined exam type name (e.g. "Opener") for an independent,
+  // single-sitting report showing just that one column.
+  function buildReportCardHTML(student, term, year, examType) {
+    const allTypeNames = Grading.examTypeNames(st);
+    const isSingle = !!examType;
+    const typesToShow = isSingle ? [examType] : allTypeNames;
     const grid = Grading.buildStudentTermGrid(st, student.id, term, year);
-    const overallAvg = Grading.average(grid.map(r => r.average).filter(v => v !== null));
+
+    const overallAvg = isSingle
+      ? Grading.average(grid.map(r => (r.cells[examType] ? r.cells[examType].pct : null)).filter(v => v !== null))
+      : Grading.average(grid.map(r => r.average).filter(v => v !== null));
     const overallBand = overallAvg === null ? null : Grading.levelForMarks(overallAvg, 100, st.settings.gradingBands);
 
     const rowsHtml = grid.map(row => {
@@ -1327,10 +1341,14 @@ function renderStudentReportCard(st) {
       const avgBand = row.average === null ? null : Grading.levelForMarks(row.average, 100, st.settings.gradingBands);
       return `<tr>
         <td>${UI.esc(row.subject.name)}</td>
-        ${examTypeNames.map(cellHtml).join('')}
-        <td class="num">${row.average === null ? '—' : row.average.toFixed(1) + '%'} ${UI.badge(avgBand)}</td>
+        ${typesToShow.map(cellHtml).join('')}
+        ${isSingle ? '' : `<td class="num">${row.average === null ? '—' : row.average.toFixed(1) + '%'} ${UI.badge(avgBand)}</td>`}
       </tr>`;
     }).join('');
+
+    const reportLabel = isSingle ? `${examType} Report` : 'Report Card';
+    const avgLabel = isSingle ? `${examType} average` : 'Term average';
+    const colCount = typesToShow.length + (isSingle ? 1 : 2);
 
     return `
       <div class="report-card">
@@ -1340,7 +1358,7 @@ function renderStudentReportCard(st) {
             <p class="stat-sub">${UI.esc(st.settings.motto)}</p>
           </div>
           <div style="text-align:right;">
-            <p class="stat-sub" style="margin:0;">Report Card</p>
+            <p class="stat-sub" style="margin:0;">${UI.esc(reportLabel)}</p>
             <p class="stat-sub" style="margin:0;">${UI.esc(term)} · ${UI.esc(year)}</p>
           </div>
         </div>
@@ -1348,11 +1366,11 @@ function renderStudentReportCard(st) {
           <div><span class="k">Name:</span>${UI.esc(student.name)}</div>
           <div><span class="k">Admission No.:</span>${UI.esc(student.admissionNo) || '—'}</div>
           <div><span class="k">Class:</span>${UI.esc(student.klass)}</div>
-          <div><span class="k">Term average:</span>${overallAvg === null ? '—' : overallAvg.toFixed(1) + '%'}</div>
+          <div><span class="k">${UI.esc(avgLabel)}:</span>${overallAvg === null ? '—' : overallAvg.toFixed(1) + '%'}</div>
         </div>
         <table class="ledger-table" style="width:100%;">
-          <thead><tr><th>Subject</th>${examTypeNames.map(t => `<th>${UI.esc(t)}</th>`).join('')}<th>Average</th></tr></thead>
-          <tbody>${rowsHtml || `<tr><td colspan="${examTypeNames.length + 2}" class="row-index">No subjects added yet.</td></tr>`}</tbody>
+          <thead><tr><th>Subject</th>${typesToShow.map(t => `<th>${UI.esc(t)}</th>`).join('')}${isSingle ? '' : '<th>Average</th>'}</tr></thead>
+          <tbody>${rowsHtml || `<tr><td colspan="${colCount}" class="row-index">No subjects added yet.</td></tr>`}</tbody>
         </table>
         <div class="report-footer">
           <div>
@@ -1374,7 +1392,8 @@ function renderStudentReportCard(st) {
     const student = st.students.find(s => s.id === studentId);
     const term = termSel.value;
     const year = yearSel.value;
-    document.getElementById('reportWrap').innerHTML = buildReportCardHTML(student, term, year);
+    const examType = examTypeSel.value;
+    document.getElementById('reportWrap').innerHTML = buildReportCardHTML(student, term, year, examType);
   }
 
   printAllBtn.onclick = () => {
@@ -1382,12 +1401,13 @@ function renderStudentReportCard(st) {
     if (!klass) { UI.toast('Select a class first'); return; }
     const term = termSel.value;
     const year = yearSel.value;
+    const examType = examTypeSel.value;
     const students = st.students.filter(s => s.klass === klass).sort((a, b) => a.name.localeCompare(b.name));
     if (students.length === 0) { UI.toast('No students in this class'); return; }
     studentSel.value = '';
     document.getElementById('reportWrap').innerHTML =
-      `<p class="field-hint no-print" style="margin-bottom:14px;">${students.length} report cards for ${UI.esc(klass)} — ${UI.esc(term)} ${UI.esc(year)}. Each prints on its own page.</p>` +
-      students.map(s => buildReportCardHTML(s, term, year)).join('');
+      `<p class="field-hint no-print" style="margin-bottom:14px;">${students.length} report cards for ${UI.esc(klass)} — ${UI.esc(term)} ${UI.esc(year)}${examType ? ' · ' + UI.esc(examType) : ' · merged'}. Each prints on its own page.</p>` +
+      students.map(s => buildReportCardHTML(s, term, year, examType)).join('');
   };
 
   document.getElementById('printBtn').onclick = () => window.print();

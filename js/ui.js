@@ -91,13 +91,15 @@ const UI = {
     requestAnimationFrame(tick);
   },
 
-  confirmAction(message, onConfirm) {
+  confirmAction(message, onConfirm, opts) {
+    const confirmLabel = (opts && opts.confirmLabel) || 'Delete';
+    const confirmClass = (opts && opts.confirmClass) || 'btn-danger';
     UI.openModal(`
       <h2>Are you sure?</h2>
       <p>${UI.esc(message)}</p>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
-        <button class="btn btn-danger" id="confirmBtn">Delete</button>
+        <button class="btn ${confirmClass}" id="confirmBtn">${UI.esc(confirmLabel)}</button>
       </div>
     `, (root) => {
       root.querySelector('#cancelBtn').onclick = () => UI.closeModal();

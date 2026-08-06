@@ -18,7 +18,7 @@ const App = {
   ROUTE_ICONS: {
     dashboard: 'fa-gauge-high', classes: 'fa-chalkboard', students: 'fa-user-graduate',
     subjects: 'fa-book', exams: 'fa-file-pen', results: 'fa-list-check',
-    reports: 'fa-file-lines', broadsheet: 'fa-table-list', users: 'fa-users-gear',
+    reports: 'fa-file-lines', broadsheet: 'fa-table-list', analysis: 'fa-chart-column', users: 'fa-users-gear',
     settings: 'fa-gear', schools: 'fa-school'
   },
 

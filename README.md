@@ -33,10 +33,12 @@ project/
 │   ├── views.js                  # Dashboard/Students/Subjects/Exams/Results/Reports/Settings
 │   ├── auth-views.js             # Login/Schools/Users screens
 │   ├── broadsheet.js             # class broadsheet view
+│   ├── analysis.js                # Published Results & Analysis (admin publish + class/subject analysis)
 │   └── app.js                    # router + login gate + sidebar
 ├── sql/
 │   ├── schema.sql                # ⚠️ RUN THIS in Supabase SQL Editor
-│   └── bootstrap_superadmin.sql  # ⚠️ RUN THIS ONCE to create your first login
+│   ├── bootstrap_superadmin.sql  # ⚠️ RUN THIS ONCE to create your first login
+│   └── 006_published_results.sql # migration for existing installs — adds "publish results" support
 └── supabase/
     └── functions/
         └── manage-user/
@@ -62,8 +64,11 @@ project's **URL** and **anon (public) key** from Project Settings → API
 
 ### 2. Run the database schema
 Dashboard → **SQL Editor** → New query → paste the entire contents of
-`sql/schema.sql` → Run. This creates all six tables, the helper
-functions, and every Row Level Security policy.
+`sql/schema.sql` → Run. This creates every table, the helper
+functions, and every Row Level Security policy. (Already ran an older
+`schema.sql` on an existing project? Run `sql/006_published_results.sql`
+instead to add just the new "publish results" table without touching
+anything else.)
 
 ### 3. Deploy the Edge Function
 This requires the [Supabase CLI](https://supabase.com/docs/guides/cli):
@@ -113,10 +118,13 @@ creates the school's first Admin login in the same step.
   school's first Admin. Can "Open" a school to browse/manage it directly.
 - **Admin** — runs one school: students, subjects, exams, results,
   reports, broadsheets, settings, and creates **User** logins for their
-  own school (teachers).
+  own school (teachers). Also **publishes results** (Analysis page) once
+  a sitting's marks are all in — that's what makes it visible to teachers.
 - **User (teacher)** — Dashboard, Results Entry (including setting "out
-  of how many" for their subject), Report Cards, Broadsheet. Can't touch
-  student/subject/exam setup or settings.
+  of how many" for their subject), Report Cards, Broadsheet, and
+  Analysis for sittings their admin has published. Can't touch
+  student/subject/exam setup or settings, and can't see Analysis for
+  anything not yet published.
 
 These aren't just UI restrictions — a User's Supabase session literally
 cannot read or write rows outside their school, or delete a student, no
@@ -140,6 +148,9 @@ Every entity below has full Create/Read/Update/Delete wired through
 - **Exams** — `exams` table
 - **Results** — `results` table, upserted so re-entering a mark updates
   rather than duplicates
+- **Published results** — `published_results` table (admin-only publish/
+  unpublish; everyone in the school can read it, which is what gates
+  the Analysis page for teachers)
 
 ## Why an Edge Function, not just direct table access?
 
