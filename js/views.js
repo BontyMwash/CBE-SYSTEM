@@ -1296,6 +1296,26 @@ function renderStudentReportCard(st) {
       <button class="btn" id="printAllBtn" disabled>Whole class — print all</button>
       <button class="btn btn-brass" id="printBtn">Print / Save as PDF</button>
     </div>
+    <div class="card no-print" id="commentsCard" style="display:none; margin-bottom:16px;">
+      <p class="stat-sub" style="margin:0 0 10px 0;">
+        <strong>Class Teacher's &amp; Head of Institution's remarks</strong> — type these once for the
+        selected class/term/year and they'll fill in automatically at the bottom of every student's report card below.
+      </p>
+      <div class="form-grid">
+        <div class="field full">
+          <label>Class Teacher's comment</label>
+          <textarea id="classTeacherCommentInput" rows="2" placeholder="e.g. A hardworking class this term — keep encouraging consistent revision."></textarea>
+        </div>
+        <div class="field full">
+          <label>Head of Institution's comment</label>
+          <textarea id="headCommentInput" rows="2" placeholder="e.g. A pleasing overall performance from this class this term."></textarea>
+        </div>
+      </div>
+      <div style="display:flex; align-items:center; gap:12px; margin-top:10px;">
+        <button class="btn btn-brass" id="saveCommentsBtn">Save remarks</button>
+        <span class="field-hint" id="commentsSavedHint" style="margin:0;"></span>
+      </div>
+    </div>
     <div id="reportWrap"></div>
   `;
   document.getElementById('modeWrap').innerHTML = html;
@@ -1306,6 +1326,47 @@ function renderStudentReportCard(st) {
   const yearSel = document.getElementById('yearSel');
   const examTypeSel = document.getElementById('examTypeSel');
   const printAllBtn = document.getElementById('printAllBtn');
+  const commentsCard = document.getElementById('commentsCard');
+  const classTeacherCommentInput = document.getElementById('classTeacherCommentInput');
+  const headCommentInput = document.getElementById('headCommentInput');
+  const commentsSavedHint = document.getElementById('commentsSavedHint');
+
+  // Find (or create a blank stand-in for) the saved remark row for the
+  // currently-picked class/term/year — comments are per class, not per
+  // student, so every learner in that class shares the same remark.
+  function currentComment() {
+    const klass = classSel.value, term = termSel.value, year = yearSel.value;
+    return st.reportComments.find(c => c.klass === klass && c.term === term && String(c.year) === String(year))
+      || { klass, term, year, classTeacherComment: '', headComment: '' };
+  }
+
+  function refreshCommentsPanel() {
+    const klass = classSel.value;
+    commentsCard.style.display = klass ? '' : 'none';
+    if (!klass) return;
+    const c = currentComment();
+    classTeacherCommentInput.value = c.classTeacherComment;
+    headCommentInput.value = c.headComment;
+    commentsSavedHint.textContent = '';
+  }
+
+  document.getElementById('saveCommentsBtn').onclick = async () => {
+    const klass = classSel.value;
+    if (!klass) { UI.toast('Select a class first'); return; }
+    const term = termSel.value, year = yearSel.value;
+    try {
+      const saved = await Store.saveReportComment(klass, term, year, {
+        classTeacherComment: classTeacherCommentInput.value.trim(),
+        headComment: headCommentInput.value.trim()
+      });
+      const idx = st.reportComments.findIndex(c => c.klass === klass && c.term === term && String(c.year) === String(year));
+      if (idx >= 0) st.reportComments[idx] = saved; else st.reportComments.push(saved);
+      commentsSavedHint.textContent = 'Saved — this will now show on every report card for this class/term/year.';
+      renderReport();
+    } catch (e) {
+      UI.toast(e.message || 'Could not save remarks');
+    }
+  };
 
   classSel.onchange = () => {
     const klass = classSel.value;
@@ -1313,9 +1374,11 @@ function renderStudentReportCard(st) {
     studentSel.innerHTML = `<option value="">Select student</option>` + students.map(s => `<option value="${s.id}">${UI.esc(s.name)}</option>`).join('');
     printAllBtn.disabled = !klass;
     document.getElementById('reportWrap').innerHTML = '';
+    refreshCommentsPanel();
   };
 
-  [studentSel, termSel, yearSel, examTypeSel].forEach(el => el.onchange = renderReport);
+  [termSel, yearSel].forEach(el => el.onchange = () => { refreshCommentsPanel(); renderReport(); });
+  [studentSel, examTypeSel].forEach(el => el.onchange = renderReport);
 
   // examType is '' for the merged Opener+Midterm+Endterm(+...) report card,
   // or one admin-defined exam type name (e.g. "Opener") for an independent,
@@ -1349,8 +1412,12 @@ function renderStudentReportCard(st) {
     const reportLabel = isSingle ? `${examType} Report` : 'Report Card';
     const avgLabel = isSingle ? `${examType} average` : 'Term average';
     const colCount = typesToShow.length + (isSingle ? 1 : 2);
-    const teacherComment = Grading.autoComment(overallAvg, 'teacher');
-    const headComment = Grading.autoComment(overallAvg, 'head');
+    // Prefer the Class Teacher's / Head of Institution's own typed remark
+    // for this student's class/term/year (saved above); fall back to an
+    // auto-generated comment only if nothing has been typed in yet.
+    const savedComment = st.reportComments.find(c => c.klass === student.klass && c.term === term && String(c.year) === String(year));
+    const teacherComment = (savedComment && savedComment.classTeacherComment) || Grading.autoComment(overallAvg, 'teacher');
+    const headComment = (savedComment && savedComment.headComment) || Grading.autoComment(overallAvg, 'head');
 
     return `
       <div class="report-card">
@@ -1376,7 +1443,7 @@ function renderStudentReportCard(st) {
         </table>
         <div class="report-footer">
           <div>
-            <p class="stat-sub" style="margin:0 0 6px 0;"><strong>Average performance:</strong> ${overallAvg === null ? 'Not enough data' : `${overallAvg.toFixed(1)}% `}${UI.badge(overallBand)}</p>
+            <p class="stat-sub" style="margin:0 0 6px 0;"><strong>Average performance:</strong> ${overallAvg === null ? 'Not enough data' : `${overallAvg.toFixed(1)}%`}</p>
           </div>
           <div class="stamp badge-${overallBand ? overallBand.code : 'none'}" style="color:inherit;">${overallBand ? overallBand.code : '—'}</div>
         </div>

@@ -25,6 +25,7 @@ const Store = {
   _mapResult: (r) => ({ id: r.id, examId: r.exam_id, studentId: r.student_id, marks: Number(r.marks) }),
   _mapTeacherSubject: (r) => ({ id: r.id, teacherId: r.teacher_id, subjectId: r.subject_id }),
   _mapPublished: (r) => ({ id: r.id, klass: r.klass, type: r.type, term: r.term, year: r.year, publishedAt: r.published_at, publishedBy: r.published_by }),
+  _mapReportComment: (r) => ({ id: r.id, klass: r.klass, term: r.term, year: r.year, classTeacherComment: r.class_teacher_comment || '', headComment: r.head_comment || '', updatedAt: r.updated_at }),
   _mapSchoolSettings: (r) => ({
     schoolName: r.name, motto: r.motto || '', term: r.term, year: r.year, gradingBands: r.grading_bands,
     frozen: !!r.frozen, frozenAt: r.frozen_at || null, frozenReason: r.frozen_reason || ''
@@ -40,11 +41,11 @@ const Store = {
     if (!schoolId) {
       return {
         settings: { schoolName: '', motto: '', term: 'Term 1', year: new Date().getFullYear(), gradingBands: [] },
-        classes: [], students: [], subjects: [], examTypes: [], exams: [], results: [], teacherSubjects: [], published: []
+        classes: [], students: [], subjects: [], examTypes: [], exams: [], results: [], teacherSubjects: [], published: [], reportComments: []
       };
     }
 
-    const [schoolRes, classesRes, studentsRes, subjectsRes, examTypesRes, examsRes, resultsRes, teacherSubjectsRes, publishedRes] = await Promise.all([
+    const [schoolRes, classesRes, studentsRes, subjectsRes, examTypesRes, examsRes, resultsRes, teacherSubjectsRes, publishedRes, reportCommentsRes] = await Promise.all([
       supabase.from('schools').select('*').eq('id', schoolId).single(),
       supabase.from('classes').select('*').eq('school_id', schoolId).order('name').order('stream'),
       supabase.from('students').select('*').eq('school_id', schoolId).order('name'),
@@ -58,7 +59,11 @@ const Store = {
       supabase.from('teacher_subjects').select('*').eq('school_id', schoolId),
       // Which (class, exam type, term, year) sittings the admin has
       // published — this is what unlocks the Analysis page for teachers.
-      supabase.from('published_results').select('*').eq('school_id', schoolId)
+      supabase.from('published_results').select('*').eq('school_id', schoolId),
+      // Class Teacher's / Head of Institution's own typed remarks, one row
+      // per (class, term, year) — auto-filled onto every report card for
+      // that class/term/year instead of the old auto-generated comment.
+      supabase.from('report_comments').select('*').eq('school_id', schoolId)
     ]);
 
     this._throwIfError('load school', schoolRes.error);
@@ -70,6 +75,7 @@ const Store = {
     this._throwIfError('load results', resultsRes.error);
     this._throwIfError('load teacher subjects', teacherSubjectsRes.error);
     this._throwIfError('load published results', publishedRes.error);
+    this._throwIfError('load report comments', reportCommentsRes.error);
 
     return {
       settings: this._mapSchoolSettings(schoolRes.data),
@@ -80,7 +86,8 @@ const Store = {
       exams: (examsRes.data || []).map(this._mapExam),
       results: (resultsRes.data || []).map(this._mapResult),
       teacherSubjects: (teacherSubjectsRes.data || []).map(this._mapTeacherSubject),
-      published: (publishedRes.data || []).map(this._mapPublished)
+      published: (publishedRes.data || []).map(this._mapPublished),
+      reportComments: (reportCommentsRes.data || []).map(this._mapReportComment)
     };
   },
   // alias kept so any older call sites still work
@@ -340,6 +347,23 @@ const Store = {
   async unpublishResults(id) {
     const { error } = await supabase.from('published_results').delete().eq('id', id);
     this._throwIfError('unpublish results', error);
+  },
+
+  // ---- Report comments (Class Teacher's / Head of Institution's own
+  // remark, saved once per class+term+year and auto-filled onto every
+  // student's report card for that class/term/year) ----
+  async saveReportComment(klass, term, year, patch) {
+    const dbPatch = {
+      school_id: this.activeSchoolId, klass, term, year: Number(year),
+      updated_at: new Date().toISOString(), updated_by: Auth.currentUser()?.id || null
+    };
+    if (patch.classTeacherComment !== undefined) dbPatch.class_teacher_comment = patch.classTeacherComment;
+    if (patch.headComment !== undefined) dbPatch.head_comment = patch.headComment;
+    const { data, error } = await supabase.from('report_comments')
+      .upsert(dbPatch, { onConflict: 'school_id,klass,term,year' })
+      .select().single();
+    this._throwIfError('save report comment', error);
+    return this._mapReportComment(data);
   },
 
   // ---- Backup (export only — see README for why import/reset were dropped) ----
