@@ -1296,26 +1296,6 @@ function renderStudentReportCard(st) {
       <button class="btn" id="printAllBtn" disabled>Whole class — print all</button>
       <button class="btn btn-brass" id="printBtn">Print / Save as PDF</button>
     </div>
-    <div class="card no-print" id="commentsCard" style="display:none; margin-bottom:16px;">
-      <p class="stat-sub" style="margin:0 0 10px 0;">
-        <strong>Class Teacher's &amp; Head of Institution's remarks</strong> — type these once for the
-        selected class/term/year and they'll fill in automatically at the bottom of every student's report card below.
-      </p>
-      <div class="form-grid">
-        <div class="field full">
-          <label>Class Teacher's comment</label>
-          <textarea id="classTeacherCommentInput" rows="2" placeholder="e.g. A hardworking class this term — keep encouraging consistent revision."></textarea>
-        </div>
-        <div class="field full">
-          <label>Head of Institution's comment</label>
-          <textarea id="headCommentInput" rows="2" placeholder="e.g. A pleasing overall performance from this class this term."></textarea>
-        </div>
-      </div>
-      <div style="display:flex; align-items:center; gap:12px; margin-top:10px;">
-        <button class="btn btn-brass" id="saveCommentsBtn">Save remarks</button>
-        <span class="field-hint" id="commentsSavedHint" style="margin:0;"></span>
-      </div>
-    </div>
     <div id="reportWrap"></div>
   `;
   document.getElementById('modeWrap').innerHTML = html;
@@ -1326,47 +1306,6 @@ function renderStudentReportCard(st) {
   const yearSel = document.getElementById('yearSel');
   const examTypeSel = document.getElementById('examTypeSel');
   const printAllBtn = document.getElementById('printAllBtn');
-  const commentsCard = document.getElementById('commentsCard');
-  const classTeacherCommentInput = document.getElementById('classTeacherCommentInput');
-  const headCommentInput = document.getElementById('headCommentInput');
-  const commentsSavedHint = document.getElementById('commentsSavedHint');
-
-  // Find (or create a blank stand-in for) the saved remark row for the
-  // currently-picked class/term/year — comments are per class, not per
-  // student, so every learner in that class shares the same remark.
-  function currentComment() {
-    const klass = classSel.value, term = termSel.value, year = yearSel.value;
-    return st.reportComments.find(c => c.klass === klass && c.term === term && String(c.year) === String(year))
-      || { klass, term, year, classTeacherComment: '', headComment: '' };
-  }
-
-  function refreshCommentsPanel() {
-    const klass = classSel.value;
-    commentsCard.style.display = klass ? '' : 'none';
-    if (!klass) return;
-    const c = currentComment();
-    classTeacherCommentInput.value = c.classTeacherComment;
-    headCommentInput.value = c.headComment;
-    commentsSavedHint.textContent = '';
-  }
-
-  document.getElementById('saveCommentsBtn').onclick = async () => {
-    const klass = classSel.value;
-    if (!klass) { UI.toast('Select a class first'); return; }
-    const term = termSel.value, year = yearSel.value;
-    try {
-      const saved = await Store.saveReportComment(klass, term, year, {
-        classTeacherComment: classTeacherCommentInput.value.trim(),
-        headComment: headCommentInput.value.trim()
-      });
-      const idx = st.reportComments.findIndex(c => c.klass === klass && c.term === term && String(c.year) === String(year));
-      if (idx >= 0) st.reportComments[idx] = saved; else st.reportComments.push(saved);
-      commentsSavedHint.textContent = 'Saved — this will now show on every report card for this class/term/year.';
-      renderReport();
-    } catch (e) {
-      UI.toast(e.message || 'Could not save remarks');
-    }
-  };
 
   classSel.onchange = () => {
     const klass = classSel.value;
@@ -1374,11 +1313,74 @@ function renderStudentReportCard(st) {
     studentSel.innerHTML = `<option value="">Select student</option>` + students.map(s => `<option value="${s.id}">${UI.esc(s.name)}</option>`).join('');
     printAllBtn.disabled = !klass;
     document.getElementById('reportWrap').innerHTML = '';
-    refreshCommentsPanel();
   };
 
-  [termSel, yearSel].forEach(el => el.onchange = () => { refreshCommentsPanel(); renderReport(); });
-  [studentSel, examTypeSel].forEach(el => el.onchange = renderReport);
+  [studentSel, termSel, yearSel, examTypeSel].forEach(el => el.onchange = renderReport);
+
+  // A student's own overall percentage for a given sitting/term, using the
+  // exact same formula as the report card itself — used both for that
+  // student's headline average and for ranking everyone else for position.
+  function overallAvgFor(studentId, term, year, examType, isSingle) {
+    const g = Grading.buildStudentTermGrid(st, studentId, term, year);
+    return isSingle
+      ? Grading.average(g.map(r => (r.cells[examType] ? r.cells[examType].pct : null)).filter(v => v !== null))
+      : Grading.average(g.map(r => r.average).filter(v => v !== null));
+  }
+
+  // Ranks `students` by overall average (highest first, ties share a
+  // position) and returns { position, outOf } for `studentId`.
+  function positionOf(studentId, students, term, year, examType, isSingle) {
+    const scored = students.map(s => ({ id: s.id, avg: overallAvgFor(s.id, term, year, examType, isSingle) }));
+    const outOf = scored.filter(s => s.avg !== null).length;
+    const ranked = [...scored].sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
+    let rank = 0, lastAvg = null, seen = 0, position = null;
+    ranked.forEach(r => {
+      seen++;
+      if (r.avg === null) { if (r.id === studentId) position = null; return; }
+      if (r.avg !== lastAvg) { rank = seen; lastAvg = r.avg; }
+      if (r.id === studentId) position = rank;
+    });
+    return { position, outOf };
+  }
+
+  function ordinal(n) {
+    const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+  }
+
+  // Small inline line-chart (no library) plotting the student's overall
+  // average for each exam type in order, e.g. Opener -> Midterm -> Endterm,
+  // so a parent can see the trend across the term at a glance.
+  function buildTrendChartSVG(points) {
+    if (points.length < 2) return '';
+    const w = 560, h = 160, padL = 32, padR = 14, padT = 16, padB = 26;
+    const innerW = w - padL - padR, innerH = h - padT - padB;
+    const xStep = innerW / (points.length - 1);
+    const yFor = (pct) => padT + innerH - (Math.max(0, Math.min(100, pct)) / 100) * innerH;
+    const coords = points.map((p, i) => ({ x: padL + i * xStep, y: yFor(p.avg), ...p }));
+    const path = coords.map((c, i) => `${i === 0 ? 'M' : 'L'} ${c.x.toFixed(1)} ${c.y.toFixed(1)}`).join(' ');
+    const gridLines = [0, 25, 50, 75, 100].map(v =>
+      `<line x1="${padL}" y1="${yFor(v).toFixed(1)}" x2="${w - padR}" y2="${yFor(v).toFixed(1)}" stroke="var(--paper-line)" stroke-width="1"/>` +
+      `<text x="${padL - 6}" y="${(yFor(v) + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--ink-faint)">${v}</text>`
+    ).join('');
+    const dots = coords.map(c =>
+      `<circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="3.5" fill="var(--primary)"/>` +
+      `<text x="${c.x.toFixed(1)}" y="${(c.y - 9).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="var(--ink)">${c.avg.toFixed(0)}%</text>`
+    ).join('');
+    const labels = coords.map(c =>
+      `<text x="${c.x.toFixed(1)}" y="${h - 6}" text-anchor="middle" font-size="10" fill="var(--ink-soft)">${UI.esc(c.type)}</text>`
+    ).join('');
+    return `
+      <div style="margin:18px 0 4px 0;">
+        <p class="stat-sub" style="margin:0 0 8px 0;"><strong>Performance trend this term</strong></p>
+        <svg viewBox="0 0 ${w} ${h}" style="width:100%; max-width:520px; height:auto; display:block;">
+          ${gridLines}
+          <path d="${path}" fill="none" stroke="var(--primary)" stroke-width="2.5"/>
+          ${dots}
+          ${labels}
+        </svg>
+      </div>`;
+  }
 
   // examType is '' for the merged Opener+Midterm+Endterm(+...) report card,
   // or one admin-defined exam type name (e.g. "Opener") for an independent,
@@ -1410,14 +1412,36 @@ function renderStudentReportCard(st) {
     }).join('');
 
     const reportLabel = isSingle ? `${examType} Report` : 'Report Card';
-    const avgLabel = isSingle ? `${examType} average` : 'Term average';
     const colCount = typesToShow.length + (isSingle ? 1 : 2);
-    // Prefer the Class Teacher's / Head of Institution's own typed remark
-    // for this student's class/term/year (saved above); fall back to an
-    // auto-generated comment only if nothing has been typed in yet.
-    const savedComment = st.reportComments.find(c => c.klass === student.klass && c.term === term && String(c.year) === String(year));
-    const teacherComment = (savedComment && savedComment.classTeacherComment) || Grading.autoComment(overallAvg, 'teacher');
-    const headComment = (savedComment && savedComment.headComment) || Grading.autoComment(overallAvg, 'head');
+    const teacherComment = Grading.autoComment(overallAvg, 'teacher');
+    const headComment = Grading.autoComment(overallAvg, 'head');
+
+    // Position in stream (this exact class/stream label) and in class
+    // (the whole grade, all streams combined) — the two collapse to the
+    // same figure for schools that haven't split a grade into streams.
+    const classEntry = st.classes.find(c => c.label === student.klass);
+    const gradeNameOf = (s) => {
+      const ce = st.classes.find(c => c.label === s.klass);
+      return ce ? ce.name : s.klass;
+    };
+    const gradeName = classEntry ? classEntry.name : student.klass;
+    const streamMates = st.students.filter(s => s.klass === student.klass);
+    const gradeMates = st.students.filter(s => gradeNameOf(s) === gradeName);
+    const streamPos = positionOf(student.id, streamMates, term, year, examType, isSingle);
+    const showStreamRow = classEntry && classEntry.stream && gradeMates.length !== streamMates.length;
+    const classPos = showStreamRow ? positionOf(student.id, gradeMates, term, year, examType, isSingle) : streamPos;
+
+    // Performance trend across the term's sittings (only meaningful for
+    // the merged, all-exam-types view — a single sitting is one point).
+    const trendPoints = isSingle ? [] : allTypeNames.map(t => {
+      const vals = grid.map(r => (r.cells[t] ? r.cells[t].pct : null)).filter(v => v !== null);
+      return { type: t, avg: Grading.average(vals) };
+    }).filter(p => p.avg !== null);
+
+    // Class Teacher's / Head of Institution's real names, set once on the
+    // Classes and Settings pages, printed automatically on every report.
+    const classTeacherName = classEntry ? classEntry.teacherName : '';
+    const headName = st.settings.headName || '';
 
     return `
       <div class="report-card">
@@ -1435,12 +1459,15 @@ function renderStudentReportCard(st) {
           <div><span class="k">Name:</span>${UI.esc(student.name)}</div>
           <div><span class="k">Admission No.:</span>${UI.esc(student.admissionNo) || '—'}</div>
           <div><span class="k">Class:</span>${UI.esc(student.klass)}</div>
-          <div><span class="k">${UI.esc(avgLabel)}:</span>${overallAvg === null ? '—' : overallAvg.toFixed(1) + '%'}</div>
+          <div><span class="k">Average performance:</span>${overallAvg === null ? '—' : overallAvg.toFixed(1) + '%'}</div>
+          <div><span class="k">Position in class:</span>${classPos.position === null ? '—' : `${ordinal(classPos.position)} out of ${classPos.outOf}`}</div>
+          ${showStreamRow ? `<div><span class="k">Position in stream:</span>${streamPos.position === null ? '—' : `${ordinal(streamPos.position)} out of ${streamPos.outOf}`}</div>` : ''}
         </div>
         <table class="ledger-table" style="width:100%;">
           <thead><tr><th>Subject</th>${typesToShow.map(t => `<th>${UI.esc(t)}</th>`).join('')}${isSingle ? '' : '<th>Average</th>'}</tr></thead>
           <tbody>${rowsHtml || `<tr><td colspan="${colCount}" class="row-index">No subjects added yet.</td></tr>`}</tbody>
         </table>
+        ${buildTrendChartSVG(trendPoints)}
         <div class="report-footer">
           <div>
             <p class="stat-sub" style="margin:0 0 6px 0;"><strong>Average performance:</strong> ${overallAvg === null ? 'Not enough data' : `${overallAvg.toFixed(1)}%`}</p>
@@ -1452,8 +1479,8 @@ function renderStudentReportCard(st) {
           <p style="margin:0;"><strong>Head of Institution's comment:</strong> ${UI.esc(headComment)}</p>
         </div>
         <div class="report-footer">
-          <div class="signature-line">Class Teacher</div>
-          <div class="signature-line">Head of Institution</div>
+          <div class="signature-line">${classTeacherName ? `<strong>${UI.esc(classTeacherName)}</strong><br>` : ''}Class Teacher</div>
+          <div class="signature-line">${headName ? `<strong>${UI.esc(headName)}</strong><br>` : ''}Head of Institution</div>
         </div>
       </div>
     `;
@@ -1840,6 +1867,11 @@ Views.settings = async function () {
             <label>Motto (optional)</label>
             <input type="text" id="s_motto" value="${UI.esc(st.settings.motto)}">
           </div>
+          <div class="field full">
+            <label>Head of Institution</label>
+            <input type="text" id="s_head" value="${UI.esc(st.settings.headName)}" placeholder="e.g. Mr. John Otieno">
+            <p class="field-hint">Printed automatically at the bottom of every report card.</p>
+          </div>
           <div class="field">
             <label>Current term</label>
             <select id="s_term">
@@ -1978,6 +2010,7 @@ Views.settings = async function () {
       await Store.updateSettings({
         schoolName: document.getElementById('s_name').value.trim() || 'Your School Name',
         motto: document.getElementById('s_motto').value.trim(),
+        headName: document.getElementById('s_head').value.trim(),
         term: document.getElementById('s_term').value,
         year: Number(document.getElementById('s_year').value)
       });

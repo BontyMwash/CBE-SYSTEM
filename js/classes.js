@@ -20,7 +20,7 @@ Views.classes = async function () {
       <div class="ledger">
         <div class="ledger-scroll">
           <table class="ledger-table">
-            <thead><tr><th>#</th><th>Class</th><th>Stream</th><th>Students</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>Class</th><th>Stream</th><th>Class Teacher</th><th>Students</th><th></th></tr></thead>
             <tbody>
               ${rows.map((c, i) => {
                 const studentCount = st.students.filter(s => s.klass === c.label).length;
@@ -28,6 +28,7 @@ Views.classes = async function () {
                   <td class="row-index">${i + 1}</td>
                   <td>${UI.esc(c.name)}</td>
                   <td>${UI.esc(c.stream) || '<span class="row-index">—</span>'}</td>
+                  <td>${UI.esc(c.teacherName) || '<span class="row-index">—</span>'}</td>
                   <td class="num">${studentCount}</td>
                   <td>
                     <button class="btn btn-sm btn-ghost" data-edit="${c.id}">Edit</button>
@@ -76,6 +77,11 @@ Views.classes = async function () {
           <input type="text" id="f_stream" value="${isEdit ? UI.esc(existing.stream) : ''}" placeholder="e.g. East">
           <p class="field-hint">Leave blank if this class isn't split into streams.</p>
         </div>
+        <div class="field full">
+          <label>Class Teacher (optional)</label>
+          <input type="text" id="f_teacher" value="${isEdit ? UI.esc(existing.teacherName) : ''}" placeholder="e.g. Mrs. Jane Wanjiru">
+          <p class="field-hint">Printed automatically at the bottom of every report card for this class/stream.</p>
+        </div>
       </div>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
@@ -86,10 +92,11 @@ Views.classes = async function () {
       root.querySelector('#saveBtn').onclick = async () => {
         const name = root.querySelector('#f_name').value.trim();
         const stream = root.querySelector('#f_stream').value.trim();
+        const teacherName = root.querySelector('#f_teacher').value.trim();
         if (!name) { UI.toast('Class name is required'); return; }
         try {
-          if (isEdit) { await Store.updateClass(existing.id, { name, stream }); UI.toast('Class updated'); }
-          else { await Store.addClass({ name, stream }); UI.toast('Class added'); }
+          if (isEdit) { await Store.updateClass(existing.id, { name, stream, teacherName }); UI.toast('Class updated'); }
+          else { await Store.addClass({ name, stream, teacherName }); UI.toast('Class added'); }
           UI.closeModal();
           Views.classes();
         } catch (err) {
