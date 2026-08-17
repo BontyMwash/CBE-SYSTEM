@@ -102,6 +102,65 @@ Views.broadsheet = async function () {
     });
     const classMean = Grading.average(rows.map(r => r.meanPct).filter(v => v !== null));
 
+    /* ---- Subject performance: mean/high/low/entries for each
+       subject sat, so a teacher/admin can see which subjects are
+       dragging the class down without leaving the broadsheet. ---- */
+    const subjectStats = subjectCols.map((col, i) => {
+      const pcts = rows.map(r => r.cells[i].pct).filter(v => v !== null);
+      return {
+        subject: col.subject,
+        mean: Grading.average(pcts),
+        high: pcts.length ? Math.max(...pcts) : null,
+        low: pcts.length ? Math.min(...pcts) : null,
+        entered: pcts.length,
+        expected: students.length
+      };
+    }).sort((a, b) => (b.mean ?? -1) - (a.mean ?? -1));
+
+    /* ---- Class performance: headline stats for this one class/
+       stream at this sitting. ---- */
+    const validMeans = rows.map(r => r.meanPct).filter(v => v !== null);
+    const classHigh = validMeans.length ? Math.max(...validMeans) : null;
+    const classLow = validMeans.length ? Math.min(...validMeans) : null;
+    const passRate = validMeans.length ? (validMeans.filter(v => v >= 50).length / validMeans.length) * 100 : null;
+    const expectedEntries = students.length * subjectCols.length;
+    const enteredEntries = subjectCols.reduce((sum, col) => sum + st.results.filter(r => r.examId === col.exam.id).length, 0);
+    const completion = expectedEntries > 0 ? (enteredEntries / expectedEntries) * 100 : null;
+    const bandCounts = [...(st.settings.gradingBands || [])].sort((a, b) => b.min - a.min).map(b => ({
+      band: b, count: ranked.filter(r => {
+        const band = r.meanPct === null ? null : Grading.levelForMarks(r.meanPct, 100, st.settings.gradingBands);
+        return band && band.code === b.code;
+      }).length
+    }));
+    const totalBandCount = bandCounts.reduce((s, b) => s + b.count, 0) || 1;
+
+    /* ---- Stream performance: how this class's streams compare to
+       each other for the SAME exam type/term/year — e.g. "Grade 7
+       East" vs "Grade 7 West". Only shown when the class actually
+       has more than one stream to compare against. ---- */
+    const classEntry = st.classes.find(c => c.label === klass);
+    const gradeName = classEntry ? classEntry.name : klass;
+    const streamLabels = st.classes && st.classes.length
+      ? st.classes.filter(c => c.name === gradeName).map(c => c.label)
+      : [klass];
+
+    const streamStats = streamLabels.map(label => {
+      const streamExams = st.exams.filter(e => e.klass === label && e.type === type && e.term === term && String(e.year) === String(year));
+      const streamCols = streamExams.map(e => ({ exam: e, subject: st.subjects.find(s => s.id === e.subjectId) })).filter(c => c.subject);
+      const streamStudents = st.students.filter(s => s.klass === label);
+      const means = streamStudents.map(stu => {
+        const pcts = streamCols.map(col => {
+          const res = st.results.find(r => r.examId === col.exam.id && r.studentId === stu.id);
+          return res ? Grading.percent(res.marks, col.exam.totalMarks) : null;
+        }).filter(v => v !== null);
+        return Grading.average(pcts);
+      }).filter(v => v !== null);
+      return { label, studentsCount: streamStudents.length, mean: Grading.average(means) };
+    }).sort((a, b) => (b.mean ?? -1) - (a.mean ?? -1));
+    const showStreamSection = streamStats.length > 1;
+
+    const BAR_COLORS = ['#10B981', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899'];
+
     wrap.innerHTML = `
       <div class="ledger" id="bsPrintArea">
         <div class="ledger-scroll">
@@ -147,6 +206,95 @@ Views.broadsheet = async function () {
         ${UI.esc(klass)} &middot; ${UI.esc(type)} &middot; ${UI.esc(term)} ${UI.esc(year)} &middot;
         ${students.length} student${students.length === 1 ? '' : 's'} &middot; ${subjectCols.length} subject${subjectCols.length === 1 ? '' : 's'}
       </p>
+
+      <div id="bsAnalysisArea" style="margin-top:28px;">
+        <div class="section-title">Performance analysis</div>
+
+        <div class="grid grid-4 section-block">
+          <div class="card stat-card grad-indigo">
+            <i class="fa-solid fa-user-graduate stat-icon"></i>
+            <p class="stat-label">Students</p>
+            <p class="stat-value">${students.length}</p>
+            <p class="stat-sub">${subjectCols.length} subject${subjectCols.length === 1 ? '' : 's'} sat</p>
+          </div>
+          <div class="card stat-card ${classMean !== null && classMean < 50 ? 'grad-danger' : 'grad-success'}">
+            <i class="fa-solid fa-chart-line stat-icon"></i>
+            <p class="stat-label">Class mean</p>
+            <p class="stat-value">${classMean === null ? '—' : classMean.toFixed(1) + '%'}</p>
+            <p class="stat-sub">${classHigh === null ? '\u00a0' : `High ${classHigh.toFixed(1)}% &middot; Low ${classLow.toFixed(1)}%`}</p>
+          </div>
+          <div class="card stat-card grad-teal">
+            <i class="fa-solid fa-thumbs-up stat-icon"></i>
+            <p class="stat-label">Pass rate (&ge;50%)</p>
+            <p class="stat-value">${passRate === null ? '—' : passRate.toFixed(0) + '%'}</p>
+            <p class="stat-sub">&nbsp;</p>
+          </div>
+          <div class="card stat-card plain hoverable">
+            <i class="fa-solid fa-list-check stat-icon"></i>
+            <p class="stat-label">Marks entered</p>
+            <p class="stat-value" style="font-size:20px;">${completion === null ? '—' : completion.toFixed(0) + '%'}</p>
+            <p class="stat-sub">${enteredEntries} / ${expectedEntries} entries</p>
+          </div>
+        </div>
+
+        <div class="grid grid-2 section-block">
+          <div>
+            <div class="section-title">Subject performance</div>
+            ${subjectStats.length === 0 ? `<div class="empty"><div class="empty-title">No subjects sat</div></div>` : `
+            <div class="ledger">
+              <div class="ledger-scroll">
+                <table class="ledger-table">
+                  <thead><tr><th>Subject</th><th>Mean</th><th>High</th><th>Low</th><th>Entries</th></tr></thead>
+                  <tbody>
+                    ${subjectStats.map(s => `<tr>
+                      <td>${UI.esc(s.subject.name)}</td>
+                      <td class="num">${s.mean === null ? '—' : s.mean.toFixed(1) + '%'}</td>
+                      <td class="num">${s.high === null ? '—' : s.high.toFixed(1) + '%'}</td>
+                      <td class="num">${s.low === null ? '—' : s.low.toFixed(1) + '%'}</td>
+                      <td class="num">${s.entered}/${s.expected}</td>
+                    </tr>`).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>`}
+          </div>
+
+          <div>
+            <div class="section-title">Class performance level distribution</div>
+            ${bandCounts.length === 0 ? `<div class="empty"><div class="empty-title">No grading bands set up</div></div>` : `
+            <div class="card" style="display:flex; flex-direction:column; gap:12px;">
+              ${bandCounts.map((b, i) => `
+                <div>
+                  <div class="progress-label"><span>${UI.esc(b.band.code)} &middot; ${UI.esc(b.band.label)}</span><span>${b.count} (${((b.count / totalBandCount) * 100).toFixed(0)}%)</span></div>
+                  <div class="progress-track"><div class="progress-fill" style="width:${((b.count / totalBandCount) * 100).toFixed(1)}%; background:${BAR_COLORS[i % BAR_COLORS.length]};"></div></div>
+                </div>
+              `).join('')}
+            </div>`}
+          </div>
+        </div>
+
+        <div class="section-block">
+          <div class="section-title">Stream performance</div>
+          ${!showStreamSection
+            ? `<p class="field-hint" style="margin:0;">This class hasn't been split into streams — set up streams on the <a href="#classes">Classes</a> page to compare them here.</p>`
+            : `
+            <div class="ledger">
+              <div class="ledger-scroll">
+                <table class="ledger-table">
+                  <thead><tr><th>Rank</th><th>Class / Stream</th><th>Students</th><th>Mean %</th></tr></thead>
+                  <tbody>
+                    ${streamStats.map((s, i) => `<tr ${s.label === klass ? 'style="font-weight:600; background:var(--paper-highlight, rgba(0,0,0,0.03));"' : ''}>
+                      <td class="num">${s.mean === null ? '—' : i + 1}</td>
+                      <td>${UI.esc(s.label)}${s.label === klass ? ' <span class="badge badge-none">this class</span>' : ''}</td>
+                      <td class="num">${s.studentsCount}</td>
+                      <td class="num">${s.mean === null ? '—' : s.mean.toFixed(1) + '%'}</td>
+                    </tr>`).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>`}
+        </div>
+      </div>
     `;
   }
 

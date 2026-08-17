@@ -15,18 +15,39 @@ const Auth = {
 
   ROLE_ROUTES: {
     superadmin: ['schools'],
-    admin: ['dashboard', 'classes', 'students', 'subjects', 'exams', 'results', 'reports', 'broadsheet', 'analysis', 'users', 'settings'],
-    user: ['dashboard', 'results', 'reports', 'broadsheet', 'analysis']
+    admin: [
+      'dashboard', 'classes', 'students', 'subjects', 'exams', 'results', 'gradebook',
+      'reports', 'attendance', 'competency', 'broadsheet', 'analysis', 'reportsHub',
+      'notify', 'users', 'settings'
+    ],
+    // Teacher section — kept in this order because it's the order the
+    // sidebar is meant to walk a teacher through their day:
+    // Dashboard -> My Classes -> Learners -> Assessments -> Marks Entry
+    // -> Marks Analysis -> Gradebook -> Report Cards -> Attendance ->
+    // Competency Assessment -> Reports, with the two extra existing
+    // screens (Broadsheet, Send to Parents) kept on afterwards so
+    // nothing a teacher already relied on disappears.
+    user: [
+      'dashboard', 'myClasses', 'learners', 'assessments', 'results', 'analysis',
+      'gradebook', 'reports', 'attendance', 'competency', 'reportsHub',
+      'broadsheet', 'notify'
+    ]
   },
 
   ROUTE_TITLES: {
     dashboard: 'Dashboard', classes: 'Classes', students: 'Students', subjects: 'Subjects', exams: 'Exams',
-    results: 'Results Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', analysis: 'Published Results & Analysis',
+    myClasses: 'My Classes', learners: 'Learners', assessments: 'Assessments',
+    results: 'Marks Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', analysis: 'Marks Analysis',
+    gradebook: 'Gradebook', attendance: 'Attendance', competency: 'Competency Assessment', reportsHub: 'Reports',
+    notify: 'Send Results to Parents',
     users: 'Users', settings: 'Settings', schools: 'Schools'
   },
   ROUTE_LABELS: {
     dashboard: 'Dashboard', classes: 'Classes', students: 'Students', subjects: 'Subjects', exams: 'Exams',
-    results: 'Results Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', analysis: 'Analysis',
+    myClasses: 'My Classes', learners: 'Learners', assessments: 'Assessments',
+    results: 'Marks Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', analysis: 'Marks Analysis',
+    gradebook: 'Gradebook', attendance: 'Attendance', competency: 'Competency', reportsHub: 'Reports',
+    notify: 'Send to Parents',
     users: 'Users', settings: 'Settings', schools: 'Schools'
   },
 

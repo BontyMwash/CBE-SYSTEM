@@ -1484,6 +1484,22 @@ table.ledger-table .num {
   #anPrintArea table.ledger-table {
     font-size: 12px;
   }
+
+  /* Broadsheet's own performance-analysis section (subject / class /
+     stream performance) — same treatment as the Analysis page above. */
+  #bsAnalysisArea .grid-4, #bsAnalysisArea .grid-2 {
+    grid-template-columns: 1fr;
+  }
+  #bsAnalysisArea .card {
+    box-shadow: none;
+    border: 1px solid #ddd;
+  }
+  #bsAnalysisArea table.ledger-table {
+    font-size: 12px;
+  }
+  #bsAnalysisArea {
+    page-break-before: always;
+  }
 }
 
 /* ---------- Login screen ---------- */

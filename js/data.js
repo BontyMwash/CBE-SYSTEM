@@ -18,12 +18,22 @@ const Store = {
 
   // ---- mappers: DB snake_case -> app camelCase ----
   _mapClass: (r) => ({ id: r.id, name: r.name, stream: r.stream || '', label: r.stream ? `${r.name} ${r.stream}` : r.name, teacherName: r.teacher_name || '' }),
-  _mapStudent: (r) => ({ id: r.id, name: r.name, admissionNo: r.admission_no || '', klass: r.klass }),
+  _mapStudent: (r) => ({
+    id: r.id, name: r.name, admissionNo: r.admission_no || '', klass: r.klass,
+    parentName: r.parent_name || '', parentPhone: r.parent_phone || '', parentEmail: r.parent_email || ''
+  }),
   _mapSubject: (r) => ({ id: r.id, name: r.name, code: r.code || '' }),
   _mapExamType: (r) => ({ id: r.id, name: r.name, sortOrder: r.sort_order || 0 }),
   _mapExam: (r) => ({ id: r.id, type: r.type, term: r.term, year: r.year, klass: r.klass, subjectId: r.subject_id, totalMarks: Number(r.total_marks), date: r.exam_date || '' }),
   _mapResult: (r) => ({ id: r.id, examId: r.exam_id, studentId: r.student_id, marks: Number(r.marks) }),
   _mapTeacherSubject: (r) => ({ id: r.id, teacherId: r.teacher_id, subjectId: r.subject_id }),
+  _mapTeacherClass: (r) => ({ id: r.id, teacherId: r.teacher_id, classId: r.class_id }),
+  _mapAttendance: (r) => ({ id: r.id, klass: r.klass, date: r.att_date, studentId: r.student_id, status: r.status, remarks: r.remarks || '', markedBy: r.marked_by }),
+  _mapCompetency: (r) => ({
+    id: r.id, studentId: r.student_id, subjectId: r.subject_id, term: r.term, year: r.year,
+    strand: r.strand, subStrand: r.sub_strand || '', rating: r.rating, remarks: r.remarks || '',
+    assessedBy: r.assessed_by, updatedAt: r.updated_at
+  }),
   _mapPublished: (r) => ({ id: r.id, klass: r.klass, type: r.type, term: r.term, year: r.year, publishedAt: r.published_at, publishedBy: r.published_by }),
   _mapSchoolSettings: (r) => ({
     schoolName: r.name, motto: r.motto || '', term: r.term, year: r.year, gradingBands: r.grading_bands,
@@ -40,11 +50,11 @@ const Store = {
     if (!schoolId) {
       return {
         settings: { schoolName: '', motto: '', term: 'Term 1', year: new Date().getFullYear(), gradingBands: [], headName: '' },
-        classes: [], students: [], subjects: [], examTypes: [], exams: [], results: [], teacherSubjects: [], published: []
+        classes: [], students: [], subjects: [], examTypes: [], exams: [], results: [], teacherSubjects: [], teacherClasses: [], published: []
       };
     }
 
-    const [schoolRes, classesRes, studentsRes, subjectsRes, examTypesRes, examsRes, resultsRes, teacherSubjectsRes, publishedRes] = await Promise.all([
+    const [schoolRes, classesRes, studentsRes, subjectsRes, examTypesRes, examsRes, resultsRes, teacherSubjectsRes, teacherClassesRes, publishedRes] = await Promise.all([
       supabase.from('schools').select('*').eq('id', schoolId).single(),
       supabase.from('classes').select('*').eq('school_id', schoolId).order('name').order('stream'),
       supabase.from('students').select('*').eq('school_id', schoolId).order('name'),
@@ -56,6 +66,9 @@ const Store = {
       // school (to manage them), teachers see only their own (to filter
       // their own Results Entry / marks-editing screens).
       supabase.from('teacher_subjects').select('*').eq('school_id', schoolId),
+      // Same idea as teacher_subjects, but for classes — powers "My
+      // Classes" / "Learners" / "Attendance" for a teacher login.
+      supabase.from('teacher_classes').select('*').eq('school_id', schoolId),
       // Which (class, exam type, term, year) sittings the admin has
       // published — this is what unlocks the Analysis page for teachers.
       supabase.from('published_results').select('*').eq('school_id', schoolId)
@@ -69,6 +82,7 @@ const Store = {
     this._throwIfError('load exams', examsRes.error);
     this._throwIfError('load results', resultsRes.error);
     this._throwIfError('load teacher subjects', teacherSubjectsRes.error);
+    this._throwIfError('load teacher classes', teacherClassesRes.error);
     this._throwIfError('load published results', publishedRes.error);
 
     return {
@@ -80,6 +94,7 @@ const Store = {
       exams: (examsRes.data || []).map(this._mapExam),
       results: (resultsRes.data || []).map(this._mapResult),
       teacherSubjects: (teacherSubjectsRes.data || []).map(this._mapTeacherSubject),
+      teacherClasses: (teacherClassesRes.data || []).map(this._mapTeacherClass),
       published: (publishedRes.data || []).map(this._mapPublished)
     };
   },
@@ -178,7 +193,8 @@ const Store = {
   // ---- Students ----
   async addStudent(s) {
     const { data, error } = await supabase.from('students').insert({
-      school_id: this.activeSchoolId, name: s.name.trim(), admission_no: (s.admissionNo || '').trim(), klass: s.klass.trim()
+      school_id: this.activeSchoolId, name: s.name.trim(), admission_no: (s.admissionNo || '').trim(), klass: s.klass.trim(),
+      parent_name: (s.parentName || '').trim(), parent_phone: (s.parentPhone || '').trim(), parent_email: (s.parentEmail || '').trim()
     }).select().single();
     this._throwIfError('add student', error);
     return this._mapStudent(data);
@@ -188,6 +204,9 @@ const Store = {
     if (patch.name !== undefined) dbPatch.name = patch.name;
     if (patch.admissionNo !== undefined) dbPatch.admission_no = patch.admissionNo;
     if (patch.klass !== undefined) dbPatch.klass = patch.klass;
+    if (patch.parentName !== undefined) dbPatch.parent_name = (patch.parentName || '').trim();
+    if (patch.parentPhone !== undefined) dbPatch.parent_phone = (patch.parentPhone || '').trim();
+    if (patch.parentEmail !== undefined) dbPatch.parent_email = (patch.parentEmail || '').trim();
     const { data, error } = await supabase.from('students').update(dbPatch).eq('id', id).select().single();
     this._throwIfError('update student', error);
     return this._mapStudent(data);
@@ -204,11 +223,42 @@ const Store = {
       school_id: this.activeSchoolId,
       name: r.name.trim(),
       admission_no: (r.admissionNo || '').trim(),
-      klass: r.klass.trim()
+      klass: r.klass.trim(),
+      parent_name: (r.parentName || '').trim(),
+      parent_phone: (r.parentPhone || '').trim(),
+      parent_email: (r.parentEmail || '').trim()
     }));
     const { data, error } = await supabase.from('students').insert(rows).select();
     this._throwIfError('bulk add students', error);
     return (data || []).map(this._mapStudent);
+  },
+
+  // ---- Parent result notifications (log of "sent" messages, so the
+  // Send Results to Parents screen can show who's been contacted for
+  // a given sitting). Sending itself happens on-device (WhatsApp/SMS/
+  // email links) — this table just tracks that it happened.
+  _mapNotification: (r) => ({
+    id: r.id, studentId: r.student_id, klass: r.klass, type: r.type, term: r.term, year: r.year,
+    channel: r.channel, sentAt: r.sent_at, sentBy: r.sent_by
+  }),
+  async notificationsFor(klass, type, term, year) {
+    const { data, error } = await supabase.from('result_notifications').select('*')
+      .eq('school_id', this.activeSchoolId).eq('klass', klass).eq('type', type).eq('term', term).eq('year', year);
+    this._throwIfError('load notifications', error);
+    return (data || []).map(this._mapNotification);
+  },
+  async logNotification({ studentId, klass, type, term, year, channel }) {
+    const user = Auth.currentUser();
+    const { data, error } = await supabase.from('result_notifications').insert({
+      school_id: this.activeSchoolId, student_id: studentId, klass, type, term, year, channel,
+      sent_by: user ? user.id : null
+    }).select().single();
+    this._throwIfError('log notification', error);
+    return this._mapNotification(data);
+  },
+  async clearNotification(id) {
+    const { error } = await supabase.from('result_notifications').delete().eq('id', id);
+    this._throwIfError('clear notification', error);
   },
 
   // ---- Subjects ----
@@ -342,6 +392,76 @@ const Store = {
   async unpublishResults(id) {
     const { error } = await supabase.from('published_results').delete().eq('id', id);
     this._throwIfError('unpublish results', error);
+  },
+
+  // ---- Teacher <-> class assignments ("My Classes" / roster / attendance scope) ----
+  async setTeacherClasses(teacherId, classIds) {
+    const { error: delErr } = await supabase.from('teacher_classes').delete().eq('teacher_id', teacherId);
+    this._throwIfError('clear teacher classes', delErr);
+    if (!classIds.length) return [];
+    const rows = classIds.map(classId => ({ school_id: this.activeSchoolId, teacher_id: teacherId, class_id: classId }));
+    const { data, error } = await supabase.from('teacher_classes').insert(rows).select();
+    this._throwIfError('save teacher classes', error);
+    return (data || []).map(this._mapTeacherClass);
+  },
+
+  // ---- Attendance ----
+  async attendanceFor(klass, date) {
+    const { data, error } = await supabase.from('attendance').select('*')
+      .eq('school_id', this.activeSchoolId).eq('klass', klass).eq('att_date', date);
+    this._throwIfError('load attendance', error);
+    return (data || []).map(this._mapAttendance);
+  },
+  // Summary rows (one per date) for a class over a date range — powers
+  // the attendance history/percentage view.
+  async attendanceRange(klass, fromDate, toDate) {
+    let q = supabase.from('attendance').select('*').eq('school_id', this.activeSchoolId).eq('klass', klass);
+    if (fromDate) q = q.gte('att_date', fromDate);
+    if (toDate) q = q.lte('att_date', toDate);
+    const { data, error } = await q.order('att_date', { ascending: false });
+    this._throwIfError('load attendance range', error);
+    return (data || []).map(this._mapAttendance);
+  },
+  // Bulk upsert — one network call for the whole class register on a given day.
+  async saveAttendanceBulk(klass, date, entries) {
+    const user = Auth.currentUser();
+    const rows = entries.map(e => ({
+      school_id: this.activeSchoolId, klass, att_date: date, student_id: e.studentId,
+      status: e.status, remarks: (e.remarks || '').trim(), marked_by: user ? user.id : null
+    }));
+    const { data, error } = await supabase.from('attendance')
+      .upsert(rows, { onConflict: 'klass,att_date,student_id' }).select();
+    this._throwIfError('save attendance', error);
+    return (data || []).map(this._mapAttendance);
+  },
+  async deleteAttendanceRecord(id) {
+    const { error } = await supabase.from('attendance').delete().eq('id', id);
+    this._throwIfError('delete attendance record', error);
+  },
+
+  // ---- Competency Assessment (CBC strand ratings, EE/ME/AE/BE) ----
+  async competenciesFor(subjectId, term, year) {
+    const { data, error } = await supabase.from('competency_assessments').select('*')
+      .eq('school_id', this.activeSchoolId).eq('subject_id', subjectId).eq('term', term).eq('year', year);
+    this._throwIfError('load competencies', error);
+    return (data || []).map(this._mapCompetency);
+  },
+  async saveCompetency(c) {
+    const user = Auth.currentUser();
+    const { data, error } = await supabase.from('competency_assessments')
+      .upsert({
+        school_id: this.activeSchoolId, student_id: c.studentId, subject_id: c.subjectId,
+        term: c.term, year: Number(c.year), strand: c.strand.trim(), sub_strand: (c.subStrand || '').trim(),
+        rating: c.rating, remarks: (c.remarks || '').trim(), assessed_by: user ? user.id : null,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'student_id,subject_id,term,year,strand,sub_strand' })
+      .select().single();
+    this._throwIfError('save competency', error);
+    return this._mapCompetency(data);
+  },
+  async deleteCompetency(id) {
+    const { error } = await supabase.from('competency_assessments').delete().eq('id', id);
+    this._throwIfError('delete competency', error);
   },
 
   // ---- Backup (export only — see README for why import/reset were dropped) ----

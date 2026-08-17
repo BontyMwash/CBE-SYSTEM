@@ -32,13 +32,18 @@ project/
 │   ├── import.js                 # bulk CSV/Excel student import
 │   ├── views.js                  # Dashboard/Students/Subjects/Exams/Results/Reports/Settings
 │   ├── auth-views.js             # Login/Schools/Users screens
-│   ├── broadsheet.js             # class broadsheet view
-│   ├── analysis.js                # Published Results & Analysis (admin publish + class/subject analysis)
+│   ├── broadsheet.js             # class broadsheet view + subject/class/stream analysis
+│   ├── analysis.js                # Marks Analysis (admin publish + class/subject analysis)
+│   ├── notify.js                  # Send Results to Parents (WhatsApp/SMS/email)
+│   ├── teacher.js                 # My Classes / Learners / Assessments / Gradebook / Reports hub
+│   ├── attendance.js              # Attendance register + Competency Assessment (CBC strands)
 │   └── app.js                    # router + login gate + sidebar
 ├── sql/
 │   ├── schema.sql                # ⚠️ RUN THIS in Supabase SQL Editor
 │   ├── bootstrap_superadmin.sql  # ⚠️ RUN THIS ONCE to create your first login
-│   └── 006_published_results.sql # migration for existing installs — adds "publish results" support
+│   ├── 006_published_results.sql # migration for existing installs — adds "publish results" support
+│   ├── 008_parent_contacts_and_notifications.sql # migration for existing installs — adds parent contact fields + notification log
+│   └── 009_teacher_classes_attendance_competency.sql # migration for existing installs — adds My Classes/Attendance/Competency Assessment support
 └── supabase/
     └── functions/
         └── manage-user/
@@ -68,7 +73,12 @@ Dashboard → **SQL Editor** → New query → paste the entire contents of
 functions, and every Row Level Security policy. (Already ran an older
 `schema.sql` on an existing project? Run `sql/006_published_results.sql`
 instead to add just the new "publish results" table without touching
-anything else.)
+anything else — `sql/008_parent_contacts_and_notifications.sql` to
+add parent contact fields + the "Send Results to Parents" notification
+log — and `sql/009_teacher_classes_attendance_competency.sql` to add
+teacher↔class assignments, Attendance, and Competency Assessment,
+plus let a subject teacher create their own Assessments (exams) for
+a subject already assigned to them.)
 
 ### 3. Deploy the Edge Function
 This requires the [Supabase CLI](https://supabase.com/docs/guides/cli):
@@ -120,11 +130,18 @@ creates the school's first Admin login in the same step.
   reports, broadsheets, settings, and creates **User** logins for their
   own school (teachers). Also **publishes results** (Analysis page) once
   a sitting's marks are all in — that's what makes it visible to teachers.
-- **User (teacher)** — Dashboard, Results Entry (including setting "out
-  of how many" for their subject), Report Cards, Broadsheet, and
-  Analysis for sittings their admin has published. Can't touch
-  student/subject/exam setup or settings, and can't see Analysis for
-  anything not yet published.
+- **User (teacher)** — full teacher-section sidebar: Dashboard, My
+  Classes, Learners, Assessments (create/edit exams for their own
+  subject), Marks Entry (including setting "out of how many"), Marks
+  Analysis for sittings their admin has published, Gradebook,
+  Report Cards, Attendance, Competency Assessment, Reports (a hub of
+  every export above), plus Broadsheet and Send to Parents. Which
+  classes show up under My Classes/Learners/Attendance, and which
+  subjects under Assessments/Marks Entry/Gradebook/Competency
+  Assessment, are set per teacher from the Users page ("Manage
+  classes" / "Manage subjects") — everything else stays out of reach.
+  Can't touch student/subject/exam-type setup or settings, and can't
+  see Marks Analysis for anything not yet published.
 
 These aren't just UI restrictions — a User's Supabase session literally
 cannot read or write rows outside their school, or delete a student, no
@@ -151,6 +168,12 @@ Every entity below has full Create/Read/Update/Delete wired through
 - **Published results** — `published_results` table (admin-only publish/
   unpublish; everyone in the school can read it, which is what gates
   the Analysis page for teachers)
+- **Teacher ↔ class assignments** — `teacher_classes` table (admin-only,
+  from Users → "Manage classes"; scopes My Classes/Learners/Attendance)
+- **Attendance** — `attendance` table, one row per learner per class per
+  day, upserted so re-marking a day updates rather than duplicates
+- **Competency Assessment** — `competency_assessments` table, one row
+  per learner/subject/strand/term, rated EE/ME/AE/BE
 
 ## Why an Edge Function, not just direct table access?
 

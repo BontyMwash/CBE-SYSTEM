@@ -445,9 +445,13 @@ Views.users = async function () {
   // subjects" modal below (restricts what a teacher login can see/edit).
   const st = await Store.current();
   let teacherSubjects = st.teacherSubjects;
+  let teacherClasses = st.teacherClasses;
 
   function subjectsForTeacher(teacherId) {
     return new Set(teacherSubjects.filter(ts => ts.teacherId === teacherId).map(ts => ts.subjectId));
+  }
+  function classesForTeacher(teacherId) {
+    return new Set(teacherClasses.filter(tc => tc.teacherId === teacherId).map(tc => tc.classId));
   }
 
   function renderTable() {
@@ -472,6 +476,7 @@ Views.users = async function () {
                 <td>
                   <button class="btn btn-sm btn-ghost" data-edit="${u.id}">Edit name/role</button>
                   ${u.role === 'user' ? `<button class="btn btn-sm btn-ghost" data-subjects="${u.id}">Manage subjects</button>` : ''}
+                  ${u.role === 'user' ? `<button class="btn btn-sm btn-ghost" data-classes="${u.id}">Manage classes</button>` : ''}
                   <button class="btn btn-sm btn-ghost" data-reset="${u.id}">Reset password</button>
                   <button class="btn btn-sm btn-danger" data-del="${u.id}">Delete</button>
                 </td>
@@ -645,12 +650,58 @@ Views.users = async function () {
     });
   }
 
+  function openClassesForm(existing) {
+    const assigned = classesForTeacher(existing.id);
+    if (st.classes.length === 0) {
+      UI.openModal(`
+        <h2>Manage classes — ${UI.esc(existing.name)}</h2>
+        <p class="field-hint">No classes exist yet. Add some from the Classes page first.</p>
+        <div class="modal-actions"><button class="btn btn-ghost" id="cancelBtn">Close</button></div>
+      `, (root) => { root.querySelector('#cancelBtn').onclick = () => UI.closeModal(); });
+      return;
+    }
+    UI.openModal(`
+      <h2>Manage classes — ${UI.esc(existing.name)}</h2>
+      <p class="field-hint" style="margin-bottom:12px;">Only the classes checked below will show up under My Classes, Learners and Attendance for ${UI.esc(existing.name)} — this scopes a teacher (or class/homeroom teacher) to their own class(es).</p>
+      <div class="form-grid">
+        ${[...st.classes].sort((a, b) => a.label.localeCompare(b.label)).map(c => `
+          <label class="field full" style="flex-direction:row; align-items:center; gap:10px;">
+            <input type="checkbox" data-class-check="${c.id}" ${assigned.has(c.id) ? 'checked' : ''} style="width:auto;">
+            <span>${UI.esc(c.label)}</span>
+          </label>
+        `).join('')}
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
+        <button class="btn btn-primary" id="saveBtn">Save classes</button>
+      </div>
+    `, (root) => {
+      root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
+      root.querySelector('#saveBtn').onclick = async () => {
+        const classIds = Array.from(root.querySelectorAll('[data-class-check]'))
+          .filter(cb => cb.checked)
+          .map(cb => cb.dataset.classCheck);
+        try {
+          await Store.setTeacherClasses(existing.id, classIds);
+          UI.toast('Classes updated');
+          UI.closeModal();
+          Views.users();
+        } catch (err) {
+          UI.toast('Could not save: ' + err.message);
+        }
+      };
+    });
+  }
+
   function wireRowActions() {
     document.querySelectorAll('[data-edit]').forEach(btn => {
       btn.onclick = () => openEditForm(users.find(u => u.id === btn.dataset.edit));
     });
     document.querySelectorAll('[data-subjects]').forEach(btn => {
       btn.onclick = () => openSubjectsForm(users.find(u => u.id === btn.dataset.subjects));
+    });
+    document.querySelectorAll('[data-classes]').forEach(btn => {
+      btn.onclick = () => openClassesForm(users.find(u => u.id === btn.dataset.classes));
     });
     document.querySelectorAll('[data-reset]').forEach(btn => {
       btn.onclick = () => openResetForm(users.find(u => u.id === btn.dataset.reset));

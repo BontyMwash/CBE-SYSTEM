@@ -58,6 +58,11 @@ create table students (
   name          text not null,
   admission_no  text default '',
   klass         text not null,
+  -- Optional parent/guardian contact, used by the "Send Results to
+  -- Parents" screen to pre-fill a WhatsApp/SMS/email message.
+  parent_name   text not null default '',
+  parent_phone  text not null default '',
+  parent_email  text not null default '',
   created_at    timestamptz not null default now()
 );
 
@@ -134,6 +139,24 @@ create table published_results (
   unique (school_id, klass, type, term, year)
 );
 
+-- One row per "we told this student's parent about this sitting's
+-- results" event, logged by the Send Results to Parents screen.
+-- Sending itself happens on-device (WhatsApp/SMS/email links) — this
+-- table just tracks that it happened, so the screen can show who's
+-- already been contacted.
+create table result_notifications (
+  id          uuid primary key default gen_random_uuid(),
+  school_id   uuid not null references schools(id) on delete cascade,
+  student_id  uuid not null references students(id) on delete cascade,
+  klass       text not null,
+  type        text not null,
+  term        text not null check (term in ('Term 1','Term 2','Term 3')),
+  year        int  not null,
+  channel     text not null check (channel in ('whatsapp','sms','email')),
+  sent_at     timestamptz not null default now(),
+  sent_by     uuid references profiles(id) on delete set null
+);
+
 -- Helpful indexes
 create index idx_profiles_school on profiles(school_id);
 create index idx_classes_school on classes(school_id);
@@ -147,6 +170,8 @@ create index idx_results_student on results(student_id);
 create index idx_teacher_subjects_school on teacher_subjects(school_id);
 create index idx_teacher_subjects_teacher on teacher_subjects(teacher_id);
 create index idx_published_results_school on published_results(school_id, klass, type, term, year);
+create index idx_result_notifications_lookup on result_notifications(school_id, klass, type, term, year);
+create index idx_result_notifications_student on result_notifications(student_id);
 
 -- ------------------------------------------------------------
 -- HELPER FUNCTIONS
@@ -212,6 +237,7 @@ alter table exams            enable row level security;
 alter table results          enable row level security;
 alter table teacher_subjects enable row level security;
 alter table published_results enable row level security;
+alter table result_notifications enable row level security;
 
 -- ===== schools =====
 create policy "superadmin full access to schools" on schools
@@ -393,6 +419,28 @@ create policy "admin update published results" on published_results
   for update using (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id() and school_active()));
 create policy "admin unpublish results" on published_results
   for delete using (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id() and school_active()));
+
+-- ===== result_notifications =====
+-- Admins and teachers in the school can both see and log sends —
+-- either role may be the one that actually messages a parent.
+create policy "select notifications in own school" on result_notifications
+  for select using (is_superadmin() or school_id = current_school_id());
+
+create policy "admin or user log notifications" on result_notifications
+  for insert with check (
+    is_superadmin() or (
+      school_id = current_school_id() and school_active()
+      and app_current_role() in ('admin','user')
+    )
+  );
+
+create policy "admin or user clear notifications" on result_notifications
+  for delete using (
+    is_superadmin() or (
+      school_id = current_school_id() and school_active()
+      and app_current_role() in ('admin','user')
+    )
+  );
 
 -- Seed every school with the three exam types it used to have hard-coded,
 -- so existing installs keep working immediately after this schema runs

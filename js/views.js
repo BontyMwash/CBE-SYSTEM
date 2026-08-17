@@ -33,6 +33,35 @@ function classOptionLabels(st) {
   return classesFromStudents(st.students);
 }
 
+// Shared by the teacher-facing screens (My Classes, Learners,
+// Assessments, Gradebook, Attendance, Competency Assessment): works
+// out which classes/subjects a "user" (teacher) login is scoped to.
+// Admins/superadmins are never restricted, so this returns null sets
+// for them (meaning "everything").
+function teacherScope(st, user) {
+  const isTeacher = !!user && user.role === 'user';
+  if (!isTeacher) return { isTeacher: false, subjectIds: null, classIds: null, classLabels: null };
+
+  const subjectIds = new Set(st.teacherSubjects.filter(ts => ts.teacherId === user.id).map(ts => ts.subjectId));
+  let assignedClasses = st.classes.filter(c => st.teacherClasses.some(tc => tc.teacherId === user.id && tc.classId === c.id));
+
+  // Fallback for teachers an admin hasn't explicitly assigned classes
+  // to yet: derive "their" classes from whichever classes have exams
+  // in a subject they teach, so the screens aren't empty on day one.
+  if (assignedClasses.length === 0 && subjectIds.size) {
+    const derivedLabels = new Set(st.exams.filter(e => subjectIds.has(e.subjectId)).map(e => e.klass));
+    assignedClasses = st.classes.filter(c => derivedLabels.has(c.label));
+  }
+
+  return {
+    isTeacher: true,
+    subjectIds,
+    classIds: new Set(assignedClasses.map(c => c.id)),
+    classLabels: new Set(assignedClasses.map(c => c.label)),
+    classes: assignedClasses
+  };
+}
+
 function showLoading() {
   document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">Loading…</div></div>`;
 }
@@ -539,7 +568,7 @@ Views.students = async function () {
       <div class="ledger">
         <div class="ledger-scroll">
           <table class="ledger-table">
-            <thead><tr><th>#</th><th>Name</th><th>Admission No.</th><th>Class</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>Name</th><th>Admission No.</th><th>Class</th><th>Parent Contact</th><th></th></tr></thead>
             <tbody>
               ${rows.map((s, i) => `
                 <tr>
@@ -547,6 +576,7 @@ Views.students = async function () {
                   <td>${UI.esc(s.name)}</td>
                   <td class="num">${UI.esc(s.admissionNo) || '—'}</td>
                   <td>${UI.esc(s.klass)}</td>
+                  <td>${UI.esc(s.parentPhone) || UI.esc(s.parentEmail) || '<span class="row-index">—</span>'}</td>
                   <td>
                     <button class="btn btn-sm btn-ghost" data-edit="${s.id}">Edit</button>
                     <button class="btn btn-sm btn-danger" data-del="${s.id}">Delete</button>
@@ -609,6 +639,21 @@ Views.students = async function () {
           <label>Class / Grade</label>
           ${classField}
         </div>
+        <div class="field full" style="margin-top:4px; border-top:1px solid var(--paper-line); padding-top:14px;">
+          <label style="font-weight:600;">Parent / guardian contact <span class="field-hint" style="font-weight:400;">(optional — used to send results)</span></label>
+        </div>
+        <div class="field">
+          <label>Parent / guardian name</label>
+          <input type="text" id="f_parentname" value="${isEdit ? UI.esc(existing.parentName) : ''}" placeholder="e.g. Mary Wanjiru">
+        </div>
+        <div class="field">
+          <label>Parent phone (WhatsApp/SMS)</label>
+          <input type="text" id="f_parentphone" value="${isEdit ? UI.esc(existing.parentPhone) : ''}" placeholder="e.g. +254712345678">
+        </div>
+        <div class="field">
+          <label>Parent email</label>
+          <input type="email" id="f_parentemail" value="${isEdit ? UI.esc(existing.parentEmail) : ''}" placeholder="e.g. parent@example.com">
+        </div>
       </div>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
@@ -620,13 +665,16 @@ Views.students = async function () {
         const name = root.querySelector('#f_name').value.trim();
         const admissionNo = root.querySelector('#f_admno').value.trim();
         const klass = root.querySelector('#f_klass').value.trim();
+        const parentName = root.querySelector('#f_parentname').value.trim();
+        const parentPhone = root.querySelector('#f_parentphone').value.trim();
+        const parentEmail = root.querySelector('#f_parentemail').value.trim();
         if (!name || !klass) { UI.toast('Name and class are required'); return; }
         try {
           if (isEdit) {
-            await Store.updateStudent(existing.id, { name, admissionNo, klass });
+            await Store.updateStudent(existing.id, { name, admissionNo, klass, parentName, parentPhone, parentEmail });
             UI.toast('Student updated');
           } else {
-            await Store.addStudent({ name, admissionNo, klass });
+            await Store.addStudent({ name, admissionNo, klass, parentName, parentPhone, parentEmail });
             UI.toast('Student added');
           }
           UI.closeModal();
@@ -1151,7 +1199,7 @@ Views.results = async function () {
       <div class="ledger">
         <div class="ledger-scroll">
           <table class="ledger-table">
-            <thead><tr><th>#</th><th>Name</th><th>Admission No.</th><th>Marks (/${exam.totalMarks})</th><th>Level</th></tr></thead>
+            <thead><tr><th>#</th><th>Name</th><th>ADM NO.</th><th>Marks (/${exam.totalMarks})</th><th>Level</th></tr></thead>
             <tbody>
               ${students.map((s, i) => {
                 const res = findResult(exam.id, s.id);
