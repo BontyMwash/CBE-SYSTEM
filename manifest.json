@@ -1,6 +1,7 @@
 {
-  "name": "CBE Exam Register",
-  "short_name": "CBE Register",
+  "name": "B~CBE Analytics",
+  "short_name": "B~CBE",
+  "copyright": "Copyright (c) 2026 B~CBE Analytics. All rights reserved.",
   "description": "Exam register, results, broadsheets and report cards for CBE schools.",
   "start_url": "./",
   "scope": "./",

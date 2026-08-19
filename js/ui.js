@@ -1,4 +1,6 @@
 /* ============================================================
+   Copyright (c) 2026 B~CBE Analytics. All rights reserved.
+
    ui.js — small reusable UI helpers: modal, toast, badge, escape.
    ============================================================ */
 
@@ -39,6 +41,32 @@ const UI = {
   closeModal() {
     document.getElementById('modalRoot').innerHTML = '';
     document.removeEventListener('keydown', UI._escHandler);
+  },
+
+  // Terms & Conditions / Copyright — reachable from the dashboard
+  // footer, the login screen, and the homepage alike (all three share
+  // the same #modalRoot, so this works whether or not anyone's
+  // logged in yet). Kept as a modal rather than a real route so it
+  // never has to fight Auth.allowedRoutes().
+  showTerms() {
+    const year = new Date().getFullYear();
+    UI.openModal(`
+      <h2>Terms &amp; Conditions / Copyright</h2>
+      <div style="max-height:60vh; overflow-y:auto; font-size:13.5px; line-height:1.7; color:var(--ink-soft); padding-right:4px;">
+        <p><strong>&copy; ${year} B~CBE Analytics. All rights reserved.</strong></p>
+        <p>B~CBE Analytics (the "System") — including its source code, interface design, report and broadsheet layouts, and documentation — is the property of its developer and is protected by applicable copyright law. Unauthorized copying, redistribution, reverse engineering, or resale of the System, in whole or in part, is prohibited without prior written permission.</p>
+        <p><strong>Use of the System</strong> is limited to the school(s) it has been licensed or provided to. Each school is responsible for the accuracy of data it enters (student records, marks, results) and for controlling access to its own logins.</p>
+        <p><strong>Student data</strong> entered into the System (names, marks, results, contact details) belongs to the school. The System is a tool for recording and reporting that data — schools remain responsible for complying with any data-protection obligations that apply to them.</p>
+        <p><strong>Published results.</strong> Once a sitting's results are published, the School acknowledges that they may be shared with parents/guardians, and that marks for that sitting are locked from further editing until an administrator unpublishes it — this is by design, to protect the integrity of results already communicated.</p>
+        <p><strong>No warranty.</strong> The System is provided "as is". While built with care, no guarantee is made that it is error-free or uninterrupted; schools should keep their own backups of critical records where possible.</p>
+        <p>Questions about these terms or about licensing can be directed to your system administrator or the developer of B~CBE Analytics.</p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="termsCloseBtn">Close</button>
+      </div>
+    `, (root) => {
+      root.querySelector('#termsCloseBtn').onclick = () => UI.closeModal();
+    });
   },
 
   badge(band) {

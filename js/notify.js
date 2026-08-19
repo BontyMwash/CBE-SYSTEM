@@ -1,4 +1,6 @@
 /* ============================================================
+   Copyright (c) 2026 B~CBE Analytics. All rights reserved.
+
    notify.js — "Send Results to Parents": pick a sitting that has
    already been published (same gating as the Analysis page — an
    admin releases it once every teacher is done entering marks),
@@ -38,8 +40,9 @@ Views.notify = async function () {
 
   const DEFAULT_TEMPLATE =
     `Dear Parent/Guardian, {name}'s {sitting} results for {term}, {academic_year} are available. ` +
-    `Average: {average}% ({level}). Position: {position}/{class_size}. Strengths: {strengths}. ` +
-    `Improvement areas: {improvement_areas}. View full report: {report_link}. Thank you.`;
+    `Average: {average}% ({level}). Position: {position}/{class_size}. ` +
+    `Subject performance: {subjects}. ` +
+    `Strengths: {strengths}. Improvement areas: {improvement_areas}. Thank you.`;
   let template = DEFAULT_TEMPLATE;
   let onlyUncontacted = false;
   let search = '';
@@ -57,12 +60,12 @@ Views.notify = async function () {
     </div>
     <div class="card" style="margin-bottom:16px;">
       <label style="font-weight:600;">Message template</label>
-      <p class="field-hint" style="margin-top:2px;">Placeholders: {name} {sitting} {term} {academic_year} {average} {level} {position} {class_size} {strengths} {improvement_areas} {report_link} {class} {school}</p>
+      <p class="field-hint" style="margin-top:2px;">Placeholders: {name} {sitting} {term} {academic_year} {average} {level} {position} {class_size} {subjects} {strengths} {improvement_areas} {class} {school}</p>
       <textarea id="ntTemplate" rows="3" style="width:100%; font-family:inherit; font-size:13.5px; padding:8px; border-radius:8px; border:1px solid var(--paper-line); resize:vertical;">${UI.esc(template)}</textarea>
       <div style="margin-top:8px;">
         <button class="btn btn-sm btn-ghost" id="ntResetTemplate">Reset to default</button>
       </div>
-      <p class="field-hint" style="margin-top:8px;">{report_link} points to a full portrait report card — subjects, marks, position and level, laid out the same way as a printed report. Use the <strong>Report PDF</strong> button on each row to actually download or share that file; a link typed into a text message only opens on this device, since sending real clickable links to parents' own phones needs the school's results portal to be hosted online.</p>
+      <p class="field-hint" style="margin-top:8px;">{subjects} lists every subject sat this sitting with its % and level, e.g. "Mathematics: 78% (ME); English: 65% (ME)" — so the parent sees the full breakdown right in the message, without needing to open anything else. Want to send the actual report card too? Use the <strong>Report PDF</strong> button on each row to download it, or share it straight into WhatsApp/SMS/Email via the device's share sheet.</p>
     </div>
     <div id="ntBody"></div>
   `;
@@ -134,17 +137,15 @@ Views.notify = async function () {
     return { strengths, improvement_areas: improvements };
   }
 
-  // {report_link} generation: builds this student's report card for the
+  // "Report PDF" generation: builds this student's report card for the
   // chosen sitting (the same portrait layout used on the Reports page —
   // school masthead, subjects and marks table, position/level) into a
-  // PDF, and hands back a link to it. This app is a client-only front
-  // end with no file-hosting backend, so the "link" is a local blob URL:
-  // it opens fine on the device that generated it, but — unlike a
-  // hosted URL — it won't resolve on a parent's own phone if just typed
-  // into a text message. The "Report PDF" button next to each row is
-  // the reliable way to actually get the file to a parent (download it,
-  // or use the device's share sheet to attach it straight into
-  // WhatsApp/SMS/Email alongside the message).
+  // PDF, cached per student/sitting. Used only by the explicit "Report
+  // PDF" button below (download, or hand to the device's share sheet to
+  // attach the actual file into WhatsApp/SMS/Email) — the text message
+  // itself no longer references this, since a local blob link doesn't
+  // resolve on a parent's own phone. The message instead carries the
+  // full per-subject breakdown inline via {subjects}.
   const reportBlobCache = new Map(); // `${sittingId}|${studentId}` -> { url, blob }
   async function getStudentReport(stu, chosen) {
     const key = `${chosen.id}|${stu.id}`;
@@ -185,7 +186,19 @@ Views.notify = async function () {
 
     const contactedCount = results.filter(r => sentMap.has(r.student.id)).length;
 
-    function buildVars(stu, r, reportLink) {
+    // Every subject sat this sitting, with its % and level — e.g.
+    // "Mathematics: 78% (ME); English: 65% (ME)" — for the {subjects}
+    // placeholder, so the full breakdown travels in the message text
+    // itself rather than depending on a link the parent can't open.
+    function subjectBreakdown(subjectPcts) {
+      if (!subjectPcts.length) return 'not yet graded';
+      return subjectPcts.map(sp => {
+        const band = Grading.levelForMarks(sp.pct, 100, st.settings.gradingBands);
+        return `${sp.name}: ${sp.pct.toFixed(0)}%${band ? ` (${band.code})` : ''}`;
+      }).join('; ');
+    }
+
+    function buildVars(stu, r) {
       const si = strengthsAndImprovements(r.subjectPcts);
       return {
         name: stu.name, class: stu.klass, sitting: chosen.type, term: chosen.term, academic_year: chosen.year,
@@ -193,17 +206,13 @@ Views.notify = async function () {
         level: r.band ? r.band.label : 'not yet graded',
         position: r.position === null ? '—' : r.position,
         class_size: r.outOf,
+        subjects: subjectBreakdown(r.subjectPcts),
         strengths: si.strengths,
         improvement_areas: si.improvement_areas,
-        report_link: reportLink || '(tap "Report PDF" to generate)',
         school: st.settings.schoolName || 'the school'
       };
     }
-    function cachedLinkFor(stu) {
-      const cached = reportBlobCache.get(`${chosen.id}|${stu.id}`);
-      return cached ? cached.url : '';
-    }
-    function messageFor(stu, r) { return fillTemplate(templateBox.value || DEFAULT_TEMPLATE, buildVars(stu, r, cachedLinkFor(stu))); }
+    function messageFor(stu, r) { return fillTemplate(templateBox.value || DEFAULT_TEMPLATE, buildVars(stu, r)); }
     function urlFor(channel, stu, message) {
       if (channel === 'whatsapp') return `https://wa.me/${digitsOnly(stu.parentPhone)}?text=${encodeURIComponent(message)}`;
       if (channel === 'sms') return `sms:${stu.parentPhone}?&body=${encodeURIComponent(message)}`;
@@ -335,38 +344,31 @@ Views.notify = async function () {
       const queue = rows.filter(r => selected.has(r.student.id) && (channel === 'email' ? r.student.parentEmail : r.student.parentPhone));
       if (queue.length === 0) { UI.toast('None of the selected parents have a contact for that channel'); return; }
       let i = 0;
-      async function renderStep() {
+      function renderStep() {
         const r = queue[i];
         const stu = r.student;
+        const message = messageFor(stu, r);
         UI.openModal(`
           <h2>Bulk send &middot; ${channel === 'whatsapp' ? 'WhatsApp' : channel === 'sms' ? 'SMS' : 'Email'}</h2>
-          <p class="field-hint">Sending ${i + 1} of ${queue.length} &middot; ${UI.esc(stu.name)} &middot; generating report…</p>
-          <textarea rows="4" readonly style="width:100%; font-family:inherit; font-size:13.5px; padding:8px; border-radius:8px; border:1px solid var(--paper-line); resize:vertical;">${UI.esc(messageFor(stu, r))}</textarea>
+          <p class="field-hint">Sending ${i + 1} of ${queue.length} &middot; ${UI.esc(stu.name)}</p>
+          <textarea rows="4" readonly style="width:100%; font-family:inherit; font-size:13.5px; padding:8px; border-radius:8px; border:1px solid var(--paper-line); resize:vertical;">${UI.esc(message)}</textarea>
           <div class="modal-actions">
             <button class="btn btn-ghost" id="bulkSkipBtn">Skip</button>
             <button class="btn btn-ghost" id="bulkStopBtn">Stop here</button>
-            <button class="btn btn-primary" id="bulkOpenBtn" disabled>Preparing…</button>
+            <button class="btn btn-primary" id="bulkOpenBtn">Open ${channel === 'whatsapp' ? 'WhatsApp' : channel === 'sms' ? 'Messages' : 'Mail'} & mark sent</button>
           </div>
         `, (root) => {
           root.querySelector('#bulkStopBtn').onclick = () => { UI.closeModal(); paint(); };
           root.querySelector('#bulkSkipBtn').onclick = () => { advance(); };
+          root.querySelector('#bulkOpenBtn').onclick = async () => {
+            const url = urlFor(channel, stu, message);
+            if (channel === 'whatsapp') window.open(url, '_blank'); else window.location.href = url;
+            try {
+              await Store.logNotification({ studentId: stu.id, klass: chosen.klass, type: chosen.type, term: chosen.term, year: chosen.year, channel });
+            } catch (e) { UI.toast(`Opened for ${stu.name}, but could not save the "sent" record: ` + e.message); }
+            advance();
+          };
         });
-        const report = await getStudentReport(stu, chosen);
-        const message = messageFor(stu, r); // re-read now that the link is cached
-        const ta = document.querySelector('#modalRoot .modal textarea');
-        if (ta) ta.value = message;
-        const openBtn = document.getElementById('bulkOpenBtn');
-        if (!openBtn) return; // modal was closed/advanced while generating
-        openBtn.disabled = false;
-        openBtn.textContent = `Open ${channel === 'whatsapp' ? 'WhatsApp' : channel === 'sms' ? 'Messages' : 'Mail'} & mark sent`;
-        openBtn.onclick = async () => {
-          const url = urlFor(channel, stu, message);
-          if (channel === 'whatsapp') window.open(url, '_blank'); else window.location.href = url;
-          try {
-            await Store.logNotification({ studentId: stu.id, klass: chosen.klass, type: chosen.type, term: chosen.term, year: chosen.year, channel });
-          } catch (e) { UI.toast(`Opened for ${stu.name}, but could not save the "sent" record: ` + e.message); }
-          advance();
-        };
       }
       function advance() {
         selected.delete(queue[i].student.id);
@@ -401,11 +403,7 @@ Views.notify = async function () {
         if (!stu) return;
         const r = results.find(x => x.student.id === stu.id);
         const channel = btn.dataset.send;
-        const originalLabel = btn.innerHTML;
-        btn.disabled = true; btn.innerHTML = 'Preparing…';
-        const report = await getStudentReport(stu, chosen);
-        btn.disabled = false; btn.innerHTML = originalLabel;
-        const vars = buildVars(stu, r, report.url);
+        const vars = buildVars(stu, r);
         const message = fillTemplate(templateBox.value || DEFAULT_TEMPLATE, vars);
         let url = '';
         if (channel === 'whatsapp') url = `https://wa.me/${digitsOnly(stu.parentPhone)}?text=${encodeURIComponent(message)}`;
@@ -429,9 +427,7 @@ Views.notify = async function () {
         const stu = results.find(r => r.student.id === btn.dataset.copy)?.student;
         if (!stu) return;
         const r = results.find(x => x.student.id === stu.id);
-        const report = await getStudentReport(stu, chosen);
-        const vars = buildVars(stu, r, report.url);
-        const message = fillTemplate(templateBox.value || DEFAULT_TEMPLATE, vars);
+        const message = messageFor(stu, r);
         try {
           await navigator.clipboard.writeText(message);
           UI.toast('Message copied to clipboard.');
@@ -465,7 +461,7 @@ Views.notify = async function () {
         const a = document.createElement('a');
         a.href = report.url; a.download = filename;
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
-        paint(); // refresh so the {report_link} column/preview reflects the now-cached link
+        paint(); // refresh so the row picks up the newly-cached PDF blob
       };
     });
 

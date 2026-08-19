@@ -1,4 +1,6 @@
 /* ============================================================
+   Copyright (c) 2026 B~CBE Analytics. All rights reserved.
+
    broadsheet.js — class broadsheet: every student x every
    subject for one exam sitting (type/term/year/class), with
    totals, mean %, rank position, and overall level.
@@ -111,14 +113,16 @@ Views.broadsheet = async function () {
 
     lastCsv = {
       filename: `broadsheet-${klass}-${type}-${term}-${year}`.replace(/\s+/g, '_'),
-      header: ['Pos.', 'Name', 'Adm. No.', ...subjectCols.map(c => c.subject.name), 'Total Marks', 'Mean %', 'Level'],
+      header: ['Pos.', 'Name', 'Adm. No.', ...subjectCols.map(c => c.subject.name), 'Total Marks', 'Mean %', 'Points', 'Level'],
       rows: ranked.map(r => {
         const band = r.meanPct === null ? null : Grading.levelForMarks(r.meanPct, 100, st.settings.gradingBands);
+        const points = Grading.pointsForBand(band, st.settings.gradingBands);
         return [
           rankMap.get(r.student.id), r.student.name, r.student.admissionNo || '',
           ...r.cells.map(c => c.pct === null ? '' : c.pct.toFixed(1)),
           r.totalObtained === null ? '' : `${r.totalObtained}/${r.totalPossible}`,
           r.meanPct === null ? '' : r.meanPct.toFixed(1),
+          points === null ? '' : points,
           band ? band.code : ''
         ];
       })
@@ -130,6 +134,10 @@ Views.broadsheet = async function () {
       return Grading.average(pcts);
     });
     const classMean = Grading.average(rows.map(r => r.meanPct).filter(v => v !== null));
+    const classMeanPoints = Grading.average(rows.map(r => {
+      const band = r.meanPct === null ? null : Grading.levelForMarks(r.meanPct, 100, st.settings.gradingBands);
+      return Grading.pointsForBand(band, st.settings.gradingBands);
+    }).filter(v => v !== null));
 
     /* ---- Subject performance: mean/high/low/entries for each
        subject sat, so a teacher/admin can see which subjects are
@@ -192,6 +200,7 @@ Views.broadsheet = async function () {
 
     wrap.innerHTML = `
       <div class="ledger" id="bsPrintArea">
+        <div style="padding:16px 16px 0 16px;">${buildReportMastheadHTML(st, `Broadsheet — ${klass}`, `${type} Results`, term, year)}</div>
         <div class="ledger-scroll">
           <table class="ledger-table">
             <thead>
@@ -202,12 +211,14 @@ Views.broadsheet = async function () {
                 ${subjectCols.map(c => `<th title="${UI.esc(c.subject.name)}">${UI.esc(c.subject.code || c.subject.name)}</th>`).join('')}
                 <th>Total Marks</th>
                 <th>Mean %</th>
+                <th>Points</th>
                 <th>Level</th>
               </tr>
             </thead>
             <tbody>
               ${ranked.map(r => {
                 const band = r.meanPct === null ? null : Grading.levelForMarks(r.meanPct, 100, st.settings.gradingBands);
+                const points = Grading.pointsForBand(band, st.settings.gradingBands);
                 return `<tr>
                   <td class="num">${rankMap.get(r.student.id)}</td>
                   <td>${UI.esc(r.student.name)}</td>
@@ -215,6 +226,7 @@ Views.broadsheet = async function () {
                   ${r.cells.map(c => `<td class="num" ${c.marks !== null ? `title="${c.marks}/${c.totalMarks} raw"` : ''}>${c.pct === null ? '<span class="row-index">—</span>' : c.pct.toFixed(1) + '%'}</td>`).join('')}
                   <td class="num">${r.totalObtained === null ? '—' : `${r.totalObtained}/${r.totalPossible}`}</td>
                   <td class="num">${r.meanPct === null ? '—' : r.meanPct.toFixed(1) + '%'}</td>
+                  <td class="num">${points === null ? '—' : points}</td>
                   <td>${UI.badge(band)}</td>
                 </tr>`;
               }).join('')}
@@ -225,11 +237,13 @@ Views.broadsheet = async function () {
                 ${subjectAverages.map(a => `<td class="num" style="font-weight:600;">${a === null ? '—' : a.toFixed(1)}</td>`).join('')}
                 <td></td>
                 <td class="num" style="font-weight:600;">${classMean === null ? '—' : classMean.toFixed(1)}</td>
+                <td class="num" style="font-weight:600;">${classMeanPoints === null ? '—' : classMeanPoints.toFixed(1)}</td>
                 <td></td>
               </tr>
             </tfoot>
           </table>
         </div>
+        ${buildPrintFooterHTML()}
       </div>
       <p class="field-hint no-print" style="margin-top:10px;">
         ${UI.esc(klass)} &middot; ${UI.esc(type)} &middot; ${UI.esc(term)} ${UI.esc(year)} &middot;

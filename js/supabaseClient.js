@@ -1,4 +1,6 @@
 /* ============================================================
+   Copyright (c) 2026 B~CBE Analytics. All rights reserved.
+
    supabaseClient.js — one shared Supabase client for the app.
 
    Fill in your project's URL and anon (public) key below. The

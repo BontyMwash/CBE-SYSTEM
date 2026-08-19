@@ -1,4 +1,6 @@
 /* ============================================================
+   Copyright (c) 2026 B~CBE Analytics. All rights reserved.
+
    grading.js — marks -> performance level, and aggregation
    helpers for report cards.
    ============================================================ */
@@ -17,6 +19,23 @@ const Grading = {
   percent(marks, totalMarks) {
     if (marks === null || marks === undefined || marks === '') return null;
     return (Number(marks) / Number(totalMarks || 100)) * 100;
+  },
+
+  // Points value for a grading band — used alongside the % and the
+  // Level (band code) on report cards and the broadsheet, the way a
+  // school's own points scale (e.g. a KCSE-style 1-12) works: the
+  // best band earns the most points. A school sets its own points
+  // per band in Settings -> Grading bands. For a school that hasn't
+  // set any yet, falls back to ranking the bands by their minimum
+  // score and spacing points evenly (1 = weakest band, N = strongest,
+  // for N bands) so a number always shows, even before Settings has
+  // been visited.
+  pointsForBand(band, bands) {
+    if (!band) return null;
+    if (band.points !== undefined && band.points !== null && band.points !== '') return Number(band.points);
+    const sorted = [...(bands || [])].sort((a, b) => a.min - b.min);
+    const idx = sorted.findIndex(b => b.code === band.code);
+    return idx === -1 ? null : idx + 1;
   },
 
   average(values) {

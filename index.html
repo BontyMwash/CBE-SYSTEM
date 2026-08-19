@@ -1,9 +1,10 @@
 <!DOCTYPE html>
+<!-- B~CBE Analytics — Copyright (c) 2026 B~CBE Analytics. All rights reserved. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CBE Exam Register</title>
+<title>B~CBE Analytics</title>
 
 <!-- PWA -->
 <link rel="manifest" href="manifest.json" />
@@ -11,7 +12,7 @@
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="CBE Register" />
+<meta name="apple-mobile-web-app-title" content="B~CBE Analytics" />
 <link rel="icon" href="favicon.ico" sizes="any" />
 <link rel="icon" href="icons/icon-192.png" type="image/png" />
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
@@ -38,6 +39,9 @@ href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css"
 </head>
 <body>
 
+<!-- Homepage (marketing landing page, shown first for signed-out visitors) -->
+<div id="homeRoot" style="display:none;"></div>
+
 <!-- Login screen (shown when nobody is logged in) -->
 <div id="loginRoot" class="login-screen" style="display:none;"></div>
 
@@ -50,9 +54,15 @@ href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css"
   <!-- Sidebar -->
   <aside class="sidebar" id="sidebar">
     <div class="brand">
-      <img src="icons/logo-mark.png" alt="CBE Exam Register" class="brand-logo" width="34" height="34" />
-      <span class="brand-mark">CBE</span>
-      <span class="brand-name">Exam Register</span>
+      <img src="icons/logo-mark.png" alt="B~CBE Analytics" class="brand-logo" width="34" height="34" />
+      <span class="brand-mark">B~CBE</span>
+      <span class="brand-name">Analytics</span>
+    </div>
+    <div id="levelSwitcherWrap" class="level-switcher-wrap">
+      <!-- populated by app.js: lets a superadmin/admin/teacher switch
+           which section (Primary / Junior Secondary / Senior School)
+           the whole app is filtered to, or shows a locked badge for a
+           section-scoped admin login -->
     </div>
 
     <nav class="nav" id="navList">

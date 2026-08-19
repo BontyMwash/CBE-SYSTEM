@@ -1,4 +1,5 @@
 -- ============================================================
+-- Copyright (c) 2026 B~CBE Analytics. All rights reserved.
 -- Migration: freeze schools that haven't paid
 -- Run this once in Supabase: Dashboard → SQL Editor → New query.
 -- Safe to run on the existing live database — it only adds a few

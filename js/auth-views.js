@@ -1,7 +1,62 @@
 /* ============================================================
+   Copyright (c) 2026 B~CBE Analytics. All rights reserved.
+
    auth-views.js — Login screen, Schools (superadmin), and
    Users (admin) management views.
    ============================================================ */
+
+/* ------------------------- HOMEPAGE ------------------------- */
+// Marketing landing page shown to signed-out visitors before the
+// login screen (see App.showHome() / App.boot()). onLogin() takes
+// them to Views.login.
+Views.home = function (onLogin) {
+  const root = document.getElementById('homeRoot');
+  const year = new Date().getFullYear();
+
+  const features = [
+    { icon: 'fa-list-check', title: 'Marks entry, made fast', text: 'Enter marks per class/subject/sitting with instant percentage & CBC level feedback.' },
+    { icon: 'fa-file-lines', title: 'Report cards', text: 'Auto-generated, printable report cards with position, trend chart, and comments.' },
+    { icon: 'fa-table-list', title: 'Broadsheets', text: 'A whole class across every subject in one ledger, ready to print or export.' },
+    { icon: 'fa-chart-column', title: 'Published analysis', text: 'Review performance, then publish results to lock them in and notify teachers.' },
+    { icon: 'fa-paper-plane', title: 'Send to parents', text: 'Message every subject result straight to a parent by SMS, WhatsApp or email.' },
+    { icon: 'fa-lock', title: 'Locked once published', text: "Published sittings can't be edited until an admin unpublishes them — results stay trustworthy." }
+  ];
+
+  root.innerHTML = `
+    <header class="home-nav">
+      <div class="home-brand">
+        <img src="icons/logo-mark.png" alt="B~CBE Analytics" width="30" height="30" />
+        <span class="brand-mark">B~CBE</span><span class="brand-name">Analytics</span>
+      </div>
+      <button class="btn btn-primary" id="homeLoginBtn">Log in</button>
+    </header>
+
+    <section class="home-hero">
+      <h1>Exam records, results &amp; report cards for CBE schools.</h1>
+      <p>One system to record marks, publish results, print report cards and broadsheets, and keep parents in the loop — built around the CBC grading model.</p>
+      <button class="btn btn-primary btn-lg" id="homeHeroLoginBtn">Log in to your school</button>
+    </section>
+
+    <section class="home-features">
+      ${features.map(f => `
+        <div class="home-feature-card">
+          <div class="home-feature-icon"><i class="fa-solid ${f.icon}"></i></div>
+          <h3>${UI.esc(f.title)}</h3>
+          <p>${UI.esc(f.text)}</p>
+        </div>
+      `).join('')}
+    </section>
+
+    <footer class="home-footer">
+      <span>&copy; ${year} B~CBE Analytics. All rights reserved.</span>
+      <a href="javascript:void(0)" id="homeTermsLink">Terms &amp; Copyright</a>
+    </footer>
+  `;
+
+  document.getElementById('homeLoginBtn').onclick = onLogin;
+  document.getElementById('homeHeroLoginBtn').onclick = onLogin;
+  document.getElementById('homeTermsLink').onclick = () => UI.showTerms();
+};
 
 Views.login = function (onSuccess) {
   const root = document.getElementById('loginRoot');
@@ -9,7 +64,7 @@ Views.login = function (onSuccess) {
   function brandBlock() {
     return `
       <div class="login-brand">
-        <img src="icons/logo-full.png" alt="CBE Exam Register — Record. Track. Result." class="login-logo" />
+        <img src="icons/logo-full.png" alt="B~CBE Analytics — Record. Track. Result." class="login-logo" />
       </div>
     `;
   }
@@ -44,7 +99,11 @@ Views.login = function (onSuccess) {
         <button class="btn btn-primary" id="loginBtn" style="width:100%; justify-content:center; margin-top:6px;">Log in</button>
         <div class="login-links">
           <button class="login-link" id="forgotBtn" type="button">Forgot password?</button>
+          <button class="login-link" id="backHomeBtn" type="button">&larr; Back to homepage</button>
         </div>
+        <p style="text-align:center; margin-top:18px; font-size:12px; color:var(--ink-faint, #8a8a8a);">
+          &copy; ${new Date().getFullYear()} B~CBE Analytics &middot; <a href="javascript:void(0)" id="loginTermsLink" style="color:inherit; text-decoration:underline;">Terms &amp; Copyright</a>
+        </p>
       </div>
     `;
 
@@ -77,6 +136,10 @@ Views.login = function (onSuccess) {
     });
     document.getElementById('forgotBtn').onclick = renderForgotForm;
     document.getElementById('loginEmail').focus();
+    const termsLink = document.getElementById('loginTermsLink');
+    if (termsLink) termsLink.onclick = () => UI.showTerms();
+    const backHomeBtn = document.getElementById('backHomeBtn');
+    if (backHomeBtn) backHomeBtn.onclick = () => App.showHome();
      const password = document.getElementById('loginPassword');
 const toggle = document.getElementById('togglePassword');
 
@@ -161,7 +224,7 @@ Views.setNewPassword = function (onDone) {
   root.innerHTML = `
     <div class="login-card">
       <div class="login-brand">
-        <img src="icons/logo-full.png" alt="CBE Exam Register — Record. Track. Result." class="login-logo" />
+        <img src="icons/logo-full.png" alt="B~CBE Analytics — Record. Track. Result." class="login-logo" />
       </div>
       <h1>Set a new password</h1>
       <p class="login-subtitle">Choose a new password for your login.</p>
@@ -454,6 +517,12 @@ Views.users = async function () {
     return new Set(teacherClasses.filter(tc => tc.teacherId === teacherId).map(tc => tc.classId));
   }
 
+  const SECTION_LABELS = { primary: 'Primary', 'junior-secondary': 'Junior Secondary', 'senior-school': 'Senior School' };
+  function sectionOptions(existingScope) {
+    return `<option value="" ${!existingScope ? 'selected' : ''}>All sections (unrestricted)</option>` +
+      Object.entries(SECTION_LABELS).map(([k, label]) => `<option value="${k}" ${existingScope === k ? 'selected' : ''}>${label} only</option>`).join('');
+  }
+
   function renderTable() {
     if (users.length === 0) {
       return `<div class="empty"><div class="empty-title">No logins yet</div><p>Add a login for each teacher who needs to enter marks, or another admin.</p></div>`;
@@ -462,12 +531,15 @@ Views.users = async function () {
       <div class="ledger">
         <div class="ledger-scroll">
           <table class="ledger-table">
-            <thead><tr><th>#</th><th>Name</th><th>Role</th><th>Subjects</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>Name</th><th>Role</th><th>Section</th><th>Subjects</th><th></th></tr></thead>
             <tbody>
               ${users.map((u, i) => `<tr>
                 <td class="row-index">${i + 1}</td>
                 <td>${UI.esc(u.name)}</td>
                 <td><span class="badge badge-${u.role === 'admin' ? 'ME' : 'EE'}">${u.role}</span></td>
+                <td>${u.role === 'admin'
+                  ? (u.sectionScope ? UI.esc(SECTION_LABELS[u.sectionScope] || u.sectionScope) : '<span class="row-index">All sections</span>')
+                  : '<span class="row-index">—</span>'}</td>
                 <td>${u.role === 'user'
                   ? (subjectsForTeacher(u.id).size
                       ? [...subjectsForTeacher(u.id)].map(id => UI.esc(st.subjects.find(s => s.id === id)?.name || '?')).join(', ')
@@ -510,6 +582,11 @@ Views.users = async function () {
           <label>Role</label>
           <select id="f_role">${roleOptions(existing.role)}</select>
         </div>
+        <div class="field full" id="f_section_wrap" style="${existing.role === 'admin' ? '' : 'display:none;'}">
+          <label>Section</label>
+          <select id="f_section">${sectionOptions(existing.sectionScope)}</select>
+          <p class="field-hint">Restrict this admin login to only Primary, only Junior Secondary, or only Senior School — useful if the two levels are run day-to-day by different admins under you. Leave as "All sections" for a full-access admin.</p>
+        </div>
       </div>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
@@ -517,12 +594,16 @@ Views.users = async function () {
       </div>
     `, (root) => {
       root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
+      root.querySelector('#f_role').onchange = (e) => {
+        root.querySelector('#f_section_wrap').style.display = e.target.value === 'admin' ? '' : 'none';
+      };
       root.querySelector('#saveBtn').onclick = async () => {
         const name = root.querySelector('#f_name').value.trim();
         const role = root.querySelector('#f_role').value;
+        const sectionScope = root.querySelector('#f_section')?.value || '';
         if (!name) { UI.toast('Name is required'); return; }
         try {
-          await Store.updateUserProfile(existing.id, { name, role });
+          await Store.updateUserProfile(existing.id, { name, role, sectionScope });
           UI.toast('Login updated');
           UI.closeModal();
           Views.users();
@@ -553,6 +634,11 @@ Views.users = async function () {
           <label>Role</label>
           <select id="f_role">${roleOptions('user')}</select>
         </div>
+        <div class="field full" id="f_section_wrap" style="display:none;">
+          <label>Section</label>
+          <select id="f_section">${sectionOptions('')}</select>
+          <p class="field-hint">Restrict this admin login to only Primary, only Junior Secondary, or only Senior School — useful if the two levels are run day-to-day by different admins under you. Leave as "All sections" for a full-access admin.</p>
+        </div>
       </div>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
@@ -560,18 +646,22 @@ Views.users = async function () {
       </div>
     `, (root) => {
       root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
+      root.querySelector('#f_role').onchange = (e) => {
+        root.querySelector('#f_section_wrap').style.display = e.target.value === 'admin' ? '' : 'none';
+      };
       root.querySelector('#saveBtn').onclick = async () => {
         const name = root.querySelector('#f_name').value.trim();
         const email = root.querySelector('#f_email').value.trim();
         const password = root.querySelector('#f_password').value;
         const role = root.querySelector('#f_role').value;
+        const sectionScope = root.querySelector('#f_section')?.value || '';
         if (!name || !email || !password) { UI.toast('All fields are required'); return; }
         if (password.length < 6) { UI.toast('Password must be at least 6 characters'); return; }
 
         const saveBtn = root.querySelector('#saveBtn');
         saveBtn.disabled = true;
         saveBtn.textContent = 'Creating…';
-        const result = await Auth.createUser({ email, password, name, role, schoolId });
+        const result = await Auth.createUser({ email, password, name, role, schoolId, sectionScope: role === 'admin' ? sectionScope : '' });
         saveBtn.disabled = false;
         saveBtn.textContent = 'Create login';
         if (!result.ok) { UI.toast('Could not create login: ' + result.error); return; }

@@ -1,4 +1,5 @@
 -- ============================================================
+-- Copyright (c) 2026 B~CBE Analytics. All rights reserved.
 -- Migration: admin-defined exam types + teacher-subject
 -- assignments ("which subjects can this teacher see/edit").
 -- Run this once in Supabase SQL Editor. Safe to re-run — every

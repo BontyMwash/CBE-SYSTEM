@@ -1,4 +1,5 @@
 -- ============================================================
+-- Copyright (c) 2026 B~CBE Analytics. All rights reserved.
 -- Migration: classes/streams table + subject short codes
 -- Run this once in Supabase SQL Editor if your project was
 -- created BEFORE this change (i.e. schema.sql doesn't already

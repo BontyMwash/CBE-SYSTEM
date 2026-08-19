@@ -1,4 +1,6 @@
 /* ============================================================
+   Copyright (c) 2026 B~CBE Analytics. All rights reserved.
+
    analysis.js — "Published Results & Analysis": an admin picks a
    sitting (class + exam type + term + year), reviews class/subject
    performance, and publishes it once every teacher has finished
@@ -211,6 +213,7 @@ Views.analysis = async function () {
             </div>
           </div>
         </div>
+        ${buildPrintFooterHTML()}
       </div>
     `;
   }

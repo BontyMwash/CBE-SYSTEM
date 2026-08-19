@@ -1,4 +1,6 @@
 /* ============================================================
+   Copyright (c) 2026 B~CBE Analytics. All rights reserved.
+
    data.js — Supabase-backed data store.
 
    Every method that touches the database is now ASYNC (returns a
@@ -150,16 +152,22 @@ const Store = {
   async listUsersForSchool(schoolId) {
     const { data, error } = await supabase.from('profiles').select('*').eq('school_id', schoolId).order('name');
     this._throwIfError('list users', error);
-    return data.map(u => ({ id: u.id, name: u.name, role: u.role, schoolId: u.school_id }));
+    return data.map(u => ({ id: u.id, name: u.name, role: u.role, schoolId: u.school_id, sectionScope: u.section_scope || '' }));
   },
   // Creating/deleting logins and resetting other people's passwords go
   // through Auth.manageUser(...) (calls the manage-user Edge Function)
   // because they require the service role key, which never reaches the
-  // browser. Editing name/role only (not password) can go direct:
+  // browser. Editing name/role/section only (not password) can go direct:
   async updateUserProfile(id, patch) {
     const dbPatch = {};
     if (patch.name !== undefined) dbPatch.name = patch.name;
     if (patch.role !== undefined) dbPatch.role = patch.role;
+    // section_scope only means anything for admins — clearing it for a
+    // 'user' (teacher) row keeps the column tidy, since teachers are
+    // never restricted by it (they use teacher_classes instead).
+    if (patch.sectionScope !== undefined) {
+      dbPatch.section_scope = (patch.role || 'user') === 'admin' ? (patch.sectionScope || null) : null;
+    }
     const { data, error } = await supabase.from('profiles').update(dbPatch).eq('id', id).select().single();
     this._throwIfError('update profile', error);
     return data;
@@ -215,6 +223,20 @@ const Store = {
     // results for this student cascade-delete automatically (FK on delete cascade)
     const { error } = await supabase.from('students').delete().eq('id', id);
     this._throwIfError('delete student', error);
+  },
+
+  // "Promote" — move a batch of learners into a new class in one go
+  // (year-end promotion, or moving a few transfers/repeaters). One
+  // network call for the whole batch rather than one per student.
+  async promoteStudents(studentIds, newKlass) {
+    if (!studentIds.length) return [];
+    const { data, error } = await supabase
+      .from('students')
+      .update({ klass: newKlass.trim() })
+      .in('id', studentIds)
+      .select();
+    this._throwIfError('promote students', error);
+    return (data || []).map(this._mapStudent);
   },
 
   // Bulk insert for CSV/Excel import — one network call instead of N.

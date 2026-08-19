@@ -11,7 +11,7 @@
 // before anything happens.
 //
 // Request body shapes:
-//   { action: 'create', email, password, name, role, schoolId?, schoolName? }
+//   { action: 'create', email, password, name, role, schoolId?, schoolName?, sectionScope? }
 //   { action: 'resetPassword', userId, newPassword }
 //   { action: 'delete', userId }
 // ============================================================
@@ -59,12 +59,15 @@ serve(async (req) => {
 });
 
 async function handleCreate(adminClient: any, callerProfile: any, body: any) {
-  const { email, password, name, role, schoolId, schoolName } = body;
+  const { email, password, name, role, schoolId, schoolName, sectionScope } = body;
   if (!email || !password || !name || !role) {
     return json({ error: "email, password, name, and role are required" }, 400);
   }
   if (!["admin", "user"].includes(role)) {
     return json({ error: "role must be 'admin' or 'user'" }, 400);
+  }
+  if (sectionScope && !["primary", "junior-secondary", "senior-school"].includes(sectionScope)) {
+    return json({ error: "sectionScope must be 'primary', 'junior-secondary' or 'senior-school'" }, 400);
   }
 
   let targetSchoolId = schoolId;
@@ -97,6 +100,7 @@ async function handleCreate(adminClient: any, callerProfile: any, body: any) {
 
   const { error: insertErr } = await adminClient.from("profiles").insert({
     id: created.user.id, school_id: targetSchoolId, role, name,
+    section_scope: role === "admin" ? (sectionScope || null) : null,
   });
   if (insertErr) {
     await adminClient.auth.admin.deleteUser(created.user.id); // roll back

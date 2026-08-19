@@ -1,5 +1,6 @@
 -- ============================================================
--- CBE Exam Register — Supabase schema
+-- B~CBE Analytics — Supabase schema
+-- Copyright (c) 2026 B~CBE Analytics. All rights reserved.
 -- Run this once in Supabase: Dashboard → SQL Editor → New query
 -- ============================================================
 

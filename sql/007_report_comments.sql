@@ -1,4 +1,5 @@
 -- ============================================================
+-- Copyright (c) 2026 B~CBE Analytics. All rights reserved.
 -- Migration: report_comments — lets a Class Teacher and the Head
 -- of Institution type their own remark ONCE per (class, term,
 -- year), which then fills in automatically at the bottom of every

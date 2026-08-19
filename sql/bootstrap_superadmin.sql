@@ -1,4 +1,5 @@
 -- ============================================================
+-- Copyright (c) 2026 B~CBE Analytics. All rights reserved.
 -- Bootstrapping the FIRST superadmin account
 --
 -- Every other login in this app is created by an admin/superadmin

@@ -1,4 +1,5 @@
 -- ============================================================
+-- Copyright (c) 2026 B~CBE Analytics. All rights reserved.
 -- Migration: published_results — lets an admin "publish" a
 -- sitting (class + exam type + term + year) once every teacher
 -- has finished entering marks for it. Teachers can then see the

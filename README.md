@@ -1,4 +1,4 @@
-# CBE Exam Register — Supabase edition
+# B~CBE Analytics — Supabase edition
 
 The same exam register, now backed by a real Postgres database via
 Supabase: real login (email + password), Row Level Security instead of
@@ -47,6 +47,7 @@ project/
 │   └── 010_fix_attendance_access.sql # migration for existing installs — fixes Attendance saving for teachers only assigned a subject (not yet a class)
 │   └── 011_allow_manual_notification_channel.sql # migration for existing installs — lets "mark as sent" (bulk, no message) log a notification
 │   └── 012_class_teacher_add_students.sql # migration for existing installs — lets a class teacher add learners into their own class(es)
+│   └── 013_admin_section_scope.sql # migration for existing installs — lets a superadmin restrict an admin login to Primary, Junior Secondary, or Senior School only
 └── supabase/
     └── functions/
         └── manage-user/
@@ -91,7 +92,13 @@ new bulk "Mark all as sent (no message)" action on Send Results to
 Parents log correctly; without it that one action fails. Also run
 `sql/012_class_teacher_add_students.sql` — it lets a class teacher use
 the new "+ Add learner" button on their Learners page; without it the
-button is visible but every save is silently rejected by the database.)
+button is visible but every save is silently rejected by the database.
+Also run `sql/013_admin_section_scope.sql` — it adds the optional
+"Section" restriction on an admin login (Primary / Junior Secondary /
+Senior School), used by the level switcher near the logo and the
+"Section" field on the Users page; without it, admin logins stay
+unrestricted as before, but the Section field/switcher won't have any
+effect at the database level.)
 
 ### 3. Deploy the Edge Function
 This requires the [Supabase CLI](https://supabase.com/docs/guides/cli):

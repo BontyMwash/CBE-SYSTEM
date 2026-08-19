@@ -1,4 +1,6 @@
 /* ============================================================
+   Copyright (c) 2026 B~CBE Analytics. All rights reserved.
+
    classes.js — Classes / Streams management. Admins create the
    classes (e.g. "Grade 7") and, optionally, streams within a class
    (e.g. "Grade 7 East", "Grade 7 West"). Every other screen that
@@ -22,7 +24,7 @@ Views.classes = async function () {
     if (st.classes.length === 0) {
       return `<div class="empty"><div class="empty-title">No classes yet</div><p>Add a class (e.g. "Grade 7"), and optionally split it into streams (e.g. "East", "West").</p></div>`;
     }
-    let rows = [...st.classes];
+    let rows = [...st.classes].filter(c => levelAllows(c.name));
     if (sectionFilter) rows = rows.filter(c => { const s = gradeSection(c.name); return s && s.key === sectionFilter; });
     rows.sort((a, b) => a.label.localeCompare(b.label));
     if (rows.length === 0) {
@@ -45,6 +47,7 @@ Views.classes = async function () {
                   <td class="num">${studentCount}</td>
                   <td>
                     <button class="btn btn-sm btn-ghost" data-edit="${c.id}">Edit</button>
+                    <button class="btn btn-sm" data-promote="${c.id}" ${studentCount ? '' : 'disabled title="No students in this class yet"'}>Promote</button>
                     <button class="btn btn-sm btn-danger" data-del="${c.id}">Delete</button>
                   </td>
                 </tr>`;
@@ -60,6 +63,9 @@ Views.classes = async function () {
     document.querySelectorAll('[data-edit]').forEach(btn => {
       btn.onclick = () => openForm(st.classes.find(c => c.id === btn.dataset.edit));
     });
+    document.querySelectorAll('[data-promote]').forEach(btn => {
+      btn.onclick = () => openPromoteForm(st.classes.find(c => c.id === btn.dataset.promote));
+    });
     document.querySelectorAll('[data-del]').forEach(btn => {
       btn.onclick = () => {
         const c = st.classes.find(c => c.id === btn.dataset.del);
@@ -71,6 +77,50 @@ Views.classes = async function () {
           await Store.deleteClass(c.id);
           UI.toast('Class deleted');
           Views.classes();
+        });
+      };
+    });
+  }
+
+  // "Promote" — move every learner currently in class `from` into a
+  // different class (typically the next grade up at year-end, but any
+  // target works, e.g. moving a repeater back a grade, or merging two
+  // streams). Individual learners can still be moved one at a time from
+  // the Students page ("Edit" -> change Class) for exceptions.
+  function openPromoteForm(from) {
+    const roster = st.students.filter(s => s.klass === from.label);
+    const targets = classOptionLabels(st).filter(label => label !== from.label);
+    UI.openModal(`
+      <h2>Promote "${UI.esc(from.label)}"</h2>
+      <p class="field-hint">Moves all ${roster.length} learner${roster.length === 1 ? '' : 's'} currently in <strong>${UI.esc(from.label)}</strong> into the class you pick below. Their results and report card history stay linked to them — only their current class changes.</p>
+      <div class="form-grid">
+        <div class="field full">
+          <label>Promote to</label>
+          ${targets.length
+            ? `<select id="f_target">${targets.map(t => `<option value="${UI.esc(t)}">${UI.esc(t)}</option>`).join('')}</select>`
+            : `<input type="text" id="f_target" placeholder="e.g. Grade 8">`}
+          <p class="field-hint">Don't see the class you need? Add it first with "+ Add class / stream" above.</p>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
+        <button class="btn btn-primary" id="promoteBtn" ${roster.length ? '' : 'disabled'}>Promote ${roster.length} learner${roster.length === 1 ? '' : 's'}</button>
+      </div>
+    `, (root) => {
+      root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
+      root.querySelector('#promoteBtn').onclick = async () => {
+        const target = root.querySelector('#f_target').value.trim();
+        if (!target) { UI.toast('Pick or type a class to promote into'); return; }
+        if (target === from.label) { UI.toast('Pick a different class'); return; }
+        UI.confirmAction(`Move all ${roster.length} learner${roster.length === 1 ? '' : 's'} from "${from.label}" to "${target}"? This cannot be undone in bulk — you'd need to move them back one by one.`, async () => {
+          try {
+            await Store.promoteStudents(roster.map(s => s.id), target);
+            UI.toast(`Promoted ${roster.length} learner${roster.length === 1 ? '' : 's'} to ${target}`);
+            UI.closeModal();
+            Views.classes();
+          } catch (err) {
+            UI.toast('Could not promote: ' + err.message);
+          }
         });
       };
     });

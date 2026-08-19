@@ -1,4 +1,6 @@
 /* ============================================================
+   Copyright (c) 2026 B~CBE Analytics. All rights reserved.
+
    attendance.js — Attendance register and CBC Competency
    Assessment. Both are scoped the same way the rest of the teacher
    section is: a teacher only sees/marks classes assigned to them

@@ -1,4 +1,5 @@
 -- ============================================================
+-- Copyright (c) 2026 B~CBE Analytics. All rights reserved.
 -- Migration: teacher names on report cards.
 --
 --   * schools.head_name   — the Head of Institution's name (one per

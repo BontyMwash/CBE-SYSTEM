@@ -1,4 +1,6 @@
 /* ============================================================
+   Copyright (c) 2026 B~CBE Analytics. All rights reserved.
+
    teacher.js — the teacher-section screens that sit on top of data
    the rest of the app already manages: My Classes, Learners,
    Assessments, Gradebook, and the Reports hub. (Marks Entry lives in

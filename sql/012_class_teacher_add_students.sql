@@ -1,4 +1,5 @@
 -- ============================================================
+-- Copyright (c) 2026 B~CBE Analytics. All rights reserved.
 -- Migration 012 — Let a class teacher add learners into their own
 -- class(es).
 --

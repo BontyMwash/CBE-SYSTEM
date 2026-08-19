@@ -1,4 +1,6 @@
 /* ============================================================
+   Copyright (c) 2026 B~CBE Analytics. All rights reserved.
+
    auth.js — Supabase Auth session, profile/role cache, and
    role-based route access.
 
@@ -159,8 +161,8 @@ const Auth = {
     return { ok: true, ...json };
   },
 
-  createUser({ email, password, name, role, schoolId, schoolName }) {
-    return this._callManageUser({ action: 'create', email, password, name, role, schoolId, schoolName });
+  createUser({ email, password, name, role, schoolId, schoolName, sectionScope }) {
+    return this._callManageUser({ action: 'create', email, password, name, role, schoolId, schoolName, sectionScope });
   },
   resetUserPassword(userId, newPassword) {
     return this._callManageUser({ action: 'resetPassword', userId, newPassword });

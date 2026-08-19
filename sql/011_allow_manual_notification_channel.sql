@@ -1,4 +1,5 @@
 -- ============================================================
+-- Copyright (c) 2026 B~CBE Analytics. All rights reserved.
 -- Migration 011 — Allow a 'manual' notification channel.
 --
 -- The bulk "Mark all as sent (no message)" action on the Send Results

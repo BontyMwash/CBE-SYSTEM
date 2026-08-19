@@ -1,4 +1,5 @@
 -- ============================================================
+-- Copyright (c) 2026 B~CBE Analytics. All rights reserved.
 -- Migration: parent/guardian contact fields on students, plus a
 -- results_notifications log for the new "Send Results to Parents"
 -- screen.

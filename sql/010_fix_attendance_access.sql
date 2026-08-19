@@ -1,4 +1,5 @@
 -- ============================================================
+-- Copyright (c) 2026 B~CBE Analytics. All rights reserved.
 -- Migration 010 — Fix Attendance saving for subject teachers who
 -- haven't been explicitly assigned a class.
 --

@@ -1,4 +1,5 @@
 -- ============================================================
+-- Copyright (c) 2026 B~CBE Analytics. All rights reserved.
 -- Migration 009 — Teacher class assignments, Attendance, and
 -- Competency Assessment.
 --

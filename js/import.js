@@ -1,4 +1,6 @@
 /* ============================================================
+   Copyright (c) 2026 B~CBE Analytics. All rights reserved.
+
    import.js — bulk student import from CSV or Excel.
    CSV is parsed natively (works fully offline).
    Excel (.xlsx/.xls) is parsed via the SheetJS library loaded

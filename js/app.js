@@ -1,4 +1,6 @@
 /* ============================================================
+   Copyright (c) 2026 B~CBE Analytics. All rights reserved.
+
    app.js — login gate, routing, and role-based sidebar.
    ============================================================ */
 
@@ -36,6 +38,42 @@ const App = {
     nav.querySelectorAll('.nav-item').forEach(btn => {
       btn.addEventListener('click', () => this.navigate(btn.dataset.route));
     });
+  },
+
+  // Level switcher (Primary / Junior Secondary / Senior School), shown
+  // right under the logo. A section-scoped admin (profiles.section_scope)
+  // is locked to their section and sees a plain badge instead of a
+  // dropdown; everyone else (superadmin, unrestricted admin, teachers)
+  // gets the dropdown, backed by localStorage so the choice sticks
+  // across reloads. effectiveLevel()/levelAllows() in views.js read the
+  // same localStorage key to actually do the filtering.
+  buildLevelSwitcher() {
+    const user = Auth.currentUser();
+    const wrap = document.getElementById('levelSwitcherWrap');
+    if (!wrap) return;
+    if (!user || !['superadmin', 'admin', 'user'].includes(user.role) || (user.role === 'superadmin' && !Auth.isViewingSchool())) {
+      wrap.innerHTML = '';
+      return;
+    }
+    const LABELS = { primary: 'Primary', 'junior-secondary': 'Junior Secondary', 'senior-school': 'Senior School' };
+    if (user.role === 'admin' && user.section_scope) {
+      wrap.innerHTML = `<div class="level-locked-badge" title="This login is limited to ${LABELS[user.section_scope]} by your superadmin."><i class="fa-solid fa-lock"></i> ${LABELS[user.section_scope]}</div>`;
+      return;
+    }
+    let current = '';
+    try { current = localStorage.getItem('cbeLevel') || ''; } catch (e) {}
+    wrap.innerHTML = `
+      <select id="levelSwitcherSel" title="Filter the whole app to one section">
+        <option value="" ${current === '' ? 'selected' : ''}>All levels</option>
+        <option value="primary" ${current === 'primary' ? 'selected' : ''}>Primary</option>
+        <option value="junior-secondary" ${current === 'junior-secondary' ? 'selected' : ''}>Junior Secondary</option>
+        <option value="senior-school" ${current === 'senior-school' ? 'selected' : ''}>Senior School</option>
+      </select>
+    `;
+    document.getElementById('levelSwitcherSel').onchange = (e) => {
+      try { localStorage.setItem('cbeLevel', e.target.value); } catch (err) {}
+      App.renderShell();
+    };
   },
 
   async buildSidebarFoot() {
@@ -101,6 +139,7 @@ const App = {
     });
     this.buildSidebarFoot();
     this.buildHeaderExtras();
+    this.buildLevelSwitcher();
     (Views[route] || Views.dashboard)();
   },
 
@@ -179,6 +218,7 @@ const App = {
   },
 
   showApp() {
+    document.getElementById('homeRoot').style.display = 'none';
     document.getElementById('loginRoot').style.display = 'none';
     document.getElementById('appRoot').style.display = '';
     const initial = (location.hash || '').replace('#', '');
@@ -187,9 +227,21 @@ const App = {
   },
 
   showLogin() {
+    document.getElementById('homeRoot').style.display = 'none';
     document.getElementById('appRoot').style.display = 'none';
     document.getElementById('loginRoot').style.display = 'flex';
     Views.login(() => this.showApp());
+  },
+
+  // Marketing homepage — the first thing a signed-out visitor sees,
+  // unless they land directly on #login (e.g. a bookmarked link) or
+  // are already mid-session, in which case boot() skips straight past
+  // it. "Log in" on this page hands off to the existing login screen.
+  showHome() {
+    document.getElementById('appRoot').style.display = 'none';
+    document.getElementById('loginRoot').style.display = 'none';
+    document.getElementById('homeRoot').style.display = 'block';
+    Views.home(() => this.showLogin());
   },
 
   // Reached when someone clicks the link from a "forgot password" email.
@@ -210,8 +262,10 @@ const App = {
 
   async boot() {
     const user = await Auth.restoreSession();
-    if (user) this.showApp();
-    else this.showLogin();
+    if (user) { this.showApp(); return; }
+    const hash = (location.hash || '').replace('#', '');
+    if (hash === 'login') this.showLogin();
+    else this.showHome();
   },
 
   init() {
@@ -291,7 +345,11 @@ const App = {
     });
 
     window.addEventListener('hashchange', () => {
-      if (!Auth.currentUser()) return;
+      if (!Auth.currentUser()) {
+        const r = (location.hash || '').replace('#', '');
+        if (r === 'login') this.showLogin();
+        return;
+      }
       const r = (location.hash || '').replace('#', '');
       if (Auth.allowedRoutes().includes(r)) {
         this.state.route = r;
