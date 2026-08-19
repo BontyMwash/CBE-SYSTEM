@@ -36,6 +36,23 @@ Views.attendance = async function () {
   App.state._teacherKlassFilter = null;
   let date = todayISO();
   let rows = []; // [{studentId, status, remarks}]
+  let mode = 'register'; // 'register' | 'report'
+
+  document.getElementById('content').innerHTML = `
+    <div class="filter-row no-print" style="margin-bottom:10px;">
+      <button class="btn btn-sm ${mode === 'register' ? 'btn-primary' : ''}" id="attModeRegisterBtn">Register</button>
+      <button class="btn btn-sm ${mode === 'report' ? 'btn-primary' : ''}" id="attModeReportBtn">Attendance Report</button>
+    </div>
+    <div id="attModeWrap"></div>
+  `;
+  document.getElementById('attModeRegisterBtn').onclick = () => { mode = 'register'; paintMode(); };
+  document.getElementById('attModeReportBtn').onclick = () => { mode = 'report'; paintMode(); };
+
+  function paintMode() {
+    document.getElementById('attModeRegisterBtn').className = `btn btn-sm ${mode === 'register' ? 'btn-primary' : ''}`;
+    document.getElementById('attModeReportBtn').className = `btn btn-sm ${mode === 'report' ? 'btn-primary' : ''}`;
+    if (mode === 'register') renderRegisterMode(); else renderReportMode(st, myKlasses, klass);
+  }
 
   async function loadRegister() {
     const students = st.students.filter(s => s.klass === klass).sort((a, b) => a.name.localeCompare(b.name));
@@ -130,19 +147,164 @@ Views.attendance = async function () {
     wireRegister();
   }
 
-  document.getElementById('content').innerHTML = `
-    ${renderControls()}
-    <div id="gridWrap"></div>
-  `;
-  document.getElementById('attKlass').onchange = (e) => { klass = e.target.value; paint(); };
-  document.getElementById('attDate').onchange = (e) => { date = e.target.value || todayISO(); paint(); };
-  document.getElementById('markAllPresentBtn').onclick = () => {
-    rows.forEach(r => r.status = 'present');
-    document.getElementById('gridWrap').innerHTML = renderRegister();
-    wireRegister();
-  };
-  await paint();
+  async function renderRegisterMode() {
+    document.getElementById('attModeWrap').innerHTML = `
+      ${renderControls()}
+      <div id="gridWrap"></div>
+    `;
+    document.getElementById('attKlass').onchange = (e) => { klass = e.target.value; paint(); };
+    document.getElementById('attDate').onchange = (e) => { date = e.target.value || todayISO(); paint(); };
+    document.getElementById('markAllPresentBtn').onclick = () => {
+      rows.forEach(r => r.status = 'present');
+      document.getElementById('gridWrap').innerHTML = renderRegister();
+      wireRegister();
+    };
+    await paint();
+  }
+
+  await paintMode();
 };
+
+/* ------------------------- ATTENDANCE REPORT (daily / weekly / termly) ------------------------- */
+
+function mondayOf(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const day = d.getDay();
+  const diff = (day === 0 ? -6 : 1 - day);
+  d.setDate(d.getDate() + diff);
+  return d.toISOString().slice(0, 10);
+}
+function sundayOf(dateStr) {
+  const d = new Date(mondayOf(dateStr) + 'T00:00:00');
+  d.setDate(d.getDate() + 6);
+  return d.toISOString().slice(0, 10);
+}
+function firstOfMonth(dateStr) { return dateStr.slice(0, 8) + '01'; }
+
+// Attendance Report: daily / weekly / termly summaries for a class —
+// present/late/absent/excused counts and an attendance rate per
+// student, over whichever date range the period picks. "Termly" has no
+// stored calendar dates in this app (a term is just a label, not a
+// date range), so it's a plain from/to date range the admin sets to
+// match their term — everything else derives the range automatically.
+function renderReportMode(st, myKlasses, initialKlass) {
+  const wrap = document.getElementById('attModeWrap');
+  const today = todayISO();
+  let picked = { klass: initialKlass, period: 'daily', date: today, from: firstOfMonth(today), to: today };
+
+  function rangeFor() {
+    if (picked.period === 'daily') return { from: picked.date, to: picked.date, label: `Daily &middot; ${picked.date}` };
+    if (picked.period === 'weekly') {
+      const from = mondayOf(picked.date), to = sundayOf(picked.date);
+      return { from, to, label: `Weekly &middot; ${from} to ${to}` };
+    }
+    return { from: picked.from, to: picked.to, label: `Termly &middot; ${picked.from} to ${picked.to}` };
+  }
+
+  function renderControls() {
+    return `
+      <div class="filter-row no-print">
+        <select id="arKlass">${myKlasses.map(k => `<option value="${UI.esc(k)}" ${k === picked.klass ? 'selected' : ''}>${UI.esc(k)}</option>`).join('')}</select>
+        <select id="arPeriod">
+          <option value="daily" ${picked.period === 'daily' ? 'selected' : ''}>Daily</option>
+          <option value="weekly" ${picked.period === 'weekly' ? 'selected' : ''}>Weekly</option>
+          <option value="termly" ${picked.period === 'termly' ? 'selected' : ''}>Termly (custom range)</option>
+        </select>
+        ${picked.period === 'termly'
+          ? `<input type="date" id="arFrom" value="${picked.from}" max="${today}"> <span class="field-hint">to</span> <input type="date" id="arTo" value="${picked.to}" max="${today}">`
+          : `<input type="date" id="arDate" value="${picked.date}" max="${today}">`}
+        <button class="btn btn-brass" id="arPrintBtn">Print / Save as PDF</button>
+        <button class="btn btn-brass" id="arPdfBtn"><i class="fa-solid fa-file-pdf"></i> Download PDF</button>
+      </div>
+    `;
+  }
+
+  async function buildReport() {
+    const range = rangeFor();
+    const students = st.students.filter(s => s.klass === picked.klass).sort((a, b) => a.name.localeCompare(b.name));
+    let records = [];
+    try { records = await Store.attendanceRange(picked.klass, range.from, range.to); }
+    catch (e) { UI.toast('Could not load attendance: ' + e.message); }
+    const daysMarked = new Set(records.map(r => r.date)).size;
+    const rows = students.map(stu => {
+      const recs = records.filter(r => r.studentId === stu.id);
+      const counts = { present: 0, late: 0, absent: 0, excused: 0 };
+      recs.forEach(r => { if (counts[r.status] !== undefined) counts[r.status]++; });
+      const marked = recs.length;
+      const rate = marked > 0 ? ((counts.present + counts.late) / marked) * 100 : null;
+      return { student: stu, counts, marked, rate };
+    });
+    const ratedRows = rows.filter(r => r.rate !== null);
+    const classRate = ratedRows.length ? ratedRows.reduce((s, r) => s + r.rate, 0) / ratedRows.length : null;
+    return { range, rows, daysMarked, classRate };
+  }
+
+  async function renderReport() {
+    const { range, rows, daysMarked, classRate } = await buildReport();
+    const totalsRowHtml = `
+      <tr style="font-weight:700; background:var(--paper-highlight, rgba(0,0,0,0.03));">
+        <td colspan="2">Class average</td>
+        <td class="num">${rows.reduce((s, r) => s + r.counts.present, 0)}</td>
+        <td class="num">${rows.reduce((s, r) => s + r.counts.late, 0)}</td>
+        <td class="num">${rows.reduce((s, r) => s + r.counts.absent, 0)}</td>
+        <td class="num">${rows.reduce((s, r) => s + r.counts.excused, 0)}</td>
+        <td class="num">—</td>
+        <td class="num">${classRate === null ? '—' : classRate.toFixed(1) + '%'}</td>
+      </tr>`;
+    document.getElementById('arWrap').innerHTML = `
+      <div id="arPrintArea">
+        ${buildReportMastheadHTML(st, `${picked.period[0].toUpperCase()}${picked.period.slice(1)} Attendance Report`, picked.klass, range.from, range.to === range.from ? '' : `– ${range.to}`)}
+        <p class="field-hint" style="margin:0 0 14px 0;">${UI.esc(picked.klass)} &middot; ${range.label} &middot; ${daysMarked} day${daysMarked === 1 ? '' : 's'} with attendance marked.</p>
+        ${rows.length === 0 ? `<div class="empty"><div class="empty-title">No learners in ${UI.esc(picked.klass)}</div></div>` : `
+        <div class="ledger">
+          <div class="ledger-scroll">
+            <table class="ledger-table">
+              <thead><tr><th>#</th><th>Name</th><th>Present</th><th>Late</th><th>Absent</th><th>Excused</th><th>Days marked</th><th>Attendance %</th></tr></thead>
+              <tbody>
+                ${rows.map((r, i) => `<tr>
+                  <td class="row-index">${i + 1}</td>
+                  <td>${UI.esc(r.student.name)}</td>
+                  <td class="num">${r.counts.present}</td>
+                  <td class="num">${r.counts.late}</td>
+                  <td class="num">${r.counts.absent}</td>
+                  <td class="num">${r.counts.excused}</td>
+                  <td class="num">${r.marked}</td>
+                  <td class="num">${r.rate === null ? '—' : r.rate.toFixed(1) + '%'}</td>
+                </tr>`).join('')}
+                ${totalsRowHtml}
+              </tbody>
+            </table>
+          </div>
+        </div>`}
+      </div>
+    `;
+    document.getElementById('arPrintBtn').onclick = () => window.print();
+    document.getElementById('arPdfBtn').onclick = (e) => {
+      const el = document.getElementById('arPrintArea');
+      if (!el) { UI.toast('Nothing to download yet.'); return; }
+      UI.downloadPDF(el, `attendance-${picked.period}-${picked.klass}-${range.from}_to_${range.to}`.replace(/\s+/g, '_'), e.currentTarget);
+    };
+  }
+
+  function wireControls() {
+    document.getElementById('arKlass').onchange = (e) => { picked.klass = e.target.value; renderReport(); };
+    document.getElementById('arPeriod').onchange = (e) => { picked.period = e.target.value; paint(); };
+    const dateInput = document.getElementById('arDate');
+    if (dateInput) dateInput.onchange = (e) => { picked.date = e.target.value || today; renderReport(); };
+    const fromInput = document.getElementById('arFrom');
+    const toInput = document.getElementById('arTo');
+    if (fromInput) fromInput.onchange = (e) => { picked.from = e.target.value || picked.from; renderReport(); };
+    if (toInput) toInput.onchange = (e) => { picked.to = e.target.value || picked.to; renderReport(); };
+  }
+
+  function paint() {
+    wrap.innerHTML = `${renderControls()}<div id="arWrap"></div>`;
+    wireControls();
+    renderReport();
+  }
+
+  paint();
+}
 
 /* ------------------------- COMPETENCY ASSESSMENT ------------------------- */
 

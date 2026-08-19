@@ -114,6 +114,79 @@ const UI = {
     URL.revokeObjectURL(url);
   },
 
+  // One-click "Download PDF": renders a printable element (or several,
+  // e.g. a whole class of report cards) straight to a downloadable PDF
+  // file client-side, using html2pdf.js (loaded in index.html). This is
+  // the direct-download counterpart to the "Print / Save as PDF" buttons,
+  // which go through the browser's print dialog instead.
+  //
+  // `target` — a single element, or a NodeList/array of elements. Each
+  // element is treated as its own page in the output PDF (matching how
+  // @media print already page-breaks between .report-card elements).
+  async downloadPDF(target, filename, btn, opts) {
+    if (typeof html2pdf === 'undefined') {
+      UI.toast('PDF library did not load — check your internet connection and try again.');
+      return;
+    }
+    const els = target instanceof Element ? [target] : Array.from(target || []);
+    if (els.length === 0) { UI.toast('Nothing to download yet.'); return; }
+    const orientation = (opts && opts.orientation) || 'portrait';
+
+    // Wrap every source element's *content* in a plain, unstyled
+    // container for the PDF render, so app chrome (theme colors, dark
+    // mode, sidebar, etc.) never leaks into the exported file and every
+    // page is a clean white portrait sheet regardless of on-screen theme.
+    const wrap = document.createElement('div');
+    els.forEach((el, i) => {
+      const clone = el.cloneNode(true);
+      clone.querySelectorAll('.no-print').forEach(n => n.remove());
+      clone.style.pageBreakAfter = i < els.length - 1 ? 'always' : 'auto';
+      clone.style.background = '#fff';
+      wrap.appendChild(clone);
+    });
+    wrap.style.background = '#fff';
+
+    const originalLabel = btn ? btn.innerHTML : null;
+    if (btn) { btn.disabled = true; btn.innerHTML = 'Preparing PDF…'; }
+    try {
+      await html2pdf().set({
+        margin: 8,
+        filename: filename.endsWith('.pdf') ? filename : `${filename}.pdf`,
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+        jsPDF: { unit: 'mm', format: 'a4', orientation },
+        pagebreak: { mode: ['css', 'legacy'] }
+      }).from(wrap).save();
+    } catch (e) {
+      UI.toast('Could not generate PDF: ' + e.message);
+    }
+    if (btn) { btn.disabled = false; btn.innerHTML = originalLabel; }
+  },
+
+  // Same as downloadPDF, but returns the PDF as a Blob instead of
+  // triggering a download — used where the file needs to be shared
+  // (Web Share API) or attached rather than saved straight to disk.
+  async pdfBlob(target, opts) {
+    if (typeof html2pdf === 'undefined') return null;
+    const els = target instanceof Element ? [target] : Array.from(target || []);
+    if (els.length === 0) return null;
+    const wrap = document.createElement('div');
+    els.forEach((el, i) => {
+      const clone = el.cloneNode(true);
+      clone.querySelectorAll('.no-print').forEach(n => n.remove());
+      clone.style.pageBreakAfter = i < els.length - 1 ? 'always' : 'auto';
+      clone.style.background = '#fff';
+      wrap.appendChild(clone);
+    });
+    wrap.style.background = '#fff';
+    const orientation = (opts && opts.orientation) || 'portrait';
+    return html2pdf().set({
+      margin: 8,
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+      jsPDF: { unit: 'mm', format: 'a4', orientation },
+      pagebreak: { mode: ['css', 'legacy'] }
+    }).from(wrap).outputPdf('blob');
+  },
+
   confirmAction(message, onConfirm, opts) {
     const confirmLabel = (opts && opts.confirmLabel) || 'Delete';
     const confirmClass = (opts && opts.confirmClass) || 'btn-danger';

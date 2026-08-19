@@ -37,8 +37,9 @@ Views.notify = async function () {
   }
 
   const DEFAULT_TEMPLATE =
-    `Dear parent/guardian, here are {name}'s {sitting} results from {school}. ` +
-    `Class: {class}. Average: {average}% ({level}). Position: {position}. Thank you.`;
+    `Dear Parent/Guardian, {name}'s {sitting} results for {term}, {academic_year} are available. ` +
+    `Average: {average}% ({level}). Position: {position}/{class_size}. Strengths: {strengths}. ` +
+    `Improvement areas: {improvement_areas}. View full report: {report_link}. Thank you.`;
   let template = DEFAULT_TEMPLATE;
   let onlyUncontacted = false;
   let search = '';
@@ -56,11 +57,12 @@ Views.notify = async function () {
     </div>
     <div class="card" style="margin-bottom:16px;">
       <label style="font-weight:600;">Message template</label>
-      <p class="field-hint" style="margin-top:2px;">Placeholders: {name} {class} {sitting} {average} {level} {position} {school}</p>
-      <textarea id="ntTemplate" rows="2" style="width:100%; font-family:inherit; font-size:13.5px; padding:8px; border-radius:8px; border:1px solid var(--paper-line); resize:vertical;">${UI.esc(template)}</textarea>
+      <p class="field-hint" style="margin-top:2px;">Placeholders: {name} {sitting} {term} {academic_year} {average} {level} {position} {class_size} {strengths} {improvement_areas} {report_link} {class} {school}</p>
+      <textarea id="ntTemplate" rows="3" style="width:100%; font-family:inherit; font-size:13.5px; padding:8px; border-radius:8px; border:1px solid var(--paper-line); resize:vertical;">${UI.esc(template)}</textarea>
       <div style="margin-top:8px;">
         <button class="btn btn-sm btn-ghost" id="ntResetTemplate">Reset to default</button>
       </div>
+      <p class="field-hint" style="margin-top:8px;">{report_link} points to a full portrait report card — subjects, marks, position and level, laid out the same way as a printed report. Use the <strong>Report PDF</strong> button on each row to actually download or share that file; a link typed into a text message only opens on this device, since sending real clickable links to parents' own phones needs the school's results portal to be hosted online.</p>
     </div>
     <div id="ntBody"></div>
   `;
@@ -81,7 +83,9 @@ Views.notify = async function () {
   }
 
   // Same shape of computation as the Analysis page's computeSitting,
-  // scoped to just the one class this sitting is for.
+  // scoped to just the one class this sitting is for. Also keeps each
+  // student's per-subject percentages (subjectPcts) so we can pick out
+  // their strongest and weakest subjects for the message template.
   function computeSittingResults(klass, type, term, year) {
     const exams = st.exams.filter(e => e.klass === klass && e.type === type && e.term === term && String(e.year) === String(year));
     const subjectCols = exams.map(e => ({ exam: e, subject: st.subjects.find(s => s.id === e.subjectId) })).filter(c => c.subject);
@@ -89,13 +93,18 @@ Views.notify = async function () {
 
     const rows = students.map(stu => {
       const pcts = [];
+      const subjectPcts = [];
       subjectCols.forEach(col => {
         const res = st.results.find(r => r.examId === col.exam.id && r.studentId === stu.id);
-        if (res) pcts.push(Grading.percent(res.marks, col.exam.totalMarks));
+        if (res) {
+          const pct = Grading.percent(res.marks, col.exam.totalMarks);
+          pcts.push(pct);
+          subjectPcts.push({ name: col.subject.name, pct });
+        }
       });
       const avg = Grading.average(pcts);
       const band = avg === null ? null : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
-      return { student: stu, avg, band };
+      return { student: stu, avg, band, subjectPcts };
     });
 
     const ranked = [...rows].filter(r => r.avg !== null).sort((a, b) => b.avg - a.avg);
@@ -109,6 +118,49 @@ Views.notify = async function () {
     });
 
     return rows.map(r => ({ ...r, position: rankMap.get(r.student.id) ?? null, outOf }));
+  }
+
+  // Picks out a student's strongest / weakest subjects from their
+  // per-subject percentages, formatted the way a printed report card
+  // would list them — "Subject (score%)".
+  function strengthsAndImprovements(subjectPcts) {
+    const sorted = [...subjectPcts].sort((a, b) => b.pct - a.pct);
+    const fmt = (s) => `${s.name} (${s.pct.toFixed(0)}%)`;
+    if (sorted.length === 0) return { strengths: 'not yet graded', improvement_areas: 'not yet graded' };
+    if (sorted.length === 1) return { strengths: fmt(sorted[0]), improvement_areas: 'not enough subjects to compare' };
+    const takeStrengths = sorted.length >= 4 ? 2 : 1;
+    const strengths = sorted.slice(0, takeStrengths).map(fmt).join(', ');
+    const improvements = sorted.slice(-takeStrengths).reverse().map(fmt).join(', ');
+    return { strengths, improvement_areas: improvements };
+  }
+
+  // {report_link} generation: builds this student's report card for the
+  // chosen sitting (the same portrait layout used on the Reports page —
+  // school masthead, subjects and marks table, position/level) into a
+  // PDF, and hands back a link to it. This app is a client-only front
+  // end with no file-hosting backend, so the "link" is a local blob URL:
+  // it opens fine on the device that generated it, but — unlike a
+  // hosted URL — it won't resolve on a parent's own phone if just typed
+  // into a text message. The "Report PDF" button next to each row is
+  // the reliable way to actually get the file to a parent (download it,
+  // or use the device's share sheet to attach it straight into
+  // WhatsApp/SMS/Email alongside the message).
+  const reportBlobCache = new Map(); // `${sittingId}|${studentId}` -> { url, blob }
+  async function getStudentReport(stu, chosen) {
+    const key = `${chosen.id}|${stu.id}`;
+    if (reportBlobCache.has(key)) return reportBlobCache.get(key);
+    const holder = document.createElement('div');
+    holder.style.cssText = 'position:fixed; left:-9999px; top:0; width:800px;';
+    holder.innerHTML = buildReportCardHTML(st, stu, chosen.term, chosen.year, chosen.type);
+    document.body.appendChild(holder);
+    let entry = { url: '', blob: null };
+    try {
+      const blob = await UI.pdfBlob(holder.querySelector('.report-card') || holder);
+      if (blob) entry = { url: URL.createObjectURL(blob), blob };
+    } catch (e) { /* leave entry empty — caller falls back gracefully */ }
+    document.body.removeChild(holder);
+    reportBlobCache.set(key, entry);
+    return entry;
   }
 
   async function paint() {
@@ -133,16 +185,25 @@ Views.notify = async function () {
 
     const contactedCount = results.filter(r => sentMap.has(r.student.id)).length;
 
-    function buildVars(stu, r) {
+    function buildVars(stu, r, reportLink) {
+      const si = strengthsAndImprovements(r.subjectPcts);
       return {
-        name: stu.name, class: stu.klass, sitting: sittingLabel,
+        name: stu.name, class: stu.klass, sitting: chosen.type, term: chosen.term, academic_year: chosen.year,
         average: r.avg === null ? '—' : r.avg.toFixed(1),
         level: r.band ? r.band.label : 'not yet graded',
-        position: r.position === null ? 'not yet ranked' : `${ordinal(r.position)} out of ${r.outOf}`,
+        position: r.position === null ? '—' : r.position,
+        class_size: r.outOf,
+        strengths: si.strengths,
+        improvement_areas: si.improvement_areas,
+        report_link: reportLink || '(tap "Report PDF" to generate)',
         school: st.settings.schoolName || 'the school'
       };
     }
-    function messageFor(stu, r) { return fillTemplate(templateBox.value || DEFAULT_TEMPLATE, buildVars(stu, r)); }
+    function cachedLinkFor(stu) {
+      const cached = reportBlobCache.get(`${chosen.id}|${stu.id}`);
+      return cached ? cached.url : '';
+    }
+    function messageFor(stu, r) { return fillTemplate(templateBox.value || DEFAULT_TEMPLATE, buildVars(stu, r, cachedLinkFor(stu))); }
     function urlFor(channel, stu, message) {
       if (channel === 'whatsapp') return `https://wa.me/${digitsOnly(stu.parentPhone)}?text=${encodeURIComponent(message)}`;
       if (channel === 'sms') return `sms:${stu.parentPhone}?&body=${encodeURIComponent(message)}`;
@@ -191,14 +252,7 @@ Views.notify = async function () {
               ${rows.map(r => {
                 const stu = r.student;
                 const notif = sentMap.get(stu.id);
-                const vars = {
-                  name: stu.name, class: stu.klass, sitting: sittingLabel,
-                  average: r.avg === null ? '—' : r.avg.toFixed(1),
-                  level: r.band ? r.band.label : 'not yet graded',
-                  position: r.position === null ? 'not yet ranked' : `${ordinal(r.position)} out of ${r.outOf}`,
-                  school: st.settings.schoolName || 'the school'
-                };
-                const previewMsg = fillTemplate(templateBox.value || DEFAULT_TEMPLATE, vars);
+                const previewMsg = messageFor(stu, r);
                 const hasPhone = !!stu.parentPhone;
                 const hasEmail = !!stu.parentEmail;
                 const canBulk = (hasPhone || hasEmail) && !notif;
@@ -223,6 +277,7 @@ Views.notify = async function () {
                       <button class="btn btn-sm" data-send="sms" data-student="${stu.id}" ${hasPhone ? '' : 'disabled'} title="${hasPhone ? '' : 'No parent phone on file'}">SMS</button>
                       <button class="btn btn-sm" data-send="email" data-student="${stu.id}" ${hasEmail ? '' : 'disabled'} title="${hasEmail ? '' : 'No parent email on file'}">Email</button>
                       <button class="btn btn-sm btn-ghost" data-copy="${stu.id}" title="${UI.esc(previewMsg)}">Copy text</button>
+                      <button class="btn btn-sm btn-ghost" data-report="${stu.id}"><i class="fa-solid fa-file-pdf"></i> Report PDF</button>
                       ${notif ? `<button class="btn btn-sm btn-ghost" data-unsend="${notif.id}">Undo sent</button>` : ''}
                     </div>
                   </td>
@@ -256,13 +311,15 @@ Views.notify = async function () {
     // that isn't wired into the app directly. ----
     document.getElementById('ntCsvBtn').onclick = () => {
       if (rows.length === 0) { UI.toast('No students to download'); return; }
-      const header = ['Name', 'Admission No.', 'Average %', 'Level', 'Position', 'Parent name', 'Parent phone', 'Parent email', 'Status', 'Message'];
+      const header = ['Name', 'Admission No.', 'Average %', 'Level', 'Position', 'Class size', 'Strengths', 'Improvement areas', 'Parent name', 'Parent phone', 'Parent email', 'Status', 'Message'];
       const csvRows = rows.map(r => {
         const stu = r.student;
         const notif = sentMap.get(stu.id);
+        const si = strengthsAndImprovements(r.subjectPcts);
         return [
           stu.name, stu.admissionNo || '', r.avg === null ? '' : r.avg.toFixed(1), r.band ? r.band.code : '',
-          r.position === null ? '' : `${ordinal(r.position)} of ${r.outOf}`,
+          r.position === null ? '' : r.position, r.outOf,
+          si.strengths, si.improvement_areas,
           stu.parentName || '', stu.parentPhone || '', stu.parentEmail || '',
           notif ? `Sent (${notif.channel})` : 'Not sent', messageFor(stu, r)
         ];
@@ -278,31 +335,38 @@ Views.notify = async function () {
       const queue = rows.filter(r => selected.has(r.student.id) && (channel === 'email' ? r.student.parentEmail : r.student.parentPhone));
       if (queue.length === 0) { UI.toast('None of the selected parents have a contact for that channel'); return; }
       let i = 0;
-      function renderStep() {
+      async function renderStep() {
         const r = queue[i];
         const stu = r.student;
-        const message = messageFor(stu, r);
         UI.openModal(`
           <h2>Bulk send &middot; ${channel === 'whatsapp' ? 'WhatsApp' : channel === 'sms' ? 'SMS' : 'Email'}</h2>
-          <p class="field-hint">Sending ${i + 1} of ${queue.length} &middot; ${UI.esc(stu.name)}</p>
-          <textarea rows="4" readonly style="width:100%; font-family:inherit; font-size:13.5px; padding:8px; border-radius:8px; border:1px solid var(--paper-line); resize:vertical;">${UI.esc(message)}</textarea>
+          <p class="field-hint">Sending ${i + 1} of ${queue.length} &middot; ${UI.esc(stu.name)} &middot; generating report…</p>
+          <textarea rows="4" readonly style="width:100%; font-family:inherit; font-size:13.5px; padding:8px; border-radius:8px; border:1px solid var(--paper-line); resize:vertical;">${UI.esc(messageFor(stu, r))}</textarea>
           <div class="modal-actions">
             <button class="btn btn-ghost" id="bulkSkipBtn">Skip</button>
             <button class="btn btn-ghost" id="bulkStopBtn">Stop here</button>
-            <button class="btn btn-primary" id="bulkOpenBtn">Open ${channel === 'whatsapp' ? 'WhatsApp' : channel === 'sms' ? 'Messages' : 'Mail'} &amp; mark sent</button>
+            <button class="btn btn-primary" id="bulkOpenBtn" disabled>Preparing…</button>
           </div>
         `, (root) => {
           root.querySelector('#bulkStopBtn').onclick = () => { UI.closeModal(); paint(); };
           root.querySelector('#bulkSkipBtn').onclick = () => { advance(); };
-          root.querySelector('#bulkOpenBtn').onclick = async () => {
-            const url = urlFor(channel, stu, message);
-            if (channel === 'whatsapp') window.open(url, '_blank'); else window.location.href = url;
-            try {
-              await Store.logNotification({ studentId: stu.id, klass: chosen.klass, type: chosen.type, term: chosen.term, year: chosen.year, channel });
-            } catch (e) { UI.toast(`Opened for ${stu.name}, but could not save the "sent" record: ` + e.message); }
-            advance();
-          };
         });
+        const report = await getStudentReport(stu, chosen);
+        const message = messageFor(stu, r); // re-read now that the link is cached
+        const ta = document.querySelector('#modalRoot .modal textarea');
+        if (ta) ta.value = message;
+        const openBtn = document.getElementById('bulkOpenBtn');
+        if (!openBtn) return; // modal was closed/advanced while generating
+        openBtn.disabled = false;
+        openBtn.textContent = `Open ${channel === 'whatsapp' ? 'WhatsApp' : channel === 'sms' ? 'Messages' : 'Mail'} & mark sent`;
+        openBtn.onclick = async () => {
+          const url = urlFor(channel, stu, message);
+          if (channel === 'whatsapp') window.open(url, '_blank'); else window.location.href = url;
+          try {
+            await Store.logNotification({ studentId: stu.id, klass: chosen.klass, type: chosen.type, term: chosen.term, year: chosen.year, channel });
+          } catch (e) { UI.toast(`Opened for ${stu.name}, but could not save the "sent" record: ` + e.message); }
+          advance();
+        };
       }
       function advance() {
         selected.delete(queue[i].student.id);
@@ -336,15 +400,13 @@ Views.notify = async function () {
         const stu = results.find(r => r.student.id === btn.dataset.student)?.student;
         if (!stu) return;
         const r = results.find(x => x.student.id === stu.id);
-        const vars = {
-          name: stu.name, class: stu.klass, sitting: sittingLabel,
-          average: r.avg === null ? '—' : r.avg.toFixed(1),
-          level: r.band ? r.band.label : 'not yet graded',
-          position: r.position === null ? 'not yet ranked' : `${ordinal(r.position)} out of ${r.outOf}`,
-          school: st.settings.schoolName || 'the school'
-        };
-        const message = fillTemplate(templateBox.value || DEFAULT_TEMPLATE, vars);
         const channel = btn.dataset.send;
+        const originalLabel = btn.innerHTML;
+        btn.disabled = true; btn.innerHTML = 'Preparing…';
+        const report = await getStudentReport(stu, chosen);
+        btn.disabled = false; btn.innerHTML = originalLabel;
+        const vars = buildVars(stu, r, report.url);
+        const message = fillTemplate(templateBox.value || DEFAULT_TEMPLATE, vars);
         let url = '';
         if (channel === 'whatsapp') url = `https://wa.me/${digitsOnly(stu.parentPhone)}?text=${encodeURIComponent(message)}`;
         else if (channel === 'sms') url = `sms:${stu.parentPhone}?&body=${encodeURIComponent(message)}`;
@@ -367,18 +429,43 @@ Views.notify = async function () {
         const stu = results.find(r => r.student.id === btn.dataset.copy)?.student;
         if (!stu) return;
         const r = results.find(x => x.student.id === stu.id);
-        const vars = {
-          name: stu.name, class: stu.klass, sitting: sittingLabel,
-          average: r.avg === null ? '—' : r.avg.toFixed(1),
-          level: r.band ? r.band.label : 'not yet graded',
-          position: r.position === null ? 'not yet ranked' : `${ordinal(r.position)} out of ${r.outOf}`,
-          school: st.settings.schoolName || 'the school'
-        };
+        const report = await getStudentReport(stu, chosen);
+        const vars = buildVars(stu, r, report.url);
         const message = fillTemplate(templateBox.value || DEFAULT_TEMPLATE, vars);
         try {
           await navigator.clipboard.writeText(message);
           UI.toast('Message copied to clipboard.');
         } catch (e) { UI.toast('Could not copy — select and copy manually.'); }
+      };
+    });
+
+    // ---- Report PDF: generates (or reuses) this student's portrait
+    // report card for the sitting, then either hands it to the device's
+    // share sheet — so it can be attached straight into WhatsApp/SMS/
+    // Email alongside the message — or, where sharing files isn't
+    // supported, just downloads the PDF for manual attaching. ----
+    document.querySelectorAll('[data-report]').forEach(btn => {
+      btn.onclick = async () => {
+        const stu = results.find(r => r.student.id === btn.dataset.report)?.student;
+        if (!stu) return;
+        const r = results.find(x => x.student.id === stu.id);
+        const originalLabel = btn.innerHTML;
+        btn.disabled = true; btn.innerHTML = 'Generating…';
+        const report = await getStudentReport(stu, chosen);
+        btn.disabled = false; btn.innerHTML = originalLabel;
+        if (!report.blob) { UI.toast('Could not generate the report PDF.'); return; }
+        const filename = `report-${stu.name}-${chosen.type}-${chosen.term}-${chosen.year}`.replace(/\s+/g, '_') + '.pdf';
+        const file = new File([report.blob], filename, { type: 'application/pdf' });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          try {
+            await navigator.share({ files: [file], text: messageFor(stu, r), title: `${stu.name} — ${chosen.type} report` });
+            return;
+          } catch (e) { /* user cancelled the share sheet, or it's unsupported here — fall through to a plain download */ }
+        }
+        const a = document.createElement('a');
+        a.href = report.url; a.download = filename;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        paint(); // refresh so the {report_link} column/preview reflects the now-cached link
       };
     });
 

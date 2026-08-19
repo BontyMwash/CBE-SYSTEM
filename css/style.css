@@ -1365,28 +1365,39 @@ table.ledger-table .num {
   margin-bottom: 0;
 }
 
+/* Combined masthead: school name is the headline, the report/section
+   title rides underneath it as a plain subtitle — no filled shape, no
+   separate black band eating vertical space above it. */
 .report-title-band {
   text-align: center;
-  text-transform: uppercase;
-  letter-spacing: 1.5px;
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+  border-bottom: 2px solid var(--chalkboard);
+}
+
+.report-title-band h2 {
   font-family: var(--font-display);
+  font-size: 21px;
   font-weight: 700;
-  font-size: 15px;
-  color: #fff;
-  background: var(--chalkboard);
-  border-radius: 8px;
-  padding: 9px 12px;
-  margin-bottom: 18px;
+  margin: 0 0 2px 0;
 }
 
 .report-title-band .report-title-sub {
   display: block;
-  text-transform: none;
-  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
   font-family: var(--font-body, inherit);
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--ink-soft);
+  margin-top: 2px;
+}
+
+.report-title-band .report-title-motto {
+  display: block;
   font-weight: 400;
   font-size: 12px;
-  color: var(--brass-soft);
+  color: var(--ink-soft);
   margin-top: 2px;
 }
 
@@ -1394,8 +1405,7 @@ table.ledger-table .num {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  border-bottom: 2px solid var(--chalkboard);
-  padding-bottom: 16px;
+  padding-bottom: 0;
   margin-bottom: 20px;
 }
 

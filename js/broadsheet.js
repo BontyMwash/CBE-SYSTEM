@@ -38,6 +38,7 @@ Views.broadsheet = async function () {
       <input type="number" id="bsYear" value="${st.settings.year}" style="width:90px;">
       <button class="btn" id="bsCsvBtn"><i class="fa-solid fa-download"></i> Download CSV</button>
       <button class="btn btn-brass" id="bsPrintBtn">Print / Save as PDF</button>
+      <button class="btn btn-brass" id="bsPdfBtn"><i class="fa-solid fa-file-pdf"></i> Download PDF</button>
     </div>
     <p class="field-hint no-print" style="margin-bottom:14px;">Tip: choose "Landscape" in the print dialog for a wide class list.</p>
     <div id="bsWrap"></div>
@@ -327,6 +328,11 @@ Views.broadsheet = async function () {
   }
 
   document.getElementById('bsPrintBtn').onclick = () => window.print();
+  document.getElementById('bsPdfBtn').onclick = (e) => {
+    const el = document.getElementById('bsPrintArea');
+    if (!el) { UI.toast('Choose a class and exam type first.'); return; }
+    UI.downloadPDF(el, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, { orientation: 'landscape' });
+  };
   document.getElementById('bsCsvBtn').onclick = () => {
     if (!lastCsv) { UI.toast('Choose a class and exam type first'); return; }
     UI.downloadCSV(lastCsv.filename, lastCsv.header, lastCsv.rows);

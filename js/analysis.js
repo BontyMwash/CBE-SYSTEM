@@ -108,6 +108,7 @@ Views.analysis = async function () {
           <div class="filter-row no-print" style="margin:0;">
             ${publishControlsHtml || ''}
             <button class="btn btn-brass" id="anPrintBtn">Print / Save as PDF</button>
+            <button class="btn btn-brass" id="anPdfBtn"><i class="fa-solid fa-file-pdf"></i> Download PDF</button>
           </div>
         </div>
         ${published ? `<p class="field-hint" style="margin:0 0 14px 0;">Published ${new Date(published.publishedAt).toLocaleString()}</p>` : `<p class="field-hint no-print" style="margin:0 0 14px 0;">Preview only — teachers won't see this sitting until you publish it.</p>`}
@@ -234,6 +235,11 @@ Views.analysis = async function () {
 
       document.getElementById('anBody').innerHTML = renderAnalysisBody(data, publishControlsHtml);
       document.getElementById('anPrintBtn').onclick = () => window.print();
+      document.getElementById('anPdfBtn').onclick = (e) => {
+        const el = document.getElementById('anPrintArea');
+        if (!el) { UI.toast('Nothing to download yet.'); return; }
+        UI.downloadPDF(el, `analysis-${picked.klass}-${picked.type}-${picked.term}-${picked.year}`.replace(/\s+/g, '_'), e.currentTarget, { orientation: 'landscape' });
+      };
 
       const publishBtn = document.getElementById('anPublishBtn');
       if (publishBtn) publishBtn.onclick = () => {
@@ -316,6 +322,11 @@ Views.analysis = async function () {
     const data = computeSitting(chosen.klass, chosen.type, chosen.term, chosen.year);
     document.getElementById('anBody').innerHTML = renderAnalysisBody(data, '');
     document.getElementById('anPrintBtn').onclick = () => window.print();
+    document.getElementById('anPdfBtn').onclick = (e) => {
+      const el = document.getElementById('anPrintArea');
+      if (!el) { UI.toast('Nothing to download yet.'); return; }
+      UI.downloadPDF(el, `analysis-${chosen.klass}-${chosen.type}-${chosen.term}-${chosen.year}`.replace(/\s+/g, '_'), e.currentTarget, { orientation: 'landscape' });
+    };
   }
   document.getElementById('anSitting').onchange = paintTeacher;
   paintTeacher();

@@ -54,6 +54,189 @@ function gradeSection(gradeName) {
   return null;
 }
 
+// Shared masthead for every printable report (report card, single-exam
+// report, class/stream performance report): school name is the headline,
+// the section/report title + term/year ride underneath as one compact
+// subtitle line. Replaces the old two-block layout (a solid-fill title
+// band stacked on top of a separate school-name header), which used up
+// more vertical space than it needed to.
+function buildReportMastheadHTML(st, titleText, reportLabel, term, year) {
+  return `
+    <div class="report-title-band">
+      <h2>${UI.esc(st.settings.schoolName)}</h2>
+      ${st.settings.motto ? `<span class="report-title-motto">${UI.esc(st.settings.motto)}</span>` : ''}
+      <span class="report-title-sub">${UI.esc(titleText)} &middot; ${UI.esc(reportLabel)} &middot; ${UI.esc(term)} ${UI.esc(year)}</span>
+    </div>
+  `;
+}
+
+// Builds one student's printable portrait report card (school masthead,
+// subjects x sitting(s) marks table, position/level, trend, comments,
+// signatures). Top-level (not nested in Views.reports) so it can also be
+// reused wherever else a real "normal printable report" is needed — e.g.
+// notify.js generates the same layout as the {report_link} PDF sent to
+// parents alongside their results message.
+function buildReportCardHTML(st, student, term, year, examType) {
+  const allTypeNames = Grading.examTypeNames(st);
+  const isSingle = !!examType;
+  const typesToShow = isSingle ? [examType] : allTypeNames;
+  const grid = Grading.buildStudentTermGrid(st, student.id, term, year);
+
+  const overallAvg = isSingle
+    ? Grading.average(grid.map(r => (r.cells[examType] ? r.cells[examType].pct : null)).filter(v => v !== null))
+    : Grading.average(grid.map(r => r.average).filter(v => v !== null));
+  const overallBand = overallAvg === null ? null : Grading.levelForMarks(overallAvg, 100, st.settings.gradingBands);
+
+  const rowsHtml = grid.map(row => {
+    const cellHtml = (type) => {
+      const c = row.cells[type];
+      if (!c) return `<td class="num row-index">—</td>`;
+      const band = Grading.levelForMarks(c.marks, c.totalMarks, st.settings.gradingBands);
+      return `<td class="num">${c.pct.toFixed(1)}% ${UI.badge(band)}</td>`;
+    };
+    const avgBand = row.average === null ? null : Grading.levelForMarks(row.average, 100, st.settings.gradingBands);
+    return `<tr>
+      <td>${UI.esc(row.subject.name)}</td>
+      ${typesToShow.map(cellHtml).join('')}
+      ${isSingle ? '' : `<td class="num">${row.average === null ? '—' : row.average.toFixed(1) + '%'} ${UI.badge(avgBand)}</td>`}
+    </tr>`;
+  }).join('');
+
+  const reportLabel = isSingle ? `${examType} Report` : 'Report Card';
+  const colCount = typesToShow.length + (isSingle ? 1 : 2);
+  const teacherComment = Grading.autoComment(overallAvg, 'teacher');
+  const headComment = Grading.autoComment(overallAvg, 'head');
+
+  // Position in stream (this exact class/stream label) and in class
+  // (the whole grade, all streams combined) — the two collapse to the
+  // same figure for schools that haven't split a grade into streams.
+  const classEntry = st.classes.find(c => c.label === student.klass);
+  const gradeNameOf = (s) => {
+    const ce = st.classes.find(c => c.label === s.klass);
+    return ce ? ce.name : s.klass;
+  };
+  const gradeName = classEntry ? classEntry.name : student.klass;
+  const streamMates = st.students.filter(s => s.klass === student.klass);
+  const gradeMates = st.students.filter(s => gradeNameOf(s) === gradeName);
+  const streamPos = positionOf(st, student.id, streamMates, term, year, examType, isSingle);
+  const showStreamRow = classEntry && classEntry.stream && gradeMates.length !== streamMates.length;
+  const classPos = showStreamRow ? positionOf(st, student.id, gradeMates, term, year, examType, isSingle) : streamPos;
+
+  // Performance trend across the term's sittings (only meaningful for
+  // the merged, all-exam-types view — a single sitting is one point).
+  const trendPoints = isSingle ? [] : allTypeNames.map(t => {
+    const vals = grid.map(r => (r.cells[t] ? r.cells[t].pct : null)).filter(v => v !== null);
+    return { type: t, avg: Grading.average(vals) };
+  }).filter(p => p.avg !== null);
+
+  // Class Teacher's / Head of Institution's real names, set once on the
+  // Classes and Settings pages, printed automatically on every report.
+  const classTeacherName = classEntry ? classEntry.teacherName : '';
+  const headName = st.settings.headName || '';
+
+  const section = gradeSection(gradeName);
+  const titleBandText = section ? section.title : 'Learner Report Card';
+
+  return `
+    <div class="report-card">
+      ${buildReportMastheadHTML(st, titleBandText, reportLabel, term, year)}
+      <div class="report-meta-grid">
+        <div><span class="k">Name:</span>${UI.esc(student.name)}</div>
+        <div><span class="k">Admission No.:</span>${UI.esc(student.admissionNo) || '—'}</div>
+        <div><span class="k">Class:</span>${UI.esc(student.klass)}</div>
+        <div><span class="k">Average performance:</span>${overallAvg === null ? '—' : overallAvg.toFixed(1) + '%'}</div>
+        <div><span class="k">Position in class:</span>${classPos.position === null ? '—' : `${ordinal(classPos.position)} out of ${classPos.outOf}`}</div>
+        ${showStreamRow ? `<div><span class="k">Position in stream:</span>${streamPos.position === null ? '—' : `${ordinal(streamPos.position)} out of ${streamPos.outOf}`}</div>` : ''}
+      </div>
+      <table class="ledger-table" style="width:100%;">
+        <thead><tr><th>Subject</th>${typesToShow.map(t => `<th>${UI.esc(t)}</th>`).join('')}${isSingle ? '' : '<th>Average</th>'}</tr></thead>
+        <tbody>${rowsHtml || `<tr><td colspan="${colCount}" class="row-index">No subjects added yet.</td></tr>`}</tbody>
+      </table>
+      ${buildTrendChartSVG(trendPoints)}
+      <div class="report-footer">
+        <div>
+          <p class="stat-sub" style="margin:0 0 6px 0;"><strong>Average performance:</strong> ${overallAvg === null ? 'Not enough data' : `${overallAvg.toFixed(1)}%`}</p>
+        </div>
+        <div class="stamp badge-${overallBand ? overallBand.code : 'none'}" style="color:inherit;">${overallBand ? overallBand.code : '—'}</div>
+      </div>
+      <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--paper-line); font-size:13.5px; color:var(--ink); line-height:1.6;">
+        <p style="margin:0 0 8px 0;"><strong>Class Teacher's comment:</strong> ${UI.esc(teacherComment)}</p>
+        <p style="margin:0;"><strong>Head of Institution's comment:</strong> ${UI.esc(headComment)}</p>
+      </div>
+      <div class="report-footer">
+        <div class="signature-line">${classTeacherName ? `<strong>${UI.esc(classTeacherName)}</strong><br>` : ''}Class Teacher</div>
+        <div class="signature-line">${headName ? `<strong>${UI.esc(headName)}</strong><br>` : ''}Head of Institution</div>
+      </div>
+    </div>
+  `;
+}
+
+// A student's own overall percentage for a given sitting/term, using the
+// exact same formula as the report card itself — used both for that
+// student's headline average and for ranking everyone else for position.
+function overallAvgFor(st, studentId, term, year, examType, isSingle) {
+  const g = Grading.buildStudentTermGrid(st, studentId, term, year);
+  return isSingle
+    ? Grading.average(g.map(r => (r.cells[examType] ? r.cells[examType].pct : null)).filter(v => v !== null))
+    : Grading.average(g.map(r => r.average).filter(v => v !== null));
+}
+
+// Ranks `students` by overall average (highest first, ties share a
+// position) and returns { position, outOf } for `studentId`.
+function positionOf(st, studentId, students, term, year, examType, isSingle) {
+  const scored = students.map(s => ({ id: s.id, avg: overallAvgFor(st, s.id, term, year, examType, isSingle) }));
+  const outOf = scored.filter(s => s.avg !== null).length;
+  const ranked = [...scored].sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
+  let rank = 0, lastAvg = null, seen = 0, position = null;
+  ranked.forEach(r => {
+    seen++;
+    if (r.avg === null) { if (r.id === studentId) position = null; return; }
+    if (r.avg !== lastAvg) { rank = seen; lastAvg = r.avg; }
+    if (r.id === studentId) position = rank;
+  });
+  return { position, outOf };
+}
+
+function ordinal(n) {
+  if (n === null || n === undefined) return '—';
+  const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+// Small inline line-chart (no library) plotting the student's overall
+// average for each exam type in order, e.g. Opener -> Midterm -> Endterm,
+// so a parent can see the trend across the term at a glance.
+function buildTrendChartSVG(points) {
+  if (points.length < 2) return '';
+  const w = 560, h = 160, padL = 32, padR = 14, padT = 16, padB = 26;
+  const innerW = w - padL - padR, innerH = h - padT - padB;
+  const xStep = innerW / (points.length - 1);
+  const yFor = (pct) => padT + innerH - (Math.max(0, Math.min(100, pct)) / 100) * innerH;
+  const coords = points.map((p, i) => ({ x: padL + i * xStep, y: yFor(p.avg), ...p }));
+  const path = coords.map((c, i) => `${i === 0 ? 'M' : 'L'} ${c.x.toFixed(1)} ${c.y.toFixed(1)}`).join(' ');
+  const gridLines = [0, 25, 50, 75, 100].map(v =>
+    `<line x1="${padL}" y1="${yFor(v).toFixed(1)}" x2="${w - padR}" y2="${yFor(v).toFixed(1)}" stroke="var(--paper-line)" stroke-width="1"/>` +
+    `<text x="${padL - 6}" y="${(yFor(v) + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--ink-faint)">${v}</text>`
+  ).join('');
+  const dots = coords.map(c =>
+    `<circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="3.5" fill="var(--primary)"/>` +
+    `<text x="${c.x.toFixed(1)}" y="${(c.y - 9).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="var(--ink)">${c.avg.toFixed(0)}%</text>`
+  ).join('');
+  const labels = coords.map(c =>
+    `<text x="${c.x.toFixed(1)}" y="${h - 6}" text-anchor="middle" font-size="10" fill="var(--ink-soft)">${UI.esc(c.type)}</text>`
+  ).join('');
+  return `
+    <div style="margin:18px 0 4px 0;">
+      <p class="stat-sub" style="margin:0 0 8px 0;"><strong>Performance trend this term</strong></p>
+      <svg viewBox="0 0 ${w} ${h}" style="width:100%; max-width:520px; height:auto; display:block;">
+        ${gridLines}
+        <path d="${path}" fill="none" stroke="var(--primary)" stroke-width="2.5"/>
+        ${dots}
+        ${labels}
+      </svg>
+    </div>`;
+}
+
 // Same idea as gradeSection(), but starting from a student's klass
 // LABEL (name + stream, e.g. "Grade 7 East") rather than a class's
 // grade name. Looks up the matching Classes/Streams row for the real
@@ -1426,6 +1609,7 @@ function renderStudentReportCard(st, scope) {
       <button class="btn" id="printAllBtn" disabled>Whole class — print all</button>
       <button class="btn" id="downloadCsvBtn" disabled><i class="fa-solid fa-download"></i> Download CSV</button>
       <button class="btn btn-brass" id="printBtn">Print / Save as PDF</button>
+      <button class="btn btn-brass" id="downloadPdfBtn" disabled><i class="fa-solid fa-file-pdf"></i> Download PDF</button>
     </div>
     <div id="reportWrap"></div>
   `;
@@ -1438,6 +1622,7 @@ function renderStudentReportCard(st, scope) {
   const examTypeSel = document.getElementById('examTypeSel');
   const printAllBtn = document.getElementById('printAllBtn');
   const downloadCsvBtn = document.getElementById('downloadCsvBtn');
+  const downloadPdfBtn = document.getElementById('downloadPdfBtn');
 
   classSel.onchange = () => {
     const klass = classSel.value;
@@ -1445,192 +1630,22 @@ function renderStudentReportCard(st, scope) {
     studentSel.innerHTML = `<option value="">Select student</option>` + students.map(s => `<option value="${s.id}">${UI.esc(s.name)}</option>`).join('');
     printAllBtn.disabled = !klass;
     downloadCsvBtn.disabled = !klass;
+    downloadPdfBtn.disabled = true; // re-enabled once a report card is actually on screen (single or whole-class)
     document.getElementById('reportWrap').innerHTML = '';
   };
 
   [studentSel, termSel, yearSel, examTypeSel].forEach(el => el.onchange = renderReport);
 
-  // A student's own overall percentage for a given sitting/term, using the
-  // exact same formula as the report card itself — used both for that
-  // student's headline average and for ranking everyone else for position.
-  function overallAvgFor(studentId, term, year, examType, isSingle) {
-    const g = Grading.buildStudentTermGrid(st, studentId, term, year);
-    return isSingle
-      ? Grading.average(g.map(r => (r.cells[examType] ? r.cells[examType].pct : null)).filter(v => v !== null))
-      : Grading.average(g.map(r => r.average).filter(v => v !== null));
-  }
-
-  // Ranks `students` by overall average (highest first, ties share a
-  // position) and returns { position, outOf } for `studentId`.
-  function positionOf(studentId, students, term, year, examType, isSingle) {
-    const scored = students.map(s => ({ id: s.id, avg: overallAvgFor(s.id, term, year, examType, isSingle) }));
-    const outOf = scored.filter(s => s.avg !== null).length;
-    const ranked = [...scored].sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
-    let rank = 0, lastAvg = null, seen = 0, position = null;
-    ranked.forEach(r => {
-      seen++;
-      if (r.avg === null) { if (r.id === studentId) position = null; return; }
-      if (r.avg !== lastAvg) { rank = seen; lastAvg = r.avg; }
-      if (r.id === studentId) position = rank;
-    });
-    return { position, outOf };
-  }
-
-  function ordinal(n) {
-    const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
-    return n + (s[(v - 20) % 10] || s[v] || s[0]);
-  }
-
-  // Small inline line-chart (no library) plotting the student's overall
-  // average for each exam type in order, e.g. Opener -> Midterm -> Endterm,
-  // so a parent can see the trend across the term at a glance.
-  function buildTrendChartSVG(points) {
-    if (points.length < 2) return '';
-    const w = 560, h = 160, padL = 32, padR = 14, padT = 16, padB = 26;
-    const innerW = w - padL - padR, innerH = h - padT - padB;
-    const xStep = innerW / (points.length - 1);
-    const yFor = (pct) => padT + innerH - (Math.max(0, Math.min(100, pct)) / 100) * innerH;
-    const coords = points.map((p, i) => ({ x: padL + i * xStep, y: yFor(p.avg), ...p }));
-    const path = coords.map((c, i) => `${i === 0 ? 'M' : 'L'} ${c.x.toFixed(1)} ${c.y.toFixed(1)}`).join(' ');
-    const gridLines = [0, 25, 50, 75, 100].map(v =>
-      `<line x1="${padL}" y1="${yFor(v).toFixed(1)}" x2="${w - padR}" y2="${yFor(v).toFixed(1)}" stroke="var(--paper-line)" stroke-width="1"/>` +
-      `<text x="${padL - 6}" y="${(yFor(v) + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--ink-faint)">${v}</text>`
-    ).join('');
-    const dots = coords.map(c =>
-      `<circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="3.5" fill="var(--primary)"/>` +
-      `<text x="${c.x.toFixed(1)}" y="${(c.y - 9).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="var(--ink)">${c.avg.toFixed(0)}%</text>`
-    ).join('');
-    const labels = coords.map(c =>
-      `<text x="${c.x.toFixed(1)}" y="${h - 6}" text-anchor="middle" font-size="10" fill="var(--ink-soft)">${UI.esc(c.type)}</text>`
-    ).join('');
-    return `
-      <div style="margin:18px 0 4px 0;">
-        <p class="stat-sub" style="margin:0 0 8px 0;"><strong>Performance trend this term</strong></p>
-        <svg viewBox="0 0 ${w} ${h}" style="width:100%; max-width:520px; height:auto; display:block;">
-          ${gridLines}
-          <path d="${path}" fill="none" stroke="var(--primary)" stroke-width="2.5"/>
-          ${dots}
-          ${labels}
-        </svg>
-      </div>`;
-  }
-
-  // examType is '' for the merged Opener+Midterm+Endterm(+...) report card,
-  // or one admin-defined exam type name (e.g. "Opener") for an independent,
-  // single-sitting report showing just that one column.
-  function buildReportCardHTML(student, term, year, examType) {
-    const allTypeNames = Grading.examTypeNames(st);
-    const isSingle = !!examType;
-    const typesToShow = isSingle ? [examType] : allTypeNames;
-    const grid = Grading.buildStudentTermGrid(st, student.id, term, year);
-
-    const overallAvg = isSingle
-      ? Grading.average(grid.map(r => (r.cells[examType] ? r.cells[examType].pct : null)).filter(v => v !== null))
-      : Grading.average(grid.map(r => r.average).filter(v => v !== null));
-    const overallBand = overallAvg === null ? null : Grading.levelForMarks(overallAvg, 100, st.settings.gradingBands);
-
-    const rowsHtml = grid.map(row => {
-      const cellHtml = (type) => {
-        const c = row.cells[type];
-        if (!c) return `<td class="num row-index">—</td>`;
-        const band = Grading.levelForMarks(c.marks, c.totalMarks, st.settings.gradingBands);
-        return `<td class="num">${c.pct.toFixed(1)}% ${UI.badge(band)}</td>`;
-      };
-      const avgBand = row.average === null ? null : Grading.levelForMarks(row.average, 100, st.settings.gradingBands);
-      return `<tr>
-        <td>${UI.esc(row.subject.name)}</td>
-        ${typesToShow.map(cellHtml).join('')}
-        ${isSingle ? '' : `<td class="num">${row.average === null ? '—' : row.average.toFixed(1) + '%'} ${UI.badge(avgBand)}</td>`}
-      </tr>`;
-    }).join('');
-
-    const reportLabel = isSingle ? `${examType} Report` : 'Report Card';
-    const colCount = typesToShow.length + (isSingle ? 1 : 2);
-    const teacherComment = Grading.autoComment(overallAvg, 'teacher');
-    const headComment = Grading.autoComment(overallAvg, 'head');
-
-    // Position in stream (this exact class/stream label) and in class
-    // (the whole grade, all streams combined) — the two collapse to the
-    // same figure for schools that haven't split a grade into streams.
-    const classEntry = st.classes.find(c => c.label === student.klass);
-    const gradeNameOf = (s) => {
-      const ce = st.classes.find(c => c.label === s.klass);
-      return ce ? ce.name : s.klass;
-    };
-    const gradeName = classEntry ? classEntry.name : student.klass;
-    const streamMates = st.students.filter(s => s.klass === student.klass);
-    const gradeMates = st.students.filter(s => gradeNameOf(s) === gradeName);
-    const streamPos = positionOf(student.id, streamMates, term, year, examType, isSingle);
-    const showStreamRow = classEntry && classEntry.stream && gradeMates.length !== streamMates.length;
-    const classPos = showStreamRow ? positionOf(student.id, gradeMates, term, year, examType, isSingle) : streamPos;
-
-    // Performance trend across the term's sittings (only meaningful for
-    // the merged, all-exam-types view — a single sitting is one point).
-    const trendPoints = isSingle ? [] : allTypeNames.map(t => {
-      const vals = grid.map(r => (r.cells[t] ? r.cells[t].pct : null)).filter(v => v !== null);
-      return { type: t, avg: Grading.average(vals) };
-    }).filter(p => p.avg !== null);
-
-    // Class Teacher's / Head of Institution's real names, set once on the
-    // Classes and Settings pages, printed automatically on every report.
-    const classTeacherName = classEntry ? classEntry.teacherName : '';
-    const headName = st.settings.headName || '';
-
-    const section = gradeSection(gradeName);
-    const titleBandText = section ? section.title : 'Learner Report Card';
-
-    return `
-      <div class="report-card">
-        <div class="report-title-band">${UI.esc(titleBandText)}<span class="report-title-sub">${UI.esc(reportLabel)} &middot; ${UI.esc(term)} ${UI.esc(year)}</span></div>
-        <div class="report-header">
-          <div>
-            <h2>${UI.esc(st.settings.schoolName)}</h2>
-            <p class="stat-sub">${UI.esc(st.settings.motto)}</p>
-          </div>
-          <div style="text-align:right;">
-            <p class="stat-sub" style="margin:0;">${UI.esc(reportLabel)}</p>
-            <p class="stat-sub" style="margin:0;">${UI.esc(term)} · ${UI.esc(year)}</p>
-          </div>
-        </div>
-        <div class="report-meta-grid">
-          <div><span class="k">Name:</span>${UI.esc(student.name)}</div>
-          <div><span class="k">Admission No.:</span>${UI.esc(student.admissionNo) || '—'}</div>
-          <div><span class="k">Class:</span>${UI.esc(student.klass)}</div>
-          <div><span class="k">Average performance:</span>${overallAvg === null ? '—' : overallAvg.toFixed(1) + '%'}</div>
-          <div><span class="k">Position in class:</span>${classPos.position === null ? '—' : `${ordinal(classPos.position)} out of ${classPos.outOf}`}</div>
-          ${showStreamRow ? `<div><span class="k">Position in stream:</span>${streamPos.position === null ? '—' : `${ordinal(streamPos.position)} out of ${streamPos.outOf}`}</div>` : ''}
-        </div>
-        <table class="ledger-table" style="width:100%;">
-          <thead><tr><th>Subject</th>${typesToShow.map(t => `<th>${UI.esc(t)}</th>`).join('')}${isSingle ? '' : '<th>Average</th>'}</tr></thead>
-          <tbody>${rowsHtml || `<tr><td colspan="${colCount}" class="row-index">No subjects added yet.</td></tr>`}</tbody>
-        </table>
-        ${buildTrendChartSVG(trendPoints)}
-        <div class="report-footer">
-          <div>
-            <p class="stat-sub" style="margin:0 0 6px 0;"><strong>Average performance:</strong> ${overallAvg === null ? 'Not enough data' : `${overallAvg.toFixed(1)}%`}</p>
-          </div>
-          <div class="stamp badge-${overallBand ? overallBand.code : 'none'}" style="color:inherit;">${overallBand ? overallBand.code : '—'}</div>
-        </div>
-        <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--paper-line); font-size:13.5px; color:var(--ink); line-height:1.6;">
-          <p style="margin:0 0 8px 0;"><strong>Class Teacher's comment:</strong> ${UI.esc(teacherComment)}</p>
-          <p style="margin:0;"><strong>Head of Institution's comment:</strong> ${UI.esc(headComment)}</p>
-        </div>
-        <div class="report-footer">
-          <div class="signature-line">${classTeacherName ? `<strong>${UI.esc(classTeacherName)}</strong><br>` : ''}Class Teacher</div>
-          <div class="signature-line">${headName ? `<strong>${UI.esc(headName)}</strong><br>` : ''}Head of Institution</div>
-        </div>
-      </div>
-    `;
-  }
-
   function renderReport() {
     const studentId = studentSel.value;
-    if (!studentId) { document.getElementById('reportWrap').innerHTML = ''; return; }
+    if (!studentId) { document.getElementById('reportWrap').innerHTML = ''; downloadPdfBtn.disabled = true; return; }
     const student = st.students.find(s => s.id === studentId);
     const term = termSel.value;
     const year = yearSel.value;
     const examType = examTypeSel.value;
-    document.getElementById('reportWrap').innerHTML = buildReportCardHTML(student, term, year, examType);
+    document.getElementById('reportWrap').innerHTML = buildReportCardHTML(st, student, term, year, examType);
+    downloadPdfBtn.disabled = false;
+    downloadPdfBtn.dataset.filename = `report-card-${student.name}-${term}-${year}`.replace(/\s+/g, '_');
   }
 
   printAllBtn.onclick = () => {
@@ -1644,7 +1659,15 @@ function renderStudentReportCard(st, scope) {
     studentSel.value = '';
     document.getElementById('reportWrap').innerHTML =
       `<p class="field-hint no-print" style="margin-bottom:14px;">${students.length} report cards for ${UI.esc(klass)} — ${UI.esc(term)} ${UI.esc(year)}${examType ? ' · ' + UI.esc(examType) : ' · merged'}. Each prints on its own page.</p>` +
-      students.map(s => buildReportCardHTML(s, term, year, examType)).join('');
+      students.map(s => buildReportCardHTML(st, s, term, year, examType)).join('');
+    downloadPdfBtn.disabled = false;
+    downloadPdfBtn.dataset.filename = `report-cards-${klass}-${term}-${year}`.replace(/\s+/g, '_');
+  };
+
+  downloadPdfBtn.onclick = () => {
+    const cards = document.querySelectorAll('#reportWrap .report-card');
+    if (!cards.length) { UI.toast('Nothing to download yet.'); return; }
+    UI.downloadPDF(cards, downloadPdfBtn.dataset.filename || 'report-card', downloadPdfBtn);
   };
 
   downloadCsvBtn.onclick = () => {
@@ -1721,6 +1744,7 @@ function renderSingleExamReport(st, scope) {
         <select id="esSubject">${subjectExams.map(e => `<option value="${e.id}" ${e.id === selectedId ? 'selected' : ''}>${UI.esc(subjectName(e.subjectId))}</option>`).join('')}</select>
         <button class="btn" id="esCsvBtn"><i class="fa-solid fa-download"></i> Download CSV</button>
         <button class="btn btn-brass" id="esPrintBtn">Print / Save as PDF</button>
+        <button class="btn btn-brass" id="esPdfBtn"><i class="fa-solid fa-file-pdf"></i> Download PDF</button>
       </div>
     `;
   }
@@ -1759,17 +1783,7 @@ function renderSingleExamReport(st, scope) {
 
     return `
       <div class="report-card" id="esPrintArea">
-        <div class="report-title-band">${UI.esc(examTitleBandText)}<span class="report-title-sub">Single Exam Report &middot; ${UI.esc(exam.type)} &middot; ${UI.esc(exam.term)} ${UI.esc(exam.year)}</span></div>
-        <div class="report-header">
-          <div>
-            <h2>${UI.esc(st.settings.schoolName)}</h2>
-            <p class="stat-sub">${UI.esc(st.settings.motto)}</p>
-          </div>
-          <div style="text-align:right;">
-            <p class="stat-sub" style="margin:0;">Single Exam Report</p>
-            <p class="stat-sub" style="margin:0;">${UI.esc(exam.type)} · ${UI.esc(exam.term)} ${UI.esc(exam.year)}</p>
-          </div>
-        </div>
+        ${buildReportMastheadHTML(st, examTitleBandText, 'Single Exam Report', exam.term, exam.year)}
         <div class="report-meta-grid">
           <div><span class="k">Class:</span>${UI.esc(exam.klass)}</div>
           <div><span class="k">Subject:</span>${UI.esc(subjectName(exam.subjectId))}</div>
@@ -1814,6 +1828,13 @@ function renderSingleExamReport(st, scope) {
     const yearSel = document.getElementById('esYear');
     const subjectSel = document.getElementById('esSubject');
     document.getElementById('esPrintBtn').onclick = () => window.print();
+    document.getElementById('esPdfBtn').onclick = (e) => {
+      const el = document.getElementById('esPrintArea');
+      if (!el) { UI.toast('Nothing to download yet.'); return; }
+      const exam = st.exams.find(x => x.id === selectedId);
+      const fname = exam ? `exam-report-${exam.klass}-${exam.type}-${exam.term}-${exam.year}`.replace(/\s+/g, '_') : 'exam-report';
+      UI.downloadPDF(el, fname, e.currentTarget);
+    };
     document.getElementById('esCsvBtn').onclick = () => {
       const exam = st.exams.find(e => e.id === selectedId);
       if (!exam) return;
@@ -1883,6 +1904,7 @@ function renderClassPerformanceReport(st, scope) {
         </select>
         <button class="btn" id="cpCsvBtn"><i class="fa-solid fa-download"></i> Download CSV</button>
         <button class="btn btn-brass" id="cpPrintBtn">Print / Save as PDF</button>
+        <button class="btn btn-brass" id="cpPdfBtn"><i class="fa-solid fa-file-pdf"></i> Download PDF</button>
       </div>
       <p class="field-hint no-print" style="margin-bottom:14px;">Compares every class/stream for the chosen term, year and (optionally) one exam type — leave "All exam types" selected for the whole term's picture.</p>
     `;
@@ -1927,17 +1949,7 @@ function renderClassPerformanceReport(st, scope) {
 
     return `
       <div class="report-card" id="cpPrintArea">
-        <div class="report-title-band">Class / Stream Performance Report<span class="report-title-sub">${picked.type ? UI.esc(picked.type) + ' &middot; ' : ''}${UI.esc(picked.term)} ${UI.esc(picked.year)}</span></div>
-        <div class="report-header">
-          <div>
-            <h2>${UI.esc(st.settings.schoolName)}</h2>
-            <p class="stat-sub">${UI.esc(st.settings.motto)}</p>
-          </div>
-          <div style="text-align:right;">
-            <p class="stat-sub" style="margin:0;">Class / Stream Performance</p>
-            <p class="stat-sub" style="margin:0;">${picked.type ? UI.esc(picked.type) + ' · ' : ''}${UI.esc(picked.term)} ${UI.esc(picked.year)}</p>
-          </div>
-        </div>
+        ${buildReportMastheadHTML(st, 'Class / Stream Performance Report', picked.type || 'All sittings', picked.term, picked.year)}
         <div class="report-meta-grid">
           <div><span class="k">Classes/streams:</span>${stats.length}</div>
           <div><span class="k">School mean:</span>${schoolMean === null ? '—' : schoolMean.toFixed(1) + '%'}</div>
@@ -1988,6 +2000,11 @@ function renderClassPerformanceReport(st, scope) {
 
   function wireFilters() {
     document.getElementById('cpPrintBtn').onclick = () => window.print();
+    document.getElementById('cpPdfBtn').onclick = (e) => {
+      const el = document.getElementById('cpPrintArea');
+      if (!el) { UI.toast('Nothing to download yet.'); return; }
+      UI.downloadPDF(el, `class-performance-${picked.term}-${picked.year}`.replace(/\s+/g, '_'), e.currentTarget);
+    };
     document.getElementById('cpCsvBtn').onclick = () => {
       const stats = computeClassStats();
       const header = ['Class', 'Students', 'Exams', 'Average %', 'Level', 'High %', 'Low %', 'Marks entered %'];
@@ -2002,6 +2019,11 @@ function renderClassPerformanceReport(st, scope) {
   function paint() {
     document.getElementById('cpReportWrap').innerHTML = buildReportHTML();
     document.getElementById('cpPrintBtn').onclick = () => window.print();
+    document.getElementById('cpPdfBtn').onclick = (e) => {
+      const el = document.getElementById('cpPrintArea');
+      if (!el) { UI.toast('Nothing to download yet.'); return; }
+      UI.downloadPDF(el, `class-performance-${picked.term}-${picked.year}`.replace(/\s+/g, '_'), e.currentTarget);
+    };
   }
 
   document.getElementById('modeWrap').innerHTML = `
