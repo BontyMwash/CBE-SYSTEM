@@ -110,7 +110,14 @@ Views.attendance = async function () {
         await Store.saveAttendanceBulk(klass, date, rows.map(r => ({ studentId: r.student.id, status: r.status, remarks: r.remarks })));
         UI.toast('Attendance saved');
       } catch (err) {
-        UI.toast('Could not save attendance: ' + err.message);
+        // A permission-denied error here almost always means this class
+        // isn't explicitly assigned to the teacher yet (Users -> "Manage
+        // classes") — ask your administrator to do that if this keeps
+        // happening, even after running sql/010_fix_attendance_access.sql.
+        const isPermissionError = /row-level security|permission denied|RLS/i.test(err.message || '');
+        UI.toast(isPermissionError
+          ? 'Could not save: you may not be assigned to this class yet — ask your administrator to add it under Users -> "Manage classes".'
+          : 'Could not save attendance: ' + err.message);
       }
       btn.disabled = false; btn.textContent = 'Save register';
     };

@@ -67,11 +67,16 @@ Views.myClasses = async function () {
 /* ------------------------- LEARNERS ------------------------- */
 
 Views.learners = async function () {
-  setTopbarActions('');
-  showLoading();
   const st = await Store.current();
   const user = Auth.currentUser();
   const scope = teacherScope(st, user);
+
+  // Only an actual CLASS teacher (assigned a class via the Users page,
+  // not just a subject) may add a learner here, and only into the
+  // class(es) they hold — a subject-only teacher still can't.
+  const canAddLearner = !!user && user.role === 'user' && !!user.isClassTeacher;
+  setTopbarActions(canAddLearner ? `<button class="btn btn-primary" id="addLearnerBtn">+ Add learner</button>` : '');
+  showLoading();
 
   const classLabels = scope.isTeacher ? scope.classLabels : new Set(classOptionLabels(st));
   let students = st.students.filter(s => classLabels.has(s.klass));
@@ -79,6 +84,68 @@ Views.learners = async function () {
   if (scope.isTeacher && scope.classes.length === 0) {
     document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">No classes assigned to you yet</div><p>Ask your administrator to assign your class(es) or subject(s) from the Users page.</p></div>`;
     return;
+  }
+
+  function openAddLearnerForm() {
+    const classOpts = [...scope.classLabels].sort();
+    UI.openModal(`
+      <h2>Add learner</h2>
+      <div class="form-grid">
+        <div class="field full">
+          <label>Full name</label>
+          <input type="text" id="f_name" placeholder="e.g. Amina Wanjiru">
+        </div>
+        <div class="field">
+          <label>Admission number</label>
+          <input type="text" id="f_admno" placeholder="e.g. 2025-014">
+        </div>
+        <div class="field">
+          <label>Class / Grade</label>
+          <select id="f_klass">
+            ${classOpts.length ? classOpts.map(c => `<option value="${UI.esc(c)}">${UI.esc(c)}</option>`).join('') : `<option value="">No class assigned to you</option>`}
+          </select>
+          <p class="field-hint">Only class(es) you're the class teacher for are listed.</p>
+        </div>
+        <div class="field full" style="margin-top:4px; border-top:1px solid var(--paper-line); padding-top:14px;">
+          <label style="font-weight:600;">Parent / guardian contact <span class="field-hint" style="font-weight:400;">(optional — used to send results)</span></label>
+        </div>
+        <div class="field">
+          <label>Parent / guardian name</label>
+          <input type="text" id="f_parentname" placeholder="e.g. Mary Wanjiru">
+        </div>
+        <div class="field">
+          <label>Parent phone (WhatsApp/SMS)</label>
+          <input type="text" id="f_parentphone" placeholder="e.g. +254712345678">
+        </div>
+        <div class="field">
+          <label>Parent email</label>
+          <input type="email" id="f_parentemail" placeholder="e.g. parent@example.com">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
+        <button class="btn btn-primary" id="saveBtn">Add learner</button>
+      </div>
+    `, (root) => {
+      root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
+      root.querySelector('#saveBtn').onclick = async () => {
+        const name = root.querySelector('#f_name').value.trim();
+        const admissionNo = root.querySelector('#f_admno').value.trim();
+        const klass = root.querySelector('#f_klass').value.trim();
+        const parentName = root.querySelector('#f_parentname').value.trim();
+        const parentPhone = root.querySelector('#f_parentphone').value.trim();
+        const parentEmail = root.querySelector('#f_parentemail').value.trim();
+        if (!name || !klass) { UI.toast('Name and class are required'); return; }
+        try {
+          await Store.addStudent({ name, admissionNo, klass, parentName, parentPhone, parentEmail });
+          UI.toast('Learner added');
+          UI.closeModal();
+          Views.learners();
+        } catch (err) {
+          UI.toast('Could not save: ' + err.message);
+        }
+      };
+    });
   }
 
   let klassFilter = App.state._teacherKlassFilter && classLabels.has(App.state._teacherKlassFilter) ? App.state._teacherKlassFilter : '';
@@ -136,20 +203,42 @@ Views.learners = async function () {
           ${klasses.map(k => `<option value="${UI.esc(k)}" ${k === klassFilter ? 'selected' : ''}>${UI.esc(k)}</option>`).join('')}
         </select>
         <input type="text" id="searchInput" placeholder="Search by name or admission no." value="${UI.esc(search)}" style="flex:1; min-width:200px;">
+        <button class="btn" id="learnersCsvBtn"><i class="fa-solid fa-download"></i> Download CSV</button>
       </div>
       ${tableHtml}
       <p class="field-hint" style="margin-top:10px;">Average is calculated only from subject(s) assigned to you. Editing a learner's details is done by your administrator on the Students page.</p>
     `;
   }
 
+  function currentRows() {
+    let rows = students.filter(s => !klassFilter || s.klass === klassFilter);
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      rows = rows.filter(s => s.name.toLowerCase().includes(q) || (s.admissionNo || '').toLowerCase().includes(q));
+    }
+    return [...rows].sort((a, b) => a.klass.localeCompare(b.klass) || a.name.localeCompare(b.name));
+  }
+
   function paint() {
     document.getElementById('content').innerHTML = renderTable();
+    if (canAddLearner) document.getElementById('addLearnerBtn').onclick = openAddLearnerForm;
     document.getElementById('klassFilterSel').onchange = (e) => { klassFilter = e.target.value; paint(); };
     const search_input = document.getElementById('searchInput');
     search_input.oninput = (e) => { search = e.target.value; paint(); };
     search_input.focus();
     search_input.value = search;
     search_input.setSelectionRange(search.length, search.length);
+    document.getElementById('learnersCsvBtn').onclick = () => {
+      const rows = currentRows();
+      if (rows.length === 0) { UI.toast('No learners to download'); return; }
+      const header = ['Name', 'Admission No.', 'Class', 'Average %', 'Level', 'Guardian name', 'Guardian phone'];
+      const csvRows = rows.map(s => {
+        const avg = overallAverage(s.id);
+        const band = avg === null ? null : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
+        return [s.name, s.admissionNo || '', s.klass, avg === null ? '' : avg.toFixed(1), band ? band.code : '', s.parentName || '', s.parentPhone || ''];
+      });
+      UI.downloadCSV(`class-list-${klassFilter || 'all-my-classes'}`.replace(/\s+/g, '_'), header, csvRows);
+    };
   }
 
   paint();
@@ -402,59 +491,9 @@ Views.gradebook = async function () {
   paint();
 };
 
-/* ------------------------- REPORTS (hub) ------------------------- */
-// A landing page tying together every report/export a teacher has
-// access to, plus a couple of at-a-glance stats — rather than
-// duplicating Broadsheet/Analysis/Report Cards logic here.
-
-Views.reportsHub = async function () {
-  setTopbarActions('');
-  showLoading();
-  const st = await Store.current();
-  const user = Auth.currentUser();
-  const scope = teacherScope(st, user);
-  const allowed = Auth.allowedRoutes();
-  const canGo = (r) => allowed.includes(r);
-
-  const myKlasses = scope.isTeacher && scope.classLabels.size ? [...scope.classLabels] : classOptionLabels(st);
-
-  // Attendance completion this month, across my classes.
-  let attendanceNote = 'Not tracked yet — mark a register from Attendance.';
-  if (canGo('attendance') && myKlasses.length) {
-    try {
-      const today = new Date();
-      const from = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
-      const rangesPerKlass = await Promise.all(myKlasses.slice(0, 5).map(k => Store.attendanceRange(k, from, today.toISOString().slice(0, 10))));
-      const all = rangesPerKlass.flat();
-      if (all.length) {
-        const present = all.filter(a => a.status === 'present').length;
-        attendanceNote = `${((present / all.length) * 100).toFixed(0)}% present this month across ${myKlasses.length} class${myKlasses.length === 1 ? '' : 'es'}.`;
-      }
-    } catch (e) { /* best-effort widget — reports below still work either way */ }
-  }
-
-  const cards = [
-    canGo('reports') ? { icon: 'fa-file-lines', title: 'Report Cards', desc: 'Print an individual learner\'s report card for any term.', route: 'reports' } : null,
-    canGo('broadsheet') ? { icon: 'fa-table-list', title: 'Broadsheet', desc: 'Whole-class mark sheet across every subject for one sitting.', route: 'broadsheet' } : null,
-    canGo('analysis') ? { icon: 'fa-chart-column', title: 'Marks Analysis', desc: 'Published class/subject performance once your admin releases it.', route: 'analysis' } : null,
-    canGo('gradebook') ? { icon: 'fa-book-open', title: 'Gradebook', desc: 'Your own subject\'s mark book, sitting by sitting.', route: 'gradebook' } : null,
-    canGo('attendance') ? { icon: 'fa-calendar-check', title: 'Attendance', desc: attendanceNote, route: 'attendance' } : null,
-    canGo('competency') ? { icon: 'fa-star-half-stroke', title: 'Competency Assessment', desc: 'CBC strand ratings (EE/ME/AE/BE) for your subject(s).', route: 'competency' } : null,
-    canGo('notify') ? { icon: 'fa-paper-plane', title: 'Send to Parents', desc: 'Share a sitting\'s results with guardians by WhatsApp, SMS or email.', route: 'notify' } : null
-  ].filter(Boolean);
-
-  document.getElementById('content').innerHTML = `
-    <p class="field-hint" style="margin-bottom:14px;">Every report and export available to you, in one place.</p>
-    <div class="class-card-grid">
-      ${cards.map(c => `
-        <div class="card class-card" data-goto="${c.route}" style="cursor:pointer;">
-          <h3 style="margin:0 0 6px 0;"><i class="fa-solid ${c.icon}" style="margin-right:8px;"></i>${UI.esc(c.title)}</h3>
-          <p class="field-hint" style="margin:0;">${UI.esc(c.desc)}</p>
-        </div>
-      `).join('')}
-    </div>
-  `;
-  document.querySelectorAll('[data-goto]').forEach(el => {
-    el.onclick = () => App.navigate(el.dataset.goto);
-  });
-};
+/* Reports hub removed — "Report Cards" (Views.reports) was a second,
+   near-duplicate "Reports" sidebar entry. It's the one kept, since
+   it's the actual printable report; the hub's other links (Broadsheet,
+   Analysis, Attendance, Competency, Send to Parents) already have
+   their own direct sidebar entries, so nothing but the duplicate
+   itself was lost. */

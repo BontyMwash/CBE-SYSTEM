@@ -10,35 +10,39 @@
    ============================================================ */
 
 const Auth = {
-  _profile: null,       // {id, school_id, role, name}
+  _profile: null,       // {id, school_id, role, name, isClassTeacher}
   _viewingSchoolId: null, // superadmin "open school" context, not persisted
 
   ROLE_ROUTES: {
     superadmin: ['schools'],
     admin: [
       'dashboard', 'classes', 'students', 'subjects', 'exams', 'results', 'gradebook',
-      'reports', 'attendance', 'competency', 'broadsheet', 'analysis', 'reportsHub',
+      'reports', 'attendance', 'competency', 'broadsheet', 'analysis',
       'notify', 'users', 'settings'
     ],
     // Teacher section — kept in this order because it's the order the
     // sidebar is meant to walk a teacher through their day:
     // Dashboard -> My Classes -> Learners -> Assessments -> Marks Entry
     // -> Marks Analysis -> Gradebook -> Report Cards -> Attendance ->
-    // Competency Assessment -> Reports, with the two extra existing
-    // screens (Broadsheet, Send to Parents) kept on afterwards so
-    // nothing a teacher already relied on disappears.
+    // Competency Assessment -> Reports. Broadsheet (whole-class, every
+    // subject) and Send to Parents are deliberately NOT in this base
+    // list — those are whole-class-scope actions, only appropriate for
+    // a teacher who actually holds a class (a "class teacher"), and are
+    // added back in allowedRoutes() below for exactly those teachers.
     user: [
       'dashboard', 'myClasses', 'learners', 'assessments', 'results', 'analysis',
-      'gradebook', 'reports', 'attendance', 'competency', 'reportsHub',
-      'broadsheet', 'notify'
-    ]
+      'gradebook', 'reports', 'attendance', 'competency'
+    ],
+    // Routes added on top of `user` only for teachers who are a class
+    // teacher for at least one class (see _loadProfile / isClassTeacher).
+    userClassTeacherExtra: ['broadsheet', 'notify']
   },
 
   ROUTE_TITLES: {
     dashboard: 'Dashboard', classes: 'Classes', students: 'Students', subjects: 'Subjects', exams: 'Exams',
     myClasses: 'My Classes', learners: 'Learners', assessments: 'Assessments',
     results: 'Marks Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', analysis: 'Marks Analysis',
-    gradebook: 'Gradebook', attendance: 'Attendance', competency: 'Competency Assessment', reportsHub: 'Reports',
+    gradebook: 'Gradebook', attendance: 'Attendance', competency: 'Competency Assessment',
     notify: 'Send Results to Parents',
     users: 'Users', settings: 'Settings', schools: 'Schools'
   },
@@ -46,7 +50,7 @@ const Auth = {
     dashboard: 'Dashboard', classes: 'Classes', students: 'Students', subjects: 'Subjects', exams: 'Exams',
     myClasses: 'My Classes', learners: 'Learners', assessments: 'Assessments',
     results: 'Marks Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', analysis: 'Marks Analysis',
-    gradebook: 'Gradebook', attendance: 'Attendance', competency: 'Competency', reportsHub: 'Reports',
+    gradebook: 'Gradebook', attendance: 'Attendance', competency: 'Competency',
     notify: 'Send to Parents',
     users: 'Users', settings: 'Settings', schools: 'Schools'
   },
@@ -79,6 +83,26 @@ const Auth = {
     if (error || !data) { this._profile = null; return; }
     this._profile = data; // {id, school_id, role, name}
     this._applyActiveSchool();
+    await this._loadClassTeacherFlag();
+  },
+
+  // A "class teacher" is a teacher who's been explicitly assigned at
+  // least one class via the Users page ("Manage classes") — as
+  // distinct from a subject-only teacher. Whole-class-scope screens
+  // (Broadsheet, Send Results to Parents) are gated on this, since
+  // they expose every subject/every learner in a class rather than
+  // just the teacher's own subject. Cheap head-count query, only run
+  // for role='user'; admins/superadmins never need it.
+  async _loadClassTeacherFlag() {
+    if (!this._profile || this._profile.role !== 'user') return;
+    try {
+      const { count, error } = await supabase.from('teacher_classes')
+        .select('id', { count: 'exact', head: true })
+        .eq('teacher_id', this._profile.id);
+      this._profile.isClassTeacher = !error && !!count && count > 0;
+    } catch (e) {
+      this._profile.isClassTeacher = false;
+    }
   },
 
   currentUser() {
@@ -104,6 +128,11 @@ const Auth = {
     if (!user) return [];
     if (user.role === 'superadmin') {
       return this.isViewingSchool() ? [...this.ROLE_ROUTES.admin, 'schools'] : ['schools'];
+    }
+    if (user.role === 'user') {
+      return user.isClassTeacher
+        ? [...this.ROLE_ROUTES.user, ...this.ROLE_ROUTES.userClassTeacherExtra]
+        : this.ROLE_ROUTES.user;
     }
     return this.ROLE_ROUTES[user.role] || [];
   },

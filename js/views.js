@@ -33,6 +33,37 @@ function classOptionLabels(st) {
   return classesFromStudents(st.students);
 }
 
+// CBC grade bands: PP1/PP2 + Grade 1-6 = Primary, Grade 7-9 = Junior
+// Secondary, Grade 10-12 = Senior School. Parsed from the class/grade
+// name (e.g. "Grade 7", "PP1") so report cards can label themselves
+// correctly without needing a separate field to maintain. Returns
+// null for a class name that doesn't match a recognised CBC grade
+// (e.g. a custom name) — callers should fall back to a generic title.
+function gradeSection(gradeName) {
+  const s = (gradeName || '').toLowerCase();
+  if (/\bpp\s*-?\s*[12]\b/.test(s) || /pre[\s-]?primary/.test(s)) {
+    return { key: 'primary', label: 'Primary', title: 'Primary School Report Card' };
+  }
+  const m = s.match(/grade\s*-?\s*(\d{1,2})/);
+  if (m) {
+    const n = parseInt(m[1], 10);
+    if (n >= 1 && n <= 6) return { key: 'primary', label: 'Primary', title: 'Primary School Report Card' };
+    if (n >= 7 && n <= 9) return { key: 'junior-secondary', label: 'Junior Secondary', title: 'Junior Secondary Report Card' };
+    if (n >= 10 && n <= 12) return { key: 'senior-school', label: 'Senior School', title: 'Senior School Report Card' };
+  }
+  return null;
+}
+
+// Same idea as gradeSection(), but starting from a student's klass
+// LABEL (name + stream, e.g. "Grade 7 East") rather than a class's
+// grade name. Looks up the matching Classes/Streams row for the real
+// grade name where one exists; falls back to parsing the label itself
+// for schools still using free-text class names.
+function sectionForKlassLabel(st, klassLabel) {
+  const classEntry = (st.classes || []).find(c => c.label === klassLabel);
+  return gradeSection(classEntry ? classEntry.name : klassLabel);
+}
+
 // Shared by the teacher-facing screens (My Classes, Learners,
 // Assessments, Gradebook, Attendance, Competency Assessment): works
 // out which classes/subjects a "user" (teacher) login is scoped to.
@@ -543,17 +574,31 @@ Views.students = async function () {
   const classes = classesFromStudents(st.students);
   const filterHtml = `
     <div class="filter-row">
+      <select id="sectionFilter">
+        <option value="">All sections</option>
+        <option value="primary">Primary</option>
+        <option value="junior-secondary">Junior Secondary</option>
+        <option value="senior-school">Senior School</option>
+      </select>
       <select id="classFilter">
         <option value="">All classes</option>
         ${classes.map(c => `<option value="${UI.esc(c)}">${UI.esc(c)}</option>`).join('')}
       </select>
       <input type="text" id="searchBox" placeholder="Search by name or admission no." style="min-width:220px;">
+      <button class="btn" id="studentsCsvBtn"><i class="fa-solid fa-download"></i> Download CSV</button>
     </div>
   `;
 
-  function renderTable(filterClass, search) {
+  function sectionBadge(s) {
+    const section = sectionForKlassLabel(st, s.klass);
+    if (!section) return '<span class="row-index">—</span>';
+    return `<span class="badge badge-${section.key === 'primary' ? 'ME' : section.key === 'junior-secondary' ? 'AE' : 'EE'}">${UI.esc(section.label)}</span>`;
+  }
+
+  function renderTable(filterClass, search, filterSection) {
     let rows = st.students;
     if (filterClass) rows = rows.filter(s => s.klass === filterClass);
+    if (filterSection) rows = rows.filter(s => { const sec = sectionForKlassLabel(st, s.klass); return sec && sec.key === filterSection; });
     if (search) {
       const q = search.toLowerCase();
       rows = rows.filter(s => s.name.toLowerCase().includes(q) || (s.admissionNo || '').toLowerCase().includes(q));
@@ -568,7 +613,7 @@ Views.students = async function () {
       <div class="ledger">
         <div class="ledger-scroll">
           <table class="ledger-table">
-            <thead><tr><th>#</th><th>Name</th><th>Admission No.</th><th>Class</th><th>Parent Contact</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>Name</th><th>Admission No.</th><th>Class</th><th>Section</th><th>Parent Contact</th><th></th></tr></thead>
             <tbody>
               ${rows.map((s, i) => `
                 <tr>
@@ -576,6 +621,7 @@ Views.students = async function () {
                   <td>${UI.esc(s.name)}</td>
                   <td class="num">${UI.esc(s.admissionNo) || '—'}</td>
                   <td>${UI.esc(s.klass)}</td>
+                  <td>${sectionBadge(s)}</td>
                   <td>${UI.esc(s.parentPhone) || UI.esc(s.parentEmail) || '<span class="row-index">—</span>'}</td>
                   <td>
                     <button class="btn btn-sm btn-ghost" data-edit="${s.id}">Edit</button>
@@ -590,11 +636,30 @@ Views.students = async function () {
     `;
   }
 
+  function filteredRows(filterClass, search, filterSection) {
+    let rows = st.students;
+    if (filterClass) rows = rows.filter(s => s.klass === filterClass);
+    if (filterSection) rows = rows.filter(s => { const sec = sectionForKlassLabel(st, s.klass); return sec && sec.key === filterSection; });
+    if (search) {
+      const q = search.toLowerCase();
+      rows = rows.filter(s => s.name.toLowerCase().includes(q) || (s.admissionNo || '').toLowerCase().includes(q));
+    }
+    return [...rows].sort((a, b) => a.klass.localeCompare(b.klass) || a.name.localeCompare(b.name));
+  }
+
   function paint() {
     const filterClass = document.getElementById('classFilter')?.value || '';
+    const filterSection = document.getElementById('sectionFilter')?.value || '';
     const search = document.getElementById('searchBox')?.value || '';
-    document.getElementById('studentsTableWrap').innerHTML = renderTable(filterClass, search);
+    document.getElementById('studentsTableWrap').innerHTML = renderTable(filterClass, search, filterSection);
     wireRowActions();
+    document.getElementById('studentsCsvBtn').onclick = () => {
+      const rows = filteredRows(filterClass, search, filterSection);
+      if (rows.length === 0) { UI.toast('No students to download'); return; }
+      const header = ['Name', 'Admission No.', 'Class', 'Parent name', 'Parent phone', 'Parent email'];
+      const csvRows = rows.map(s => [s.name, s.admissionNo || '', s.klass, s.parentName || '', s.parentPhone || '', s.parentEmail || '']);
+      UI.downloadCSV(`class-list-${filterClass || 'all-classes'}`.replace(/\s+/g, '_'), header, csvRows);
+    };
   }
 
   function wireRowActions() {
@@ -688,12 +753,20 @@ Views.students = async function () {
 
   document.getElementById('content').innerHTML = `
     ${filterHtml}
-    <div id="studentsTableWrap">${renderTable('', '')}</div>
+    <div id="studentsTableWrap">${renderTable('', '', '')}</div>
   `;
   document.getElementById('addStudentBtn').onclick = () => openStudentForm(null);
   document.getElementById('importStudentsBtn').onclick = () => Importer.openImportModal(() => Views.students());
   document.getElementById('classFilter').onchange = paint;
+  document.getElementById('sectionFilter').onchange = paint;
   document.getElementById('searchBox').oninput = paint;
+  document.getElementById('studentsCsvBtn').onclick = () => {
+    const rows = filteredRows(document.getElementById('classFilter').value, document.getElementById('searchBox').value, document.getElementById('sectionFilter').value);
+    if (rows.length === 0) { UI.toast('No students to download'); return; }
+    const header = ['Name', 'Admission No.', 'Class', 'Parent name', 'Parent phone', 'Parent email'];
+    const csvRows = rows.map(s => [s.name, s.admissionNo || '', s.klass, s.parentName || '', s.parentPhone || '', s.parentEmail || '']);
+    UI.downloadCSV(`class-list-${document.getElementById('classFilter').value || 'all-classes'}`.replace(/\s+/g, '_'), header, csvRows);
+  };
   // If the topbar search sent us here (App.navigate('students') after
   // Enter in #globalSearch), pick up the pending term once and clear it.
   if (App._pendingStudentSearch) {
@@ -1296,9 +1369,18 @@ Views.reports = async function (mode) {
   showLoading();
   setTopbarActions('');
   const st = await Store.current();
+  const user = Auth.currentUser();
+  // Teachers only ever see report data for classes assigned to them —
+  // a subject/class teacher's "own data" — never the whole school's.
+  // Admins (scope.isTeacher === false) are unrestricted, as before.
+  const scope = teacherScope(st, user);
 
   if (st.students.length === 0) {
     document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">No students yet</div><p>Add students to generate report cards.</p></div>`;
+    return;
+  }
+  if (scope.isTeacher && scope.classLabels.size === 0) {
+    document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">No classes assigned to you yet</div><p>Ask your administrator to assign your class(es) or subject(s) from the Users page.</p></div>`;
     return;
   }
 
@@ -1317,14 +1399,14 @@ Views.reports = async function (mode) {
   document.getElementById('tabExam').onclick = () => Views.reports('exam');
   document.getElementById('tabClasses').onclick = () => Views.reports('classes');
 
-  if (activeMode === 'exam') { renderSingleExamReport(st); return; }
-  if (activeMode === 'classes') { renderClassPerformanceReport(st); return; }
-  renderStudentReportCard(st);
+  if (activeMode === 'exam') { renderSingleExamReport(st, scope); return; }
+  if (activeMode === 'classes') { renderClassPerformanceReport(st, scope); return; }
+  renderStudentReportCard(st, scope);
 };
 
 /* ---- Mode: merged term report card (Opener + Midterm + Endterm per subject) ---- */
-function renderStudentReportCard(st) {
-  const classes = classesFromStudents(st.students);
+function renderStudentReportCard(st, scope) {
+  const classes = scope && scope.isTeacher ? [...scope.classLabels].sort() : classesFromStudents(st.students);
 
   const html = `
     <div class="filter-row no-print">
@@ -1342,6 +1424,7 @@ function renderStudentReportCard(st) {
         ${Grading.examTypeNames(st).map(t => `<option value="${UI.esc(t)}">${UI.esc(t)} report</option>`).join('')}
       </select>
       <button class="btn" id="printAllBtn" disabled>Whole class — print all</button>
+      <button class="btn" id="downloadCsvBtn" disabled><i class="fa-solid fa-download"></i> Download CSV</button>
       <button class="btn btn-brass" id="printBtn">Print / Save as PDF</button>
     </div>
     <div id="reportWrap"></div>
@@ -1354,12 +1437,14 @@ function renderStudentReportCard(st) {
   const yearSel = document.getElementById('yearSel');
   const examTypeSel = document.getElementById('examTypeSel');
   const printAllBtn = document.getElementById('printAllBtn');
+  const downloadCsvBtn = document.getElementById('downloadCsvBtn');
 
   classSel.onchange = () => {
     const klass = classSel.value;
     const students = st.students.filter(s => s.klass === klass).sort((a, b) => a.name.localeCompare(b.name));
     studentSel.innerHTML = `<option value="">Select student</option>` + students.map(s => `<option value="${s.id}">${UI.esc(s.name)}</option>`).join('');
     printAllBtn.disabled = !klass;
+    downloadCsvBtn.disabled = !klass;
     document.getElementById('reportWrap').innerHTML = '';
   };
 
@@ -1491,8 +1576,12 @@ function renderStudentReportCard(st) {
     const classTeacherName = classEntry ? classEntry.teacherName : '';
     const headName = st.settings.headName || '';
 
+    const section = gradeSection(gradeName);
+    const titleBandText = section ? section.title : 'Learner Report Card';
+
     return `
       <div class="report-card">
+        <div class="report-title-band">${UI.esc(titleBandText)}<span class="report-title-sub">${UI.esc(reportLabel)} &middot; ${UI.esc(term)} ${UI.esc(year)}</span></div>
         <div class="report-header">
           <div>
             <h2>${UI.esc(st.settings.schoolName)}</h2>
@@ -1558,6 +1647,35 @@ function renderStudentReportCard(st) {
       students.map(s => buildReportCardHTML(s, term, year, examType)).join('');
   };
 
+  downloadCsvBtn.onclick = () => {
+    const klass = classSel.value;
+    if (!klass) { UI.toast('Select a class first'); return; }
+    const term = termSel.value;
+    const year = yearSel.value;
+    const examType = examTypeSel.value;
+    const students = st.students.filter(s => s.klass === klass).sort((a, b) => a.name.localeCompare(b.name));
+    if (students.length === 0) { UI.toast('No students in this class'); return; }
+    const allTypeNames = Grading.examTypeNames(st);
+    const isSingle = !!examType;
+    const typesToShow = isSingle ? [examType] : allTypeNames;
+    const subjectNames = [...new Set(st.subjects.filter(s => st.exams.some(e => e.subjectId === s.id && e.klass === klass)).map(s => s.name))].sort();
+    const header = ['Name', 'Admission No.', 'Class', ...typesToShow.map(t => `${t} %`), isSingle ? 'Level' : 'Average %', isSingle ? '' : 'Level'].filter(Boolean);
+    const rows = students.map(s => {
+      const grid = Grading.buildStudentTermGrid(st, s.id, term, year);
+      const avg = isSingle
+        ? Grading.average(grid.map(r => (r.cells[examType] ? r.cells[examType].pct : null)).filter(v => v !== null))
+        : Grading.average(grid.map(r => r.average).filter(v => v !== null));
+      const band = avg === null ? null : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
+      const typeCols = typesToShow.map(t => {
+        const vals = grid.map(r => (r.cells[t] ? r.cells[t].pct : null)).filter(v => v !== null);
+        const a = Grading.average(vals);
+        return a === null ? '' : a.toFixed(1);
+      });
+      return [s.name, s.admissionNo || '', s.klass, ...typeCols, avg === null ? '' : avg.toFixed(1), band ? band.code : ''];
+    });
+    UI.downloadCSV(`report-cards-${klass}-${term}-${year}`.replace(/\s+/g, '_'), header, rows);
+  };
+
   document.getElementById('printBtn').onclick = () => window.print();
 }
 
@@ -1565,16 +1683,17 @@ function renderStudentReportCard(st) {
    term + year + subject), independent of the merged term report card
    above. Shows every student's mark, percentage, level and class
    position for just that one exam. ---- */
-function renderSingleExamReport(st) {
-  if (st.exams.length === 0) {
-    document.getElementById('modeWrap').innerHTML = `<div class="empty"><div class="empty-title">No exams yet</div><p>Create an exam first from the Exams page.</p></div>`;
+function renderSingleExamReport(st, scope) {
+  const examsInScope = scope && scope.isTeacher ? st.exams.filter(e => scope.subjectIds.has(e.subjectId)) : st.exams;
+  if (examsInScope.length === 0) {
+    document.getElementById('modeWrap').innerHTML = `<div class="empty"><div class="empty-title">No exams yet</div><p>${scope && scope.isTeacher ? 'No assessments recorded yet for your subject(s).' : 'Create an exam first from the Exams page.'}</p></div>`;
     return;
   }
 
   function subjectName(id) { return st.subjects.find(s => s.id === id)?.name || '—'; }
   function distinctSorted(arr) { return [...new Set(arr)].sort(); }
   function examsMatching(filter) {
-    return st.exams.filter(e =>
+    return examsInScope.filter(e =>
       (filter.klass === undefined || e.klass === filter.klass) &&
       (filter.type === undefined || e.type === filter.type) &&
       (filter.term === undefined || e.term === filter.term) &&
@@ -1582,12 +1701,12 @@ function renderSingleExamReport(st) {
     );
   }
 
-  const startExam = [...st.exams].sort((a, b) => (b.year - a.year) || a.term.localeCompare(b.term))[0];
+  const startExam = [...examsInScope].sort((a, b) => (b.year - a.year) || a.term.localeCompare(b.term))[0];
   let picked = { klass: startExam.klass, type: startExam.type, term: startExam.term, year: String(startExam.year) };
   let selectedId = startExam.id;
 
   function renderPicker() {
-    const klasses = distinctSorted(st.exams.map(e => e.klass));
+    const klasses = distinctSorted(examsInScope.map(e => e.klass));
     const types = distinctSorted(examsMatching({ klass: picked.klass }).map(e => e.type));
     const terms = distinctSorted(examsMatching({ klass: picked.klass, type: picked.type }).map(e => e.term));
     const years = distinctSorted(examsMatching({ klass: picked.klass, type: picked.type, term: picked.term }).map(e => String(e.year)));
@@ -1600,6 +1719,7 @@ function renderSingleExamReport(st) {
         <select id="esTerm">${terms.map(t => `<option value="${UI.esc(t)}" ${t === picked.term ? 'selected' : ''}>${UI.esc(t)}</option>`).join('')}</select>
         <select id="esYear">${years.map(y => `<option value="${UI.esc(y)}" ${y === picked.year ? 'selected' : ''}>${UI.esc(y)}</option>`).join('')}</select>
         <select id="esSubject">${subjectExams.map(e => `<option value="${e.id}" ${e.id === selectedId ? 'selected' : ''}>${UI.esc(subjectName(e.subjectId))}</option>`).join('')}</select>
+        <button class="btn" id="esCsvBtn"><i class="fa-solid fa-download"></i> Download CSV</button>
         <button class="btn btn-brass" id="esPrintBtn">Print / Save as PDF</button>
       </div>
     `;
@@ -1633,8 +1753,13 @@ function renderSingleExamReport(st) {
     const lowPct = validPcts.length ? Math.min(...validPcts) : null;
     const enteredCount = validPcts.length;
 
+    const examClassEntry = st.classes.find(c => c.label === exam.klass);
+    const examSection = gradeSection(examClassEntry ? examClassEntry.name : exam.klass);
+    const examTitleBandText = examSection ? examSection.title : 'Learner Report Card';
+
     return `
       <div class="report-card" id="esPrintArea">
+        <div class="report-title-band">${UI.esc(examTitleBandText)}<span class="report-title-sub">Single Exam Report &middot; ${UI.esc(exam.type)} &middot; ${UI.esc(exam.term)} ${UI.esc(exam.year)}</span></div>
         <div class="report-header">
           <div>
             <h2>${UI.esc(st.settings.schoolName)}</h2>
@@ -1689,6 +1814,19 @@ function renderSingleExamReport(st) {
     const yearSel = document.getElementById('esYear');
     const subjectSel = document.getElementById('esSubject');
     document.getElementById('esPrintBtn').onclick = () => window.print();
+    document.getElementById('esCsvBtn').onclick = () => {
+      const exam = st.exams.find(e => e.id === selectedId);
+      if (!exam) return;
+      const students = st.students.filter(s => s.klass === exam.klass).sort((a, b) => a.name.localeCompare(b.name));
+      const header = ['Name', 'Admission No.', 'Marks', 'Out of', 'Percentage', 'Level'];
+      const rows = students.map(s => {
+        const res = st.results.find(r => r.examId === exam.id && r.studentId === s.id) || null;
+        const pct = res ? Grading.percent(res.marks, exam.totalMarks) : null;
+        const band = res ? Grading.levelForMarks(res.marks, exam.totalMarks, st.settings.gradingBands) : null;
+        return [s.name, s.admissionNo || '', res ? res.marks : '', exam.totalMarks, pct === null ? '' : pct.toFixed(1), band ? band.code : ''];
+      });
+      UI.downloadCSV(`exam-report-${exam.klass}-${exam.type}-${exam.term}-${exam.year}`.replace(/\s+/g, '_'), header, rows);
+    };
 
     function syncAndRepaint() {
       const types = distinctSorted(examsMatching({ klass: picked.klass }).map(e => e.type));
@@ -1723,13 +1861,13 @@ function renderSingleExamReport(st) {
    already includes the stream, e.g. "Grade 7 East"), so admins and
    teachers can compare how classes/streams stack up against each
    other for a given term/year (and optionally one exam type). ---- */
-function renderClassPerformanceReport(st) {
+function renderClassPerformanceReport(st, scope) {
   if (st.students.length === 0) {
     document.getElementById('modeWrap').innerHTML = `<div class="empty"><div class="empty-title">No students yet</div><p>Add students to see class/stream performance here.</p></div>`;
     return;
   }
 
-  const classes = classOptionLabels(st);
+  const classes = scope && scope.isTeacher ? [...scope.classLabels].sort() : classOptionLabels(st);
   let picked = { term: st.settings.term, year: String(st.settings.year), type: '' };
 
   function renderFilterRow() {
@@ -1743,6 +1881,7 @@ function renderClassPerformanceReport(st) {
           <option value="" ${picked.type === '' ? 'selected' : ''}>All exam types</option>
           ${st.examTypes.map(t => `<option value="${UI.esc(t.name)}" ${picked.type === t.name ? 'selected' : ''}>${UI.esc(t.name)}</option>`).join('')}
         </select>
+        <button class="btn" id="cpCsvBtn"><i class="fa-solid fa-download"></i> Download CSV</button>
         <button class="btn btn-brass" id="cpPrintBtn">Print / Save as PDF</button>
       </div>
       <p class="field-hint no-print" style="margin-bottom:14px;">Compares every class/stream for the chosen term, year and (optionally) one exam type — leave "All exam types" selected for the whole term's picture.</p>
@@ -1788,6 +1927,7 @@ function renderClassPerformanceReport(st) {
 
     return `
       <div class="report-card" id="cpPrintArea">
+        <div class="report-title-band">Class / Stream Performance Report<span class="report-title-sub">${picked.type ? UI.esc(picked.type) + ' &middot; ' : ''}${UI.esc(picked.term)} ${UI.esc(picked.year)}</span></div>
         <div class="report-header">
           <div>
             <h2>${UI.esc(st.settings.schoolName)}</h2>
@@ -1848,6 +1988,12 @@ function renderClassPerformanceReport(st) {
 
   function wireFilters() {
     document.getElementById('cpPrintBtn').onclick = () => window.print();
+    document.getElementById('cpCsvBtn').onclick = () => {
+      const stats = computeClassStats();
+      const header = ['Class', 'Students', 'Exams', 'Average %', 'Level', 'High %', 'Low %', 'Marks entered %'];
+      const rows = stats.map(c => [c.klass, c.students, c.examCount, c.avg === null ? '' : c.avg.toFixed(1), c.band ? c.band.code : '', c.high === null ? '' : c.high.toFixed(1), c.low === null ? '' : c.low.toFixed(1), c.completion === null ? '' : c.completion.toFixed(0)]);
+      UI.downloadCSV(`class-performance-${picked.term}-${picked.year}`.replace(/\s+/g, '_'), header, rows);
+    };
     document.getElementById('cpTerm').onchange = (e) => { picked.term = e.target.value; paint(); };
     document.getElementById('cpYear').onchange = (e) => { picked.year = e.target.value; paint(); };
     document.getElementById('cpType').onchange = (e) => { picked.type = e.target.value; paint(); };

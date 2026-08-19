@@ -18,15 +18,21 @@ Views.notify = async function () {
   setTopbarActions('');
   showLoading();
   const st = await Store.current();
+  const user = Auth.currentUser();
+  // Send to Parents is only in a teacher's nav when they're a class
+  // teacher (see auth.js) — and even then, scoped to just their own
+  // class(es), never the whole school's sittings.
+  const scope = teacherScope(st, user);
 
   if (st.students.length === 0 || st.exams.length === 0) {
     document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">Nothing to send yet</div><p>Add students and record at least one exam first.</p></div>`;
     return;
   }
 
-  const publishedSorted = [...st.published].sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+  let publishedSorted = [...st.published].sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+  if (scope.isTeacher) publishedSorted = publishedSorted.filter(p => scope.classLabels.has(p.klass));
   if (publishedSorted.length === 0) {
-    document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">No published results yet</div><p>Results can only be sent to parents once a sitting has been published on the <a href="#analysis">Analysis</a> page.</p></div>`;
+    document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">No published results yet</div><p>Results can only be sent to parents once a sitting has been published on the <a href="#analysis">Analysis</a> page${scope.isTeacher ? ', for one of your classes' : ''}.</p></div>`;
     return;
   }
 
@@ -36,6 +42,7 @@ Views.notify = async function () {
   let template = DEFAULT_TEMPLATE;
   let onlyUncontacted = false;
   let search = '';
+  let selected = new Set(); // student ids checked for bulk actions — reset whenever the visible row set changes
 
   document.getElementById('content').innerHTML = `
     <div class="filter-row no-print">
@@ -126,17 +133,56 @@ Views.notify = async function () {
 
     const contactedCount = results.filter(r => sentMap.has(r.student.id)).length;
 
+    function buildVars(stu, r) {
+      return {
+        name: stu.name, class: stu.klass, sitting: sittingLabel,
+        average: r.avg === null ? '—' : r.avg.toFixed(1),
+        level: r.band ? r.band.label : 'not yet graded',
+        position: r.position === null ? 'not yet ranked' : `${ordinal(r.position)} out of ${r.outOf}`,
+        school: st.settings.schoolName || 'the school'
+      };
+    }
+    function messageFor(stu, r) { return fillTemplate(templateBox.value || DEFAULT_TEMPLATE, buildVars(stu, r)); }
+    function urlFor(channel, stu, message) {
+      if (channel === 'whatsapp') return `https://wa.me/${digitsOnly(stu.parentPhone)}?text=${encodeURIComponent(message)}`;
+      if (channel === 'sms') return `sms:${stu.parentPhone}?&body=${encodeURIComponent(message)}`;
+      if (channel === 'email') return `mailto:${stu.parentEmail}?subject=${encodeURIComponent(`${st.settings.schoolName || 'the school'} — ${sittingLabel} results for ${stu.name}`)}&body=${encodeURIComponent(message)}`;
+      return '';
+    }
+
+    // Bulk actions only make sense for students who are actually
+    // reachable and not already sent — that's the pool "Select all" picks.
+    const bulkEligible = rows.filter(r => (r.student.parentPhone || r.student.parentEmail) && !sentMap.has(r.student.id));
+    const visibleIds = new Set(rows.map(r => r.student.id));
+    [...selected].forEach(id => { if (!visibleIds.has(id)) selected.delete(id); }); // drop stale selections when filters change
+    const selectedCount = selected.size;
+
     const bodyHtml = `
       <p class="field-hint" style="margin:0 0 14px 0;">
         ${UI.esc(chosen.klass)} &middot; ${UI.esc(sittingLabel)} &middot;
         ${contactedCount} / ${results.length} parent${results.length === 1 ? '' : 's'} contacted so far.
       </p>
+      <div class="filter-row no-print" style="margin-bottom:10px; align-items:center;">
+        <button class="btn btn-sm" id="ntSelectAllBtn" ${bulkEligible.length === 0 ? 'disabled' : ''}>Select all not-yet-sent (${bulkEligible.length})</button>
+        <button class="btn btn-sm btn-ghost" id="ntClearSelBtn" ${selectedCount === 0 ? 'disabled' : ''}>Clear selection</button>
+        <button class="btn btn-sm" id="ntCsvBtn"><i class="fa-solid fa-download"></i> Download CSV</button>
+        <span class="field-hint" style="margin-left:auto;">${selectedCount} selected</span>
+      </div>
+      <div class="card no-print" id="ntBulkBar" style="margin-bottom:14px; display:${selectedCount ? 'flex' : 'none'}; gap:8px; flex-wrap:wrap; align-items:center;">
+        <strong style="font-size:13.5px;">Bulk send to ${selectedCount} parent${selectedCount === 1 ? '' : 's'}:</strong>
+        <button class="btn btn-sm btn-primary" id="ntBulkWhatsApp"><i class="fa-brands fa-whatsapp"></i> WhatsApp</button>
+        <button class="btn btn-sm btn-primary" id="ntBulkSms"><i class="fa-solid fa-comment-sms"></i> SMS</button>
+        <button class="btn btn-sm btn-primary" id="ntBulkEmail"><i class="fa-solid fa-envelope"></i> Email</button>
+        <button class="btn btn-sm btn-ghost" id="ntBulkMarkSent">Mark all as sent (no message)</button>
+        <p class="field-hint" style="margin:4px 0 0 0; width:100%;">WhatsApp/SMS/Email open one at a time so your browser doesn't block the pop-ups — confirm each send and it moves to the next automatically.</p>
+      </div>
       ${rows.length === 0 ? `<div class="empty"><div class="empty-title">No students match</div></div>` : `
       <div class="ledger">
         <div class="ledger-scroll">
           <table class="ledger-table">
             <thead>
               <tr>
+                <th class="no-print"><input type="checkbox" id="ntSelectAllChk" ${bulkEligible.length > 0 && bulkEligible.every(r => selected.has(r.student.id)) ? 'checked' : ''}></th>
                 <th>Name</th><th>ADM NO.</th><th>Average</th><th>Level</th><th>Position</th>
                 <th>Parent contact</th><th>Status</th><th>Send</th>
               </tr>
@@ -155,6 +201,7 @@ Views.notify = async function () {
                 const previewMsg = fillTemplate(templateBox.value || DEFAULT_TEMPLATE, vars);
                 const hasPhone = !!stu.parentPhone;
                 const hasEmail = !!stu.parentEmail;
+                const canBulk = (hasPhone || hasEmail) && !notif;
                 const statusHtml = notif
                   ? `<span class="badge badge-EE"><i class="fa-solid fa-circle-check"></i> Sent</span><br><span class="lb-sub">${new Date(notif.sentAt).toLocaleString()} &middot; ${UI.esc(notif.channel)}</span>`
                   : `<span class="badge badge-none">Not sent</span>`;
@@ -162,6 +209,7 @@ Views.notify = async function () {
                   ? `${stu.parentPhone ? UI.esc(stu.parentPhone) + '<br>' : ''}${stu.parentEmail ? UI.esc(stu.parentEmail) : ''}`
                   : `<span class="lb-sub">No contact on file</span>`;
                 return `<tr>
+                  <td class="no-print"><input type="checkbox" data-select="${stu.id}" ${selected.has(stu.id) ? 'checked' : ''} ${canBulk ? '' : 'disabled'}></td>
                   <td>${UI.esc(stu.name)}</td>
                   <td class="num">${UI.esc(stu.admissionNo) || '—'}</td>
                   <td class="num">${r.avg === null ? '—' : r.avg.toFixed(1) + '%'}</td>
@@ -186,6 +234,102 @@ Views.notify = async function () {
       </div>`}
     `;
     document.getElementById('ntBody').innerHTML = bodyHtml;
+
+    // ---- Selection checkboxes ----
+    document.querySelectorAll('[data-select]').forEach(chk => {
+      chk.onchange = () => {
+        if (chk.checked) selected.add(chk.dataset.select); else selected.delete(chk.dataset.select);
+        paint();
+      };
+    });
+    const selectAllChk = document.getElementById('ntSelectAllChk');
+    if (selectAllChk) selectAllChk.onchange = () => {
+      if (selectAllChk.checked) bulkEligible.forEach(r => selected.add(r.student.id));
+      else bulkEligible.forEach(r => selected.delete(r.student.id));
+      paint();
+    };
+    document.getElementById('ntSelectAllBtn').onclick = () => { bulkEligible.forEach(r => selected.add(r.student.id)); paint(); };
+    document.getElementById('ntClearSelBtn').onclick = () => { selected.clear(); paint(); };
+
+    // ---- Download CSV of the currently filtered rows (with a ready-to-use
+    // message column) — for pasting into a bulk SMS/WhatsApp broadcast tool
+    // that isn't wired into the app directly. ----
+    document.getElementById('ntCsvBtn').onclick = () => {
+      if (rows.length === 0) { UI.toast('No students to download'); return; }
+      const header = ['Name', 'Admission No.', 'Average %', 'Level', 'Position', 'Parent name', 'Parent phone', 'Parent email', 'Status', 'Message'];
+      const csvRows = rows.map(r => {
+        const stu = r.student;
+        const notif = sentMap.get(stu.id);
+        return [
+          stu.name, stu.admissionNo || '', r.avg === null ? '' : r.avg.toFixed(1), r.band ? r.band.code : '',
+          r.position === null ? '' : `${ordinal(r.position)} of ${r.outOf}`,
+          stu.parentName || '', stu.parentPhone || '', stu.parentEmail || '',
+          notif ? `Sent (${notif.channel})` : 'Not sent', messageFor(stu, r)
+        ];
+      });
+      UI.downloadCSV(`results-notifications-${chosen.klass}-${chosen.type}-${chosen.term}-${chosen.year}`.replace(/\s+/g, '_'), header, csvRows);
+    };
+
+    // ---- Bulk send: walks the selection one parent at a time, in a
+    // stepper modal. Each "Open ..." click is its own user gesture, so
+    // the pop-up never gets blocked, and logs a sent record + advances
+    // as soon as it's opened. ----
+    function runBulkSend(channel) {
+      const queue = rows.filter(r => selected.has(r.student.id) && (channel === 'email' ? r.student.parentEmail : r.student.parentPhone));
+      if (queue.length === 0) { UI.toast('None of the selected parents have a contact for that channel'); return; }
+      let i = 0;
+      function renderStep() {
+        const r = queue[i];
+        const stu = r.student;
+        const message = messageFor(stu, r);
+        UI.openModal(`
+          <h2>Bulk send &middot; ${channel === 'whatsapp' ? 'WhatsApp' : channel === 'sms' ? 'SMS' : 'Email'}</h2>
+          <p class="field-hint">Sending ${i + 1} of ${queue.length} &middot; ${UI.esc(stu.name)}</p>
+          <textarea rows="4" readonly style="width:100%; font-family:inherit; font-size:13.5px; padding:8px; border-radius:8px; border:1px solid var(--paper-line); resize:vertical;">${UI.esc(message)}</textarea>
+          <div class="modal-actions">
+            <button class="btn btn-ghost" id="bulkSkipBtn">Skip</button>
+            <button class="btn btn-ghost" id="bulkStopBtn">Stop here</button>
+            <button class="btn btn-primary" id="bulkOpenBtn">Open ${channel === 'whatsapp' ? 'WhatsApp' : channel === 'sms' ? 'Messages' : 'Mail'} &amp; mark sent</button>
+          </div>
+        `, (root) => {
+          root.querySelector('#bulkStopBtn').onclick = () => { UI.closeModal(); paint(); };
+          root.querySelector('#bulkSkipBtn').onclick = () => { advance(); };
+          root.querySelector('#bulkOpenBtn').onclick = async () => {
+            const url = urlFor(channel, stu, message);
+            if (channel === 'whatsapp') window.open(url, '_blank'); else window.location.href = url;
+            try {
+              await Store.logNotification({ studentId: stu.id, klass: chosen.klass, type: chosen.type, term: chosen.term, year: chosen.year, channel });
+            } catch (e) { UI.toast(`Opened for ${stu.name}, but could not save the "sent" record: ` + e.message); }
+            advance();
+          };
+        });
+      }
+      function advance() {
+        selected.delete(queue[i].student.id);
+        i++;
+        if (i >= queue.length) { UI.closeModal(); UI.toast('Bulk send finished'); paint(); return; }
+        renderStep();
+      }
+      renderStep();
+    }
+    const bulkWhatsApp = document.getElementById('ntBulkWhatsApp');
+    if (bulkWhatsApp) bulkWhatsApp.onclick = () => runBulkSend('whatsapp');
+    const bulkSms = document.getElementById('ntBulkSms');
+    if (bulkSms) bulkSms.onclick = () => runBulkSend('sms');
+    const bulkEmail = document.getElementById('ntBulkEmail');
+    if (bulkEmail) bulkEmail.onclick = () => runBulkSend('email');
+    const bulkMarkSent = document.getElementById('ntBulkMarkSent');
+    if (bulkMarkSent) bulkMarkSent.onclick = () => {
+      const ids = [...selected];
+      UI.confirmAction(`Mark ${ids.length} parent(s) as sent, without opening any message? Use this only if you already shared results another way.`, async () => {
+        try {
+          await Promise.all(ids.map(id => Store.logNotification({ studentId: id, klass: chosen.klass, type: chosen.type, term: chosen.term, year: chosen.year, channel: 'manual' })));
+          selected.clear();
+          UI.toast('Marked as sent');
+          paint();
+        } catch (e) { UI.toast('Could not save: ' + e.message); }
+      }, { confirmLabel: 'Mark as sent', confirmClass: 'btn-primary' });
+    };
 
     document.querySelectorAll('[data-send]').forEach(btn => {
       btn.onclick = async () => {

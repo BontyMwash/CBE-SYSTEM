@@ -8,13 +8,22 @@ Views.broadsheet = async function () {
   setTopbarActions('');
   showLoading();
   const st = await Store.current();
+  const user = Auth.currentUser();
+  // Broadsheet exposes every subject for a whole class — only reachable
+  // in the nav for class teachers (see auth.js), and even then scoped
+  // to just the class(es) they hold, not the whole school.
+  const scope = teacherScope(st, user);
 
   if (st.students.length === 0 || st.exams.length === 0) {
     document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">Nothing to show yet</div><p>Add students and record at least one exam first.</p></div>`;
     return;
   }
+  if (scope.isTeacher && scope.classLabels.size === 0) {
+    document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">No classes assigned to you yet</div><p>Ask your administrator to assign your class(es) from the Users page.</p></div>`;
+    return;
+  }
 
-  const classes = classesFromStudents(st.students);
+  const classes = scope.isTeacher ? [...scope.classLabels].sort() : classesFromStudents(st.students);
 
   document.getElementById('content').innerHTML = `
     <div class="filter-row no-print">
@@ -27,6 +36,7 @@ Views.broadsheet = async function () {
         ${['Term 1', 'Term 2', 'Term 3'].map(t => `<option value="${t}" ${st.settings.term === t ? 'selected' : ''}>${t}</option>`).join('')}
       </select>
       <input type="number" id="bsYear" value="${st.settings.year}" style="width:90px;">
+      <button class="btn" id="bsCsvBtn"><i class="fa-solid fa-download"></i> Download CSV</button>
       <button class="btn btn-brass" id="bsPrintBtn">Print / Save as PDF</button>
     </div>
     <p class="field-hint no-print" style="margin-bottom:14px;">Tip: choose "Landscape" in the print dialog for a wide class list.</p>
@@ -40,7 +50,10 @@ Views.broadsheet = async function () {
 
   [classSel, typeSel, termSel, yearSel].forEach(el => el.onchange = render);
 
+  let lastCsv = null; // set inside render(); read by the Download CSV button
+
   function render() {
+    lastCsv = null;
     const klass = classSel.value;
     const type = typeSel.value;
     const term = termSel.value;
@@ -94,6 +107,21 @@ Views.broadsheet = async function () {
       if (r.meanPct !== lastMean) { rank = seen; lastMean = r.meanPct; }
       rankMap.set(r.student.id, rank);
     });
+
+    lastCsv = {
+      filename: `broadsheet-${klass}-${type}-${term}-${year}`.replace(/\s+/g, '_'),
+      header: ['Pos.', 'Name', 'Adm. No.', ...subjectCols.map(c => c.subject.name), 'Total Marks', 'Mean %', 'Level'],
+      rows: ranked.map(r => {
+        const band = r.meanPct === null ? null : Grading.levelForMarks(r.meanPct, 100, st.settings.gradingBands);
+        return [
+          rankMap.get(r.student.id), r.student.name, r.student.admissionNo || '',
+          ...r.cells.map(c => c.pct === null ? '' : c.pct.toFixed(1)),
+          r.totalObtained === null ? '' : `${r.totalObtained}/${r.totalPossible}`,
+          r.meanPct === null ? '' : r.meanPct.toFixed(1),
+          band ? band.code : ''
+        ];
+      })
+    };
 
     // Class-level subject averages (bottom row)
     const subjectAverages = subjectCols.map((col, i) => {
@@ -299,5 +327,9 @@ Views.broadsheet = async function () {
   }
 
   document.getElementById('bsPrintBtn').onclick = () => window.print();
+  document.getElementById('bsCsvBtn').onclick = () => {
+    if (!lastCsv) { UI.toast('Choose a class and exam type first'); return; }
+    UI.downloadCSV(lastCsv.filename, lastCsv.header, lastCsv.rows);
+  };
   render();
 };

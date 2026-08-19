@@ -152,7 +152,7 @@ create table result_notifications (
   type        text not null,
   term        text not null check (term in ('Term 1','Term 2','Term 3')),
   year        int  not null,
-  channel     text not null check (channel in ('whatsapp','sms','email')),
+  channel     text not null check (channel in ('whatsapp','sms','email','manual')),
   sent_at     timestamptz not null default now(),
   sent_by     uuid references profiles(id) on delete set null
 );
@@ -297,6 +297,12 @@ create policy "admin update students" on students
   for update using (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id() and school_active()));
 create policy "admin delete students" on students
   for delete using (is_superadmin() or (app_current_role() = 'admin' and school_id = current_school_id() and school_active()));
+
+-- Note: the policy letting a CLASS TEACHER also insert learners into
+-- their own class(es) lives in sql/012_class_teacher_add_students.sql,
+-- not here — it depends on teacher_has_class(), which is defined in
+-- sql/009_teacher_classes_attendance_competency.sql, not in this base
+-- schema. Run 009 then 012 after this file (see README).
 
 -- ===== subjects =====
 create policy "select subjects in own school" on subjects

@@ -91,6 +91,29 @@ const UI = {
     requestAnimationFrame(tick);
   },
 
+  // Builds a CSV file from a header row + array-of-arrays body and
+  // triggers a browser download. Values are stringified and quoted
+  // whenever they contain a comma, quote, or newline. Shared by every
+  // "Download CSV" button across Reports / Broadsheet / class lists.
+  downloadCSV(filename, header, rows) {
+    const esc = (v) => {
+      if (v === null || v === undefined) return '';
+      const s = String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [header, ...rows].map(r => r.map(esc).join(','));
+    const csv = '\uFEFF' + lines.join('\r\n'); // BOM so Excel opens UTF-8 cleanly
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename.endsWith('.csv') ? filename : `${filename}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+
   confirmAction(message, onConfirm, opts) {
     const confirmLabel = (opts && opts.confirmLabel) || 'Delete';
     const confirmClass = (opts && opts.confirmClass) || 'btn-danger';

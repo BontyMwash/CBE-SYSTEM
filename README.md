@@ -44,6 +44,9 @@ project/
 │   ├── 006_published_results.sql # migration for existing installs — adds "publish results" support
 │   ├── 008_parent_contacts_and_notifications.sql # migration for existing installs — adds parent contact fields + notification log
 │   └── 009_teacher_classes_attendance_competency.sql # migration for existing installs — adds My Classes/Attendance/Competency Assessment support
+│   └── 010_fix_attendance_access.sql # migration for existing installs — fixes Attendance saving for teachers only assigned a subject (not yet a class)
+│   └── 011_allow_manual_notification_channel.sql # migration for existing installs — lets "mark as sent" (bulk, no message) log a notification
+│   └── 012_class_teacher_add_students.sql # migration for existing installs — lets a class teacher add learners into their own class(es)
 └── supabase/
     └── functions/
         └── manage-user/
@@ -78,7 +81,17 @@ add parent contact fields + the "Send Results to Parents" notification
 log — and `sql/009_teacher_classes_attendance_competency.sql` to add
 teacher↔class assignments, Attendance, and Competency Assessment,
 plus let a subject teacher create their own Assessments (exams) for
-a subject already assigned to them.)
+a subject already assigned to them. If you've already run 009, also
+run `sql/010_fix_attendance_access.sql` — it fixes a bug where a
+teacher who's only been assigned a **subject** (not yet a class) could
+see their class on the Attendance page but every save silently failed;
+010 makes the database permission match what the screen already shows.
+Also run `sql/011_allow_manual_notification_channel.sql` — it lets the
+new bulk "Mark all as sent (no message)" action on Send Results to
+Parents log correctly; without it that one action fails. Also run
+`sql/012_class_teacher_add_students.sql` — it lets a class teacher use
+the new "+ Add learner" button on their Learners page; without it the
+button is visible but every save is silently rejected by the database.)
 
 ### 3. Deploy the Edge Function
 This requires the [Supabase CLI](https://supabase.com/docs/guides/cli):
@@ -134,14 +147,28 @@ creates the school's first Admin login in the same step.
   Classes, Learners, Assessments (create/edit exams for their own
   subject), Marks Entry (including setting "out of how many"), Marks
   Analysis for sittings their admin has published, Gradebook,
-  Report Cards, Attendance, Competency Assessment, Reports (a hub of
-  every export above), plus Broadsheet and Send to Parents. Which
-  classes show up under My Classes/Learners/Attendance, and which
-  subjects under Assessments/Marks Entry/Gradebook/Competency
+  Report Cards (scoped to their own class(es) only), Attendance,
+  Competency Assessment, and Reports (a hub of every export above).
+  **Broadsheet** and **Send Results to Parents** are *not* shown to a
+  plain subject teacher — both expose every subject for a whole class,
+  so they only appear for a **class teacher** (a teacher who's been
+  assigned at least one class from the Users page). Which classes show
+  up under My Classes/Learners/Attendance/Report Cards/Broadsheet, and
+  which subjects under Assessments/Marks Entry/Gradebook/Competency
   Assessment, are set per teacher from the Users page ("Manage
   classes" / "Manage subjects") — everything else stays out of reach.
   Can't touch student/subject/exam-type setup or settings, and can't
   see Marks Analysis for anything not yet published.
+
+  Report Cards, Broadsheet, class lists (Learners / Students), and
+  Send Results to Parents all have a **Download CSV** button alongside
+  the existing Print/Save-as-PDF button. Send Results to Parents also
+  supports **bulk sending**: select several parents (or "Select all
+  not-yet-sent") and send WhatsApp/SMS/Email to the whole batch —
+  each message still opens one at a time so browsers don't block the
+  pop-up, but it auto-advances after each one — or download a CSV with
+  a ready-to-use message column for pasting into an external bulk SMS
+  tool.
 
 These aren't just UI restrictions — a User's Supabase session literally
 cannot read or write rows outside their school, or delete a student, no
