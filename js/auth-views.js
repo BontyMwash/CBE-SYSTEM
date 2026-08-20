@@ -707,16 +707,18 @@ Views.users = async function () {
       `, (root) => { root.querySelector('#cancelBtn').onclick = () => UI.closeModal(); });
       return;
     }
+    const sortedSubjects = [...st.subjects].sort((a, b) => a.name.localeCompare(b.name));
     UI.openModal(`
       <h2>Manage subjects — ${UI.esc(existing.name)}</h2>
-      <p class="field-hint" style="margin-bottom:12px;">Only the subjects checked below will be visible to ${UI.esc(existing.name)} on Results Entry, Report Cards and Exams for editing — this keeps each teacher scoped to their own subject(s).</p>
-      <div class="form-grid">
-        ${[...st.subjects].sort((a, b) => a.name.localeCompare(b.name)).map(s => `
-          <label class="field full" style="flex-direction:row; align-items:center; gap:10px;">
-            <input type="checkbox" data-subj-check="${s.id}" ${assigned.has(s.id) ? 'checked' : ''} style="width:auto;">
-            <span>${UI.esc(s.name)}${s.code ? ` <span class="row-index">(${UI.esc(s.code)})</span>` : ''}</span>
-          </label>
-        `).join('')}
+      <p class="field-hint" style="margin-bottom:12px;">Only the subjects selected below will be visible to ${UI.esc(existing.name)} on Results Entry, Report Cards and Exams for editing — this keeps each teacher scoped to their own subject(s).</p>
+      <div class="field full">
+        <label>Subjects</label>
+        <select id="subjectMultiSelect" multiple size="${Math.min(10, Math.max(4, sortedSubjects.length))}" style="width:100%;">
+          ${sortedSubjects.map(s => `
+            <option value="${s.id}" ${assigned.has(s.id) ? 'selected' : ''}>${UI.esc(s.name)}${s.code ? ` (${UI.esc(s.code)})` : ''}</option>
+          `).join('')}
+        </select>
+        <p class="field-hint" style="margin-top:8px;">Hold Ctrl (Windows) or Cmd (Mac) to select more than one subject from the list.</p>
       </div>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
@@ -725,9 +727,8 @@ Views.users = async function () {
     `, (root) => {
       root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
       root.querySelector('#saveBtn').onclick = async () => {
-        const subjectIds = Array.from(root.querySelectorAll('[data-subj-check]'))
-          .filter(cb => cb.checked)
-          .map(cb => cb.dataset.subjCheck);
+        const subjectIds = Array.from(root.querySelector('#subjectMultiSelect').selectedOptions)
+          .map(opt => opt.value);
         try {
           await Store.setTeacherSubjects(existing.id, subjectIds);
           UI.toast('Subjects updated');

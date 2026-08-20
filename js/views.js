@@ -368,32 +368,45 @@ Views.dashboard = async function () {
   ].join('');  setTopbarActions(headerActions);
 
   // ---- derived data (all real — nothing fabricated) ----
+  // Everything below is scoped to the active level filter (see
+  // effectiveLevel()/levelAllows() above the switcher), so the whole
+  // dashboard — not just the class cards — updates when the person
+  // switches Primary / Junior Secondary / Senior School.
   const classes = classOptionLabels(st);
-  const totalStudents = st.students.length;
-  const totalSubjects = st.subjects.length;
-  const totalExams = st.exams.length;
-  const totalResults = st.results.length;
+  const students = st.students.filter(s => levelAllows(s.klass));
+  const exams = st.exams.filter(e => levelAllows(e.klass));
+  const examIdsInLevel = new Set(exams.map(e => e.id));
+  const results = st.results.filter(r => examIdsInLevel.has(r.examId));
+  const subjectIdsInLevel = new Set(exams.map(e => e.subjectId));
+  const subjects = st.subjects.filter(s => subjectIdsInLevel.has(s.id));
+
+  const totalStudents = students.length;
+  const totalSubjects = subjects.length;
+  const totalExams = exams.length;
+  const totalResults = results.length;
   const bands = st.settings.gradingBands || [];
 
   function pctsFor(examList) {
     const pcts = [];
-    examList.forEach(exam => {
-      st.results.filter(r => r.examId === exam.id).forEach(r => pcts.push(Grading.percent(r.marks, exam.totalMarks)));
+    const examIds = new Set(examList.map(e => e.id));
+    results.filter(r => examIds.has(r.examId)).forEach(r => {
+      const exam = examList.find(e => e.id === r.examId);
+      if (exam) pcts.push(Grading.percent(r.marks, exam.totalMarks));
     });
     return pcts;
   }
 
-  const overallAvg = Grading.average(pctsFor(st.exams));
+  const overallAvg = Grading.average(pctsFor(exams));
 
   // Per-class stats (also drives the class comparison chart + class cards)
   const classStats = classes.map(klass => {
-    const studentsInClass = st.students.filter(s => s.klass === klass);
-    const examsForClass = st.exams.filter(e => e.klass === klass);
+    const studentsInClass = students.filter(s => s.klass === klass);
+    const examsForClass = exams.filter(e => e.klass === klass);
     const pcts = pctsFor(examsForClass);
     const avg = Grading.average(pcts);
     const band = avg === null ? null : Grading.levelForMarks(avg, 100, bands);
     const expected = examsForClass.reduce((sum, e) => sum + studentsInClass.length, 0);
-    const entered = examsForClass.reduce((sum, e) => sum + st.results.filter(r => r.examId === e.id).length, 0);
+    const entered = examsForClass.reduce((sum, e) => sum + results.filter(r => r.examId === e.id).length, 0);
     return {
       klass, students: studentsInClass.length, exams: examsForClass.length,
       avg, band, high: pcts.length ? Math.max(...pcts) : null, low: pcts.length ? Math.min(...pcts) : null,
@@ -402,24 +415,24 @@ Views.dashboard = async function () {
   });
 
   // Per-subject stats (drives subject performance chart + "lowest subject" insight)
-  const subjectStats = st.subjects.map(subj => {
-    const examsForSubj = st.exams.filter(e => e.subjectId === subj.id);
+  const subjectStats = subjects.map(subj => {
+    const examsForSubj = exams.filter(e => e.subjectId === subj.id);
     const avg = Grading.average(pctsFor(examsForSubj));
     return { subject: subj, avg };
   });
 
   // Overall completion: marks entered vs. marks expected across every exam
-  const expectedTotal = st.exams.reduce((sum, e) => sum + st.students.filter(s => s.klass === e.klass).length, 0);
+  const expectedTotal = exams.reduce((sum, e) => sum + students.filter(s => s.klass === e.klass).length, 0);
   const completionPct = expectedTotal > 0 ? Math.min(100, (totalResults / expectedTotal) * 100) : null;
 
   const topClass = classStats.filter(c => c.avg !== null).sort((a, b) => b.avg - a.avg)[0] || null;
   const lowestSubject = subjectStats.filter(s => s.avg !== null).sort((a, b) => a.avg - b.avg)[0] || null;
 
   // Per-student averages (drives leaderboard + intervention list)
-  const studentAverages = st.students.map(s => {
+  const studentAverages = students.map(s => {
     const pcts = [];
-    st.results.filter(r => r.studentId === s.id).forEach(r => {
-      const exam = st.exams.find(e => e.id === r.examId);
+    results.filter(r => r.studentId === s.id).forEach(r => {
+      const exam = exams.find(e => e.id === r.examId);
       if (exam) pcts.push(Grading.percent(r.marks, exam.totalMarks));
     });
     const avg = Grading.average(pcts);
@@ -433,8 +446,8 @@ Views.dashboard = async function () {
   // Subjects each at-risk student is struggling in (their own pct < 50)
   function weakSubjectsFor(student) {
     const weak = [];
-    st.results.filter(r => r.studentId === student.id).forEach(r => {
-      const exam = st.exams.find(e => e.id === r.examId);
+    results.filter(r => r.studentId === student.id).forEach(r => {
+      const exam = exams.find(e => e.id === r.examId);
       if (!exam) return;
       const pct = Grading.percent(r.marks, exam.totalMarks);
       if (pct !== null && pct < 50) {
@@ -448,20 +461,20 @@ Views.dashboard = async function () {
   // CBC competency distribution across every individual result entered
   const bandCounts = {};
   bands.forEach(b => { bandCounts[b.code] = 0; });
-  st.results.forEach(r => {
-    const exam = st.exams.find(e => e.id === r.examId);
+  results.forEach(r => {
+    const exam = exams.find(e => e.id === r.examId);
     if (!exam) return;
     const band = Grading.levelForMarks(r.marks, exam.totalMarks, bands);
     if (band) bandCounts[band.code] = (bandCounts[band.code] || 0) + 1;
   });
 
   // Recent exams as a lightweight, real activity feed (no fabricated log)
-  const recentExams = [...st.exams].filter(e => e.date).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 6);
+  const recentExams = [...exams].filter(e => e.date).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 6);
 
   // Performance trend across exam types for the current term/year
   const examTypeOrder = Grading.examTypeNames(st);
   const trendPoints = examTypeOrder.map(type => {
-    const examsOfType = st.exams.filter(e => e.type === type && e.term === st.settings.term && String(e.year) === String(st.settings.year));
+    const examsOfType = exams.filter(e => e.type === type && e.term === st.settings.term && String(e.year) === String(st.settings.year));
     return { type, avg: Grading.average(pctsFor(examsOfType)) };
   });
 

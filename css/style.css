@@ -272,6 +272,17 @@ button, input, select, textarea {
 
 #levelSwitcherSel:focus { outline: 2px solid rgba(237,238,249,0.4); outline-offset: 1px; }
 
+/* The <select> itself sits on the dark sidebar, so its light text
+   (#EFEEE6) reads fine — but browsers render the dropdown's OPEN
+   option list with its own (usually white/system) background, and
+   without an explicit color here the options inherited that same
+   light text, making every option unreadable once the list opened.
+   Force a normal dark-on-light pairing for the popped-open list. */
+#levelSwitcherSel option {
+  color: #1C1B1F;
+  background: #FFFFFF;
+}
+
 .level-locked-badge {
   display: flex;
   align-items: center;
