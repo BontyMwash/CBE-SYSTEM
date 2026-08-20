@@ -138,11 +138,11 @@ Views.home = function (onLogin) {
                 <div class="home-dash-charts">
                   <div class="home-dash-chart-card span-2">
                     <span class="home-dash-chart-label">Performance overview</span>
-                    <canvas id="homeChartTrend" height="90"></canvas>
+                    <div class="home-chart-canvas-wrap"><canvas id="homeChartTrend"></canvas></div>
                   </div>
                   <div class="home-dash-chart-card">
                     <span class="home-dash-chart-label">Performance levels</span>
-                    <canvas id="homeChartLevels" height="90"></canvas>
+                    <div class="home-chart-canvas-wrap"><canvas id="homeChartLevels"></canvas></div>
                   </div>
                 </div>
                 <div class="home-dash-table">
@@ -224,7 +224,7 @@ Views.home = function (onLogin) {
               <span>Overall Performance</span>
               <strong>72.4%</strong>
             </div>
-            <canvas id="homeChartAnalyticsTrend" height="140"></canvas>
+            <div class="home-chart-canvas-wrap tall"><canvas id="homeChartAnalyticsTrend"></canvas></div>
             <div class="home-level-bars">
               ${levelBands.map(b => `
                 <div class="home-level-row">
@@ -374,6 +374,11 @@ Views.home = function (onLogin) {
 
   // ---- sticky nav shadow + active-link tracking on scroll ----
   try {
+    // Views.home can run again (e.g. "Back to homepage" from the
+    // login screen) — remove any listener from a previous run first,
+    // since it's attached to `window` and would otherwise never be
+    // cleaned up on its own, stacking a fresh one on every visit.
+    if (Views._homeOnScroll) window.removeEventListener('scroll', Views._homeOnScroll);
     const navEl = document.getElementById('homeNav');
     const navLinks = Array.from(document.querySelectorAll('#homeNavLinks a'));
     const sections = ['home', 'features', 'analytics', 'modules', 'about'].map(id => document.getElementById(id)).filter(Boolean);
@@ -383,6 +388,7 @@ Views.home = function (onLogin) {
       sections.forEach(sec => { if (window.scrollY >= sec.offsetTop - 120) current = sec; });
       navLinks.forEach(a => a.classList.toggle('active', current && a.getAttribute('href') === '#' + current.id));
     }
+    Views._homeOnScroll = onScroll;
     window.addEventListener('scroll', onScroll, { passive: true });
     onScroll();
   } catch (e) { /* purely cosmetic — never block the rest of the page */ }

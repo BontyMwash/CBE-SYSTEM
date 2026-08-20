@@ -1813,7 +1813,19 @@ table.ledger-table .num {
 .home-dash-charts { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; }
 .home-dash-chart-card { background: #fff; border: 1px solid var(--home-border); border-radius: 8px; padding: 8px; }
 .home-dash-chart-label { font-size: 8.5px; font-weight: 700; color: var(--home-ink-faint); text-transform: uppercase; letter-spacing: 0.03em; }
-.home-dash-chart-card canvas { margin-top: 4px; }
+.home-dash-chart-card .home-chart-canvas-wrap { margin-top: 4px; }
+
+/* Fixed-height, positioned wrappers for every homepage Chart.js canvas.
+   Chart.js's `responsive: true` sizes the canvas to fill its parent via
+   a ResizeObserver — without an explicit height here, the parent's
+   height ends up derived FROM the canvas (just padding + content),
+   which the canvas then resizes to fill, which changes the parent's
+   height again, forever: a resize feedback loop that pins the CPU and
+   shows up as constant page jitter. A fixed height breaks the loop.
+   (Mirrors .chart-canvas-wrap, the same fix already used by the
+   in-app Dashboard's charts.) */
+.home-chart-canvas-wrap { position: relative; height: 90px; }
+.home-chart-canvas-wrap.tall { height: 140px; }
 
 .home-dash-table { background: #fff; border: 1px solid var(--home-border); border-radius: 8px; padding: 8px; }
 .home-dash-table-row { display: grid; grid-template-columns: 1.6fr 1fr 0.7fr; gap: 6px; font-size: 9.5px; padding: 5px 2px; color: var(--home-ink-soft); }
@@ -1883,7 +1895,7 @@ table.ledger-table .num {
 .home-analytics-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
 .home-analytics-head span { font-size: 12.5px; font-weight: 700; color: var(--home-ink-faint); text-transform: uppercase; letter-spacing: 0.04em; }
 .home-analytics-head strong { font-family: var(--font-display); font-size: 24px; color: var(--home-navy); }
-.home-analytics-preview canvas { margin-bottom: 16px; }
+.home-analytics-preview .home-chart-canvas-wrap { margin-bottom: 16px; }
 
 .home-level-bars { display: flex; flex-direction: column; gap: 8px; }
 .home-level-row { display: grid; grid-template-columns: 34px 1fr 34px; align-items: center; gap: 10px; }

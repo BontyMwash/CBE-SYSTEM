@@ -4,7 +4,7 @@
 // loads instantly, and opens offline. All Supabase/API calls always go to
 // the network — this app's data is never cached, only the code that renders it.
 
-const CACHE_VERSION = 'v6';
+const CACHE_VERSION = 'v7';
 const CACHE_NAME = `cbe-shell-${CACHE_VERSION}`;
 
 const APP_SHELL = [
