@@ -8,54 +8,440 @@
 /* ------------------------- HOMEPAGE ------------------------- */
 // Marketing landing page shown to signed-out visitors before the
 // login screen (see App.showHome() / App.boot()). onLogin() takes
-// them to Views.login.
+// them to Views.login. Purely presentational — every button here
+// ultimately calls the same onLogin() callback the old homepage
+// used, since the app has no public self-signup flow (schools are
+// provisioned by a superadmin); "Get Started" and "Log in" are the
+// same destination, just different marketing copy.
 Views.home = function (onLogin) {
   const root = document.getElementById('homeRoot');
   const year = new Date().getFullYear();
+  const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   const features = [
-    { icon: 'fa-list-check', title: 'Marks entry, made fast', text: 'Enter marks per class/subject/sitting with instant percentage & CBC level feedback.' },
-    { icon: 'fa-file-lines', title: 'Report cards', text: 'Auto-generated, printable report cards with position, trend chart, and comments.' },
-    { icon: 'fa-table-list', title: 'Broadsheets', text: 'A whole class across every subject in one ledger, ready to print or export.' },
-    { icon: 'fa-chart-column', title: 'Published analysis', text: 'Review performance, then publish results to lock them in and notify teachers.' },
-    { icon: 'fa-paper-plane', title: 'Send to parents', text: 'Message every subject result straight to a parent by SMS, WhatsApp or email.' },
-    { icon: 'fa-lock', title: 'Locked once published', text: "Published sittings can't be edited until an admin unpublishes them — results stay trustworthy." }
+    { icon: 'fa-user-graduate', title: 'Learner Management', text: 'Manage learner profiles, classes, streams and academic records.' },
+    { icon: 'fa-pen', title: 'Marks Entry', text: 'Enter and manage assessment marks quickly and accurately.' },
+    { icon: 'fa-chart-column', title: 'Performance Analysis', text: 'Understand learner, subject, class and school performance.' },
+    { icon: 'fa-star-half-stroke', title: 'CBE Performance Levels', text: 'Automatically analyse learner achievement using configurable CBE performance levels.' },
+    { icon: 'fa-file-lines', title: 'Professional Reports', text: 'Generate learner report cards, broadsheets and performance reports.' },
+    { icon: 'fa-paper-plane', title: 'Parent Communication', text: 'Share learner results and important academic information efficiently.' }
+  ];
+
+  const modules = [
+    { icon: 'fa-user-graduate', title: 'Learners', text: 'Full learner register, per class and stream.' },
+    { icon: 'fa-chalkboard-user', title: 'Teachers', text: 'Role-scoped logins for every teacher.' },
+    { icon: 'fa-chalkboard', title: 'Classes & Streams', text: 'Grades, streams and CBC sections.' },
+    { icon: 'fa-book', title: 'Subjects', text: 'A shared subject list across the school.' },
+    { icon: 'fa-clipboard-list', title: 'Assessments', text: 'Every sitting, by type, term and year.' },
+    { icon: 'fa-list-check', title: 'Marks Entry', text: 'Fast entry with instant % feedback.' },
+    { icon: 'fa-chart-column', title: 'Performance Analysis', text: 'Trends by learner, subject and class.' },
+    { icon: 'fa-file-lines', title: 'Reports', text: 'Auto-generated, printable and exportable.' },
+    { icon: 'fa-id-card', title: 'Report Cards', text: 'Position, trend chart and comments.' },
+    { icon: 'fa-table-list', title: 'Broadsheets', text: 'A whole class, every subject, one ledger.' },
+    { icon: 'fa-comment-sms', title: 'SMS Results', text: 'Send results straight to parents.' },
+    { icon: 'fa-gear', title: 'School Settings', text: 'Grading bands, exam types and branding.' }
+  ];
+
+  const steps = [
+    { n: '01', title: 'Set Up Your School', text: 'Configure learners, teachers, classes and subjects.' },
+    { n: '02', title: 'Record Assessment', text: 'Teachers enter marks and assessment information.' },
+    { n: '03', title: 'Analyse & Report', text: 'Automatically generate insights, reports and learner results.' }
+  ];
+
+  const levelBands = [
+    { code: 'EE1', pct: 12, color: '#10B981' }, { code: 'EE2', pct: 18, color: '#34D399' },
+    { code: 'ME1', pct: 25, color: '#4F46E5' }, { code: 'ME2', pct: 23, color: '#6366F1' },
+    { code: 'AE1', pct: 14, color: '#F59E0B' }, { code: 'AE2', pct: 6, color: '#FBBF24' },
+    { code: 'BE', pct: 2, color: '#EF4444' }
   ];
 
   root.innerHTML = `
-    <header class="home-nav">
-      <div class="home-brand">
-        <img src="icons/logo-mark.png" alt="B~CBE Analytics" width="30" height="30" />
-        <span class="brand-mark">B~CBE</span><span class="brand-name">Analytics</span>
+    <a class="home-skip-link" href="#homeMain">Skip to content</a>
+
+    <header class="home-nav" id="homeNav">
+      <div class="home-nav-inner">
+        <a class="home-brand" href="#home" aria-label="B~CBE Analytics — home">
+          <img src="icons/logo-mark.png" alt="" width="34" height="34" />
+          <span class="home-brand-text">
+            <span class="home-brand-name">B~CBE Analytics</span>
+            <span class="home-brand-sub">Smart CBE Assessment &amp; Performance</span>
+          </span>
+        </a>
+
+        <nav class="home-nav-links" id="homeNavLinks" aria-label="Primary">
+          <a href="#home" class="active">Home</a>
+          <a href="#features">Features</a>
+          <a href="#modules">Modules</a>
+          <a href="#analytics">Analytics</a>
+          <a href="#about">About</a>
+        </nav>
+
+        <div class="home-nav-actions">
+          <button class="btn btn-ghost" id="homeLoginBtn">Log in</button>
+          <button class="btn btn-primary" id="homeGetStartedBtn">Get Started</button>
+          <button class="home-nav-toggle" id="homeNavToggle" aria-label="Open menu" aria-expanded="false" aria-controls="homeMobileMenu">
+            <i class="fa-solid fa-bars"></i>
+          </button>
+        </div>
       </div>
-      <button class="btn btn-primary" id="homeLoginBtn">Log in</button>
+
+      <div class="home-mobile-menu" id="homeMobileMenu">
+        <a href="#home">Home</a>
+        <a href="#features">Features</a>
+        <a href="#modules">Modules</a>
+        <a href="#analytics">Analytics</a>
+        <a href="#about">About</a>
+        <div class="home-mobile-actions">
+          <button class="btn btn-ghost" id="homeLoginBtnMobile" style="width:100%; justify-content:center;">Log in</button>
+          <button class="btn btn-primary" id="homeGetStartedBtnMobile" style="width:100%; justify-content:center;">Get Started</button>
+        </div>
+      </div>
     </header>
 
-    <section class="home-hero">
-      <h1>Exam records, results &amp; report cards for CBE schools.</h1>
-      <p>One system to record marks, publish results, print report cards and broadsheets, and keep parents in the loop — built around the CBC grading model.</p>
-      <button class="btn btn-primary btn-lg" id="homeHeroLoginBtn">Log in to your school</button>
-    </section>
+    <main id="homeMain">
+      <section class="home-hero" id="home">
+        <div class="home-hero-inner">
+          <div class="home-hero-text reveal">
+            <span class="home-badge">SMART CBE ASSESSMENT PLATFORM</span>
+            <h1>
+              <span class="home-hero-line-dark">Smarter CBE Assessment.</span>
+              <span class="home-hero-line-grad">Better Learner Outcomes.</span>
+            </h1>
+            <p class="home-hero-sub">Manage learner assessment, marks, performance analysis and reporting from one powerful platform designed for modern schools.</p>
+            <div class="home-hero-actions">
+              <button class="btn btn-primary btn-lg" id="homeHeroLoginBtn">Get Started <i class="fa-solid fa-arrow-right"></i></button>
+              <a class="btn btn-secondary btn-lg" href="#features">Explore Features</a>
+            </div>
+            <ul class="home-trust">
+              <li><i class="fa-solid fa-circle-check"></i> Built for modern schools</li>
+              <li><i class="fa-solid fa-circle-check"></i> Secure</li>
+              <li><i class="fa-solid fa-circle-check"></i> Data-driven</li>
+              <li><i class="fa-solid fa-circle-check"></i> Easy to use</li>
+            </ul>
+          </div>
 
-    <section class="home-features">
-      ${features.map(f => `
-        <div class="home-feature-card">
-          <div class="home-feature-icon"><i class="fa-solid ${f.icon}"></i></div>
-          <h3>${UI.esc(f.title)}</h3>
-          <p>${UI.esc(f.text)}</p>
+          <div class="home-hero-visual reveal" aria-hidden="true">
+            <div class="home-dash-mock">
+              <div class="home-dash-sidebar">
+                <div class="home-dash-sidebar-brand"><i class="fa-solid fa-graduation-cap"></i></div>
+                ${['fa-gauge-high', 'fa-user-graduate', 'fa-clipboard-list', 'fa-pen', 'fa-file-lines', 'fa-chart-column', 'fa-book', 'fa-gear']
+                  .map((ic, i) => `<span class="home-dash-side-icon ${i === 0 ? 'active' : ''}"><i class="fa-solid ${ic}"></i></span>`).join('')}
+              </div>
+              <div class="home-dash-body">
+                <div class="home-dash-head">Dashboard</div>
+                <div class="home-dash-stats">
+                  <div class="home-dash-stat"><span class="v">1,250</span><span class="k">Learners</span></div>
+                  <div class="home-dash-stat"><span class="v">8,500</span><span class="k">Assessments</span></div>
+                  <div class="home-dash-stat"><span class="v">12</span><span class="k">Subjects</span></div>
+                  <div class="home-dash-stat"><span class="v">72.4%</span><span class="k">Avg. Score</span></div>
+                </div>
+                <div class="home-dash-charts">
+                  <div class="home-dash-chart-card span-2">
+                    <span class="home-dash-chart-label">Performance overview</span>
+                    <canvas id="homeChartTrend" height="90"></canvas>
+                  </div>
+                  <div class="home-dash-chart-card">
+                    <span class="home-dash-chart-label">Performance levels</span>
+                    <canvas id="homeChartLevels" height="90"></canvas>
+                  </div>
+                </div>
+                <div class="home-dash-table">
+                  <div class="home-dash-table-row home-dash-table-head"><span>Assessment</span><span>Class</span><span>Score</span></div>
+                  <div class="home-dash-table-row"><span>Midterm — Math</span><span>Grade 7</span><span class="ok">78%</span></div>
+                  <div class="home-dash-table-row"><span>Opener — English</span><span>Grade 8</span><span class="ok">71%</span></div>
+                  <div class="home-dash-table-row"><span>Endterm — Science</span><span>Grade 6</span><span class="warn">54%</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
-      `).join('')}
-    </section>
+      </section>
 
-    <footer class="home-footer">
-      <span>&copy; ${year} B~CBE Analytics. All rights reserved.</span>
-      <a href="javascript:void(0)" id="homeTermsLink">Terms &amp; Copyright</a>
+      <section class="home-stats reveal" aria-label="Platform usage">
+        <div class="home-stats-inner">
+          <div class="home-stat-card">
+            <span class="home-stat-icon"><i class="fa-solid fa-users"></i></span>
+            <span class="home-stat-value" id="homeStat1">0</span>
+            <span class="home-stat-label">Learners</span>
+            <span class="home-stat-sub">Actively managed</span>
+          </div>
+          <div class="home-stat-card">
+            <span class="home-stat-icon"><i class="fa-solid fa-clipboard-check"></i></span>
+            <span class="home-stat-value" id="homeStat2">0</span>
+            <span class="home-stat-label">Assessments</span>
+            <span class="home-stat-sub">Recorded this term</span>
+          </div>
+          <div class="home-stat-card">
+            <span class="home-stat-icon"><i class="fa-solid fa-book"></i></span>
+            <span class="home-stat-value" id="homeStat3">0</span>
+            <span class="home-stat-label">Subjects</span>
+            <span class="home-stat-sub">Active subjects</span>
+          </div>
+          <div class="home-stat-card">
+            <span class="home-stat-icon"><i class="fa-solid fa-file-lines"></i></span>
+            <span class="home-stat-value" id="homeStat4">0</span>
+            <span class="home-stat-label">Reports</span>
+            <span class="home-stat-sub">Generated reports</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="home-section" id="features">
+        <div class="home-section-inner">
+          <div class="home-section-head reveal">
+            <span class="home-badge home-badge-light">POWERFUL FEATURES</span>
+            <h2>Everything You Need to Manage School Assessment</h2>
+            <p>Powerful tools that simplify assessment management, performance analysis and reporting.</p>
+          </div>
+          <div class="home-feature-grid">
+            ${features.map(f => `
+              <div class="home-feature-card reveal">
+                <div class="home-feature-icon"><i class="fa-solid ${f.icon}"></i></div>
+                <h3>${UI.esc(f.title)}</h3>
+                <p>${UI.esc(f.text)}</p>
+                <span class="home-feature-arrow"><i class="fa-solid fa-arrow-right"></i></span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </section>
+
+      <section class="home-section home-section-alt" id="analytics">
+        <div class="home-section-inner home-analytics-grid">
+          <div class="reveal">
+            <h2>Turn Assessment Data Into Meaningful Insights</h2>
+            <p class="home-lead">Go beyond marks. Understand learner progress, identify areas requiring support and make better academic decisions using clear performance analytics.</p>
+            <ul class="home-checklist">
+              <li><i class="fa-solid fa-circle-check"></i> Individual learner analysis</li>
+              <li><i class="fa-solid fa-circle-check"></i> Subject and class comparison</li>
+              <li><i class="fa-solid fa-circle-check"></i> Performance trend tracking</li>
+              <li><i class="fa-solid fa-circle-check"></i> School-wide performance insights</li>
+            </ul>
+            <a class="btn btn-primary" href="#analytics" id="homeExploreAnalyticsBtn">Explore Analytics <i class="fa-solid fa-arrow-right"></i></a>
+          </div>
+          <div class="home-analytics-preview reveal">
+            <div class="home-analytics-head">
+              <span>Overall Performance</span>
+              <strong>72.4%</strong>
+            </div>
+            <canvas id="homeChartAnalyticsTrend" height="140"></canvas>
+            <div class="home-level-bars">
+              ${levelBands.map(b => `
+                <div class="home-level-row">
+                  <span class="home-level-code">${b.code}</span>
+                  <span class="home-level-track"><span class="home-level-fill" style="width:${b.pct}%; background:${b.color};"></span></span>
+                  <span class="home-level-pct">${b.pct}%</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="home-section" aria-label="How it works">
+        <div class="home-section-inner">
+          <div class="home-section-head reveal">
+            <h2>Simple. Fast. Powerful.</h2>
+          </div>
+          <div class="home-steps">
+            ${steps.map((s, i) => `
+              <div class="home-step reveal">
+                <span class="home-step-n">${s.n}</span>
+                <h3>${UI.esc(s.title)}</h3>
+                <p>${UI.esc(s.text)}</p>
+                ${i < steps.length - 1 ? '<span class="home-step-connector" aria-hidden="true"></span>' : ''}
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </section>
+
+      <section class="home-section home-section-alt" id="modules">
+        <div class="home-section-inner">
+          <div class="home-section-head reveal">
+            <h2>One Platform. Complete Assessment Management.</h2>
+          </div>
+          <div class="home-module-grid">
+            ${modules.map(m => `
+              <div class="home-module-card reveal">
+                <span class="home-module-icon"><i class="fa-solid ${m.icon}"></i></span>
+                <span class="home-module-text">
+                  <strong>${UI.esc(m.title)}</strong>
+                  <span>${UI.esc(m.text)}</span>
+                </span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </section>
+
+      <section class="home-section" id="about">
+        <div class="home-section-inner home-about">
+          <div class="reveal">
+            <span class="home-badge home-badge-light">ABOUT B~CBE ANALYTICS</span>
+            <h2>Built Around the CBC Grading Model</h2>
+            <p class="home-lead">B~CBE Analytics was built specifically for schools running Competency Based Education — from marks entry through to published, parent-ready results — so assessment data stays accurate, consistent and easy to act on at every level of the school.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="home-cta reveal">
+        <div class="home-cta-inner">
+          <h2>Ready to Make Assessment Smarter?</h2>
+          <p>Bring learner assessment, marks analysis and reporting together in one powerful platform.</p>
+          <div class="home-cta-actions">
+            <button class="btn btn-primary btn-lg" id="homeCtaGetStartedBtn">Get Started <i class="fa-solid fa-arrow-right"></i></button>
+            <button class="btn btn-secondary-dark btn-lg" id="homeCtaLoginBtn">Log In</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="home-footer-full">
+      <div class="home-footer-inner">
+        <div class="home-footer-brand">
+          <div class="home-brand" style="pointer-events:none;">
+            <img src="icons/logo-mark.png" alt="" width="30" height="30" />
+            <span class="home-brand-text">
+              <span class="home-brand-name">B~CBE Analytics</span>
+              <span class="home-brand-sub">Smart CBE Assessment &amp; Performance Platform</span>
+            </span>
+          </div>
+        </div>
+        <div class="home-footer-col">
+          <h4>Platform</h4>
+          <a href="#features">Features</a>
+          <a href="#modules">Modules</a>
+          <a href="#analytics">Analytics</a>
+          <a href="#analytics">Reports</a>
+        </div>
+        <div class="home-footer-col">
+          <h4>Resources</h4>
+          <a href="javascript:void(0)" id="homeHelpLink">Help</a>
+          <a href="javascript:void(0)" id="homeSupportLink">Support</a>
+          <a href="javascript:void(0)" id="homeDocsLink">Documentation</a>
+          <a href="javascript:void(0)" id="homeTermsLink">Privacy</a>
+        </div>
+        <div class="home-footer-col">
+          <h4>Account</h4>
+          <a href="javascript:void(0)" id="homeFooterLoginLink">Log In</a>
+          <a href="javascript:void(0)" id="homeFooterGetStartedLink">Get Started</a>
+        </div>
+      </div>
+      <div class="home-footer-bottom">
+        <span>&copy; ${year} B~CBE Analytics. All rights reserved.</span>
+        <a href="javascript:void(0)" id="homeTermsLink2">Terms &amp; Copyright</a>
+      </div>
     </footer>
   `;
 
-  document.getElementById('homeLoginBtn').onclick = onLogin;
-  document.getElementById('homeHeroLoginBtn').onclick = onLogin;
-  document.getElementById('homeTermsLink').onclick = () => UI.showTerms();
+  // ---- wire up every action (all routes lead to the same login flow) ----
+  ['homeLoginBtn', 'homeLoginBtnMobile', 'homeCtaLoginBtn', 'homeFooterLoginLink'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.onclick = onLogin;
+  });
+  ['homeGetStartedBtn', 'homeGetStartedBtnMobile', 'homeHeroLoginBtn', 'homeCtaGetStartedBtn', 'homeFooterGetStartedLink'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.onclick = onLogin;
+  });
+  ['homeTermsLink', 'homeTermsLink2', 'homeHelpLink', 'homeSupportLink', 'homeDocsLink'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.onclick = () => UI.showTerms();
+  });
+
+  // ---- sticky nav shadow + active-link tracking on scroll ----
+  const navEl = document.getElementById('homeNav');
+  const navLinks = Array.from(document.querySelectorAll('#homeNavLinks a'));
+  const sections = ['home', 'features', 'analytics', 'modules', 'about'].map(id => document.getElementById(id)).filter(Boolean);
+  function onScroll() {
+    navEl.classList.toggle('scrolled', window.scrollY > 8);
+    let current = sections[0];
+    sections.forEach(sec => { if (window.scrollY >= sec.offsetTop - 120) current = sec; });
+    navLinks.forEach(a => a.classList.toggle('active', current && a.getAttribute('href') === '#' + current.id));
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+
+  // ---- mobile menu toggle ----
+  const navToggle = document.getElementById('homeNavToggle');
+  const mobileMenu = document.getElementById('homeMobileMenu');
+  navToggle.onclick = () => {
+    const open = mobileMenu.classList.toggle('open');
+    navToggle.setAttribute('aria-expanded', String(open));
+  };
+  document.querySelectorAll('#homeMobileMenu a').forEach(a => {
+    a.addEventListener('click', () => { mobileMenu.classList.remove('open'); navToggle.setAttribute('aria-expanded', 'false'); });
+  });
+
+  // ---- smooth scroll for in-page nav links ----
+  document.querySelectorAll('.home-nav-links a, .home-mobile-menu a').forEach(a => {
+    a.addEventListener('click', (e) => {
+      const target = document.getElementById(a.getAttribute('href').slice(1));
+      if (target) {
+        e.preventDefault();
+        target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+      }
+    });
+  });
+
+  // ---- fade-up reveal on scroll ----
+  if ('IntersectionObserver' in window && !reduceMotion) {
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(entry => { if (entry.isIntersecting) { entry.target.classList.add('in-view'); io.unobserve(entry.target); } });
+    }, { threshold: 0.12 });
+    document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+  } else {
+    document.querySelectorAll('.reveal').forEach(el => el.classList.add('in-view'));
+  }
+
+  // ---- stat counters ----
+  const statTargets = { homeStat1: 1250, homeStat2: 8500, homeStat3: 12, homeStat4: 4000 };
+  Object.entries(statTargets).forEach(([id, val]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (reduceMotion) el.textContent = val.toLocaleString() + '+';
+    else UI.animateCount(el, val, { suffix: '+' });
+  });
+
+  // ---- dashboard-preview & analytics charts (purely illustrative,
+  // no live data — homepage is shown to signed-out visitors) ----
+  if (typeof Chart !== 'undefined') {
+    Views._homeCharts = Views._homeCharts || {};
+    Object.values(Views._homeCharts).forEach(c => { try { c.destroy(); } catch (e) {} });
+    Views._homeCharts = {};
+
+    const trendCanvas = document.getElementById('homeChartTrend');
+    if (trendCanvas) {
+      Views._homeCharts.trend = new Chart(trendCanvas, {
+        type: 'line',
+        data: {
+          labels: ['Opener', 'Midterm', 'Endterm'],
+          datasets: [{ data: [64, 69, 72.4], borderColor: '#2563EB', backgroundColor: 'rgba(37,99,235,0.12)', fill: true, tension: 0.35, pointRadius: 3, borderWidth: 2 }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+          scales: { y: { display: false, min: 50, max: 90 }, x: { display: false } } }
+      });
+    }
+
+    const levelsCanvas = document.getElementById('homeChartLevels');
+    if (levelsCanvas) {
+      Views._homeCharts.levels = new Chart(levelsCanvas, {
+        type: 'doughnut',
+        data: { labels: ['EE', 'ME', 'AE', 'BE'], datasets: [{ data: [30, 48, 20, 2], backgroundColor: ['#10B981', '#4F46E5', '#F59E0B', '#EF4444'], borderWidth: 0 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, cutout: '68%' }
+      });
+    }
+
+    const analyticsCanvas = document.getElementById('homeChartAnalyticsTrend');
+    if (analyticsCanvas) {
+      Views._homeCharts.analytics = new Chart(analyticsCanvas, {
+        type: 'bar',
+        data: {
+          labels: ['Term 1', 'Term 2', 'Term 3'],
+          datasets: [{ data: [66, 69.5, 72.4], backgroundColor: '#4F46E5', borderRadius: 6 }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true, max: 100, grid: { color: '#EEF2F8' } }, x: { grid: { display: false } } } }
+      });
+    }
+  }
 };
 
 Views.login = function (onSuccess) {
