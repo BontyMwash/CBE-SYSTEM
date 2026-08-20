@@ -49,11 +49,14 @@ project/
 │   └── 011_allow_manual_notification_channel.sql # migration for existing installs — lets "mark as sent" (bulk, no message) log a notification
 │   └── 012_class_teacher_add_students.sql # migration for existing installs — lets a class teacher add learners into their own class(es)
 │   ├── 013_admin_section_scope.sql # migration for existing installs — lets a superadmin restrict an admin login to Primary, Junior Secondary, or Senior School only
-│   └── 015_lesson_plans_and_schemes.sql # migration for existing installs — adds Lesson Plans & Schemes of Work
+│   ├── 015_lesson_plans_and_schemes.sql # migration for existing installs — adds Lesson Plans & Schemes of Work
+│   └── 016_curriculum_documents.sql # migration for existing installs — adds curriculum design PDF uploads + storage bucket, for AI-generated schemes/lesson plans
 └── supabase/
     └── functions/
-        └── manage-user/
-            └── index.ts          # ⚠️ DEPLOY THIS as a Supabase Edge Function
+        ├── manage-user/
+        │   └── index.ts          # ⚠️ DEPLOY THIS as a Supabase Edge Function
+        └── generate-curriculum-content/
+            └── index.ts          # ⚠️ DEPLOY THIS too — AI scheme/lesson-plan generation (needs ANTHROPIC_API_KEY secret, see step 3)
 ```
 
 **Everything in `js/`, `css/`, and `index.html` is a static site** — host
@@ -106,20 +109,42 @@ Schemes of Work** screen (tables `schemes_of_work` and `lesson_plans`,
 scoped the same way as Competency Assessment: admins see every
 subject in their school, a subject teacher only their own); without
 it the sidebar entry still appears but every save fails since the
-tables don't exist yet.)
+tables don't exist yet. Also run `sql/016_curriculum_documents.sql` —
+it adds the `curriculum_documents` table and a private
+`curriculum-designs` storage bucket, for uploading the official KICD
+curriculum design PDF that grounds the **"Generate with AI"** buttons
+on the Lesson Plans screen; without it, "Manage curriculum PDFs" and
+"Generate with AI" will fail.)
 
-### 3. Deploy the Edge Function
+### 3. Deploy the Edge Functions
 This requires the [Supabase CLI](https://supabase.com/docs/guides/cli):
 
 ```bash
 supabase login
 supabase link --project-ref YOUR-PROJECT-REF
 supabase functions deploy manage-user
+supabase functions deploy generate-curriculum-content
 ```
 
-The function needs your service role key available to it — Supabase
-sets `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` automatically for
-Edge Functions in your own project, so no extra config is needed here.
+Both functions need your service role key available to them —
+Supabase sets `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`
+automatically for Edge Functions in your own project, so no extra
+config is needed for `manage-user`.
+
+`generate-curriculum-content` additionally needs an **Anthropic API
+key** (it calls Claude to draft schemes/lesson plans from the
+uploaded curriculum PDF). Get one from
+[console.anthropic.com](https://console.anthropic.com) → API Keys,
+then set it as a secret — it's never exposed to the browser:
+
+```bash
+supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Without this secret set, the SQL/table/UI for AI generation all work,
+but clicking "Generate with AI" will return an error. Note this uses
+your own Anthropic account and is billed per generation — it's
+separate from anything to do with Claude.ai.
 
 ### 4. Create your first superadmin
 Every login *after* this one is created from inside the app — but the
@@ -242,9 +267,25 @@ Assessments/Gradebook/Competency Assessment.
   Plan** on any scheme row drafts a starting Introduction / Lesson
   Development / Conclusion from that row's strand, outcomes, inquiry
   question, resources, and assessment method — a template the teacher
-  edits before saving, not a finished plan and not an external AI call
-  (same "computed from what's already on screen" approach as the
-  Marks Analysis page's AI Insights).
+  edits before saving (same "computed from what's already on screen"
+  approach as the Marks Analysis page's AI Insights, no external AI
+  call).
+- **Generate with AI** (both tabs) — a genuine external AI call
+  (Claude, via the `generate-curriculum-content` Edge Function),
+  grounded in the school's own uploaded KICD curriculum design PDF
+  for that subject+class ("Manage curriculum PDFs" next to the
+  class/subject picker). On the Scheme of Work tab it drafts full
+  content for every week/lesson of the term and only writes into
+  rows that are still blank; on the Lesson Plans tab it drafts one
+  full lesson into the open form, which is then reviewed and edited
+  before saving — same "draft, don't auto-save" pattern as the rest
+  of the screen. **"Generate all with AI"** on the Lesson Plans tab
+  runs this for every scheme-of-work row that doesn't have a lesson
+  plan yet, one at a time (with live progress and a Stop button),
+  saving each one as it's generated — rows that already have a plan
+  are left alone. Requires `sql/016_curriculum_documents.sql`, the
+  `generate-curriculum-content` function deployed, and an
+  `ANTHROPIC_API_KEY` secret set (see Setup, step 3).
 - Both tabs support Print / Save as PDF (reusing the same school
   masthead/footer as report cards and broadsheets) and Download CSV.
 
@@ -257,6 +298,15 @@ key that bypasses Row Level Security entirely. That key must never reach
 the browser. `supabase/functions/manage-user/index.ts` runs server-side
 inside Supabase, checks the caller's own role/school before doing
 anything, and is the only place that key is ever used.
+
+Same reasoning for the Anthropic API key used by "Generate with AI":
+it must never reach the browser either, since anyone with it could
+run up your Anthropic bill from outside the app.
+`supabase/functions/generate-curriculum-content/index.ts` checks the
+caller is actually allowed to generate for that subject (admin in
+their own school, or a teacher assigned that subject) before it ever
+calls the Anthropic API, and the key itself lives only in the
+function's `ANTHROPIC_API_KEY` secret.
 
 ## Installable / offline app shell (PWA)
 

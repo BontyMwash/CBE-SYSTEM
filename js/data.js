@@ -52,6 +52,7 @@ const Store = {
     development: r.lesson_development || '', conclusion: r.conclusion || '', extendedActivities: r.extended_activities || '',
     reflection: r.reflection || '', updatedAt: r.updated_at
   }),
+  _mapCurriculumDoc: (r) => ({ id: r.id, subjectId: r.subject_id, klass: r.klass, title: r.title || '', storagePath: r.storage_path, createdAt: r.created_at }),
   _mapSchoolSettings: (r) => ({
     schoolName: r.name, motto: r.motto || '', term: r.term, year: r.year, gradingBands: r.grading_bands,
     frozen: !!r.frozen, frozenAt: r.frozen_at || null, frozenReason: r.frozen_reason || '', headName: r.head_name || ''
@@ -575,6 +576,54 @@ const Store = {
   async deleteLessonPlan(id) {
     const { error } = await supabase.from('lesson_plans').delete().eq('id', id);
     this._throwIfError('delete lesson plan', error);
+  },
+
+  // ---- Curriculum Documents (uploaded KICD curriculum design PDFs
+  // that ground the "Generate with AI" scheme/lesson-plan buttons) ----
+  async curriculumDocsFor(subjectId, klass) {
+    const { data, error } = await supabase.from('curriculum_documents').select('*')
+      .eq('school_id', this.activeSchoolId).eq('subject_id', subjectId).eq('klass', klass)
+      .order('created_at', { ascending: false });
+    this._throwIfError('load curriculum documents', error);
+    return (data || []).map(this._mapCurriculumDoc);
+  },
+  async uploadCurriculumDoc(subjectId, klass, title, file) {
+    const user = Auth.currentUser();
+    const safeName = (file.name || 'curriculum.pdf').replace(/[^\w.\-]+/g, '_');
+    const path = `${this.activeSchoolId}/${subjectId}/${encodeURIComponent(klass)}/${Date.now()}-${safeName}`;
+    const { error: uploadErr } = await supabase.storage.from('curriculum-designs').upload(path, file, {
+      contentType: file.type || 'application/pdf', upsert: false
+    });
+    this._throwIfError('upload curriculum document', uploadErr);
+    const { data, error } = await supabase.from('curriculum_documents').insert({
+      school_id: this.activeSchoolId, subject_id: subjectId, klass, title: (title || file.name || '').trim(),
+      storage_path: path, file_size: file.size || null, uploaded_by: user ? user.id : null
+    }).select().single();
+    if (error) { await supabase.storage.from('curriculum-designs').remove([path]); this._throwIfError('save curriculum document', error); }
+    return this._mapCurriculumDoc(data);
+  },
+  async deleteCurriculumDoc(id) {
+    const { data: existing } = await supabase.from('curriculum_documents').select('storage_path').eq('id', id).single();
+    const { error } = await supabase.from('curriculum_documents').delete().eq('id', id);
+    this._throwIfError('delete curriculum document', error);
+    if (existing?.storage_path) await supabase.storage.from('curriculum-designs').remove([existing.storage_path]);
+  },
+
+  // ---- AI generation (Edge Function — needs the Anthropic API key,
+  // which stays server-side; see generate-curriculum-content) ----
+  async generateSchemeWithAI(subjectId, klass, term, year, weeks, lessonsPerWeek) {
+    const res = await Auth.callEdgeFunction('generate-curriculum-content', {
+      action: 'scheme', subjectId, klass, term, year: Number(year), weeks, lessonsPerWeek
+    });
+    if (!res.ok) throw new Error(res.error || 'Could not generate scheme of work');
+    return res.rows || [];
+  },
+  async generateLessonWithAI(subjectId, klass, term, year, week, lessonNo, schemeRow) {
+    const res = await Auth.callEdgeFunction('generate-curriculum-content', {
+      action: 'lesson', subjectId, klass, term, year: Number(year), week, lessonNo, schemeRow: schemeRow || null
+    });
+    if (!res.ok) throw new Error(res.error || 'Could not generate lesson plan');
+    return res.plan || {};
   },
 
   // ---- Backup (export only — see README for why import/reset were dropped) ----

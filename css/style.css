@@ -1634,16 +1634,29 @@ table.ledger-table .num {
   }
 
   /* Broadsheet's own performance-analysis section (subject / class /
-     stream performance) — same treatment as the Analysis page above. */
+     stream performance) — same treatment as the Analysis page above,
+     plus extra hardening: stat-card icons and the decorative corner
+     circle are absolutely positioned, which some browsers' print
+     engines misplace once a card crosses a page boundary (the
+     "scattered" look) — drop them for print and keep every card/row
+     intact across a page break instead of letting it split.  */
   #bsAnalysisArea .grid-4, #bsAnalysisArea .grid-2 {
     grid-template-columns: 1fr;
   }
   #bsAnalysisArea .card {
     box-shadow: none;
     border: 1px solid #ddd;
+    page-break-inside: avoid;
+  }
+  #bsAnalysisArea .stat-card::before,
+  #bsAnalysisArea .stat-icon {
+    display: none;
   }
   #bsAnalysisArea table.ledger-table {
     font-size: 12px;
+  }
+  #bsAnalysisArea table.ledger-table tr {
+    page-break-inside: avoid;
   }
   #bsAnalysisArea {
     page-break-before: always;

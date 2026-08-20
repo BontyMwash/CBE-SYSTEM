@@ -196,8 +196,6 @@ Views.broadsheet = async function () {
     }).sort((a, b) => (b.mean ?? -1) - (a.mean ?? -1));
     const showStreamSection = streamStats.length > 1;
 
-    const BAR_COLORS = ['#10B981', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899'];
-
     wrap.innerHTML = `
       <div class="ledger" id="bsPrintArea">
         <div style="padding:16px 16px 0 16px;">${buildReportMastheadHTML(st, `Broadsheet — ${klass}`, `${type} Results`, term, year)}</div>
@@ -305,13 +303,20 @@ Views.broadsheet = async function () {
           <div>
             <div class="section-title">Class performance level distribution</div>
             ${bandCounts.length === 0 ? `<div class="empty"><div class="empty-title">No grading bands set up</div></div>` : `
-            <div class="card" style="display:flex; flex-direction:column; gap:12px;">
-              ${bandCounts.map((b, i) => `
-                <div>
-                  <div class="progress-label"><span>${UI.esc(b.band.code)} &middot; ${UI.esc(b.band.label)}</span><span>${b.count} (${((b.count / totalBandCount) * 100).toFixed(0)}%)</span></div>
-                  <div class="progress-track"><div class="progress-fill" style="width:${((b.count / totalBandCount) * 100).toFixed(1)}%; background:${BAR_COLORS[i % BAR_COLORS.length]};"></div></div>
-                </div>
-              `).join('')}
+            <div class="ledger">
+              <div class="ledger-scroll">
+                <table class="ledger-table">
+                  <thead><tr><th>Level</th><th>Description</th><th>Students</th><th>% of class</th></tr></thead>
+                  <tbody>
+                    ${bandCounts.map(b => `<tr>
+                      <td>${UI.badge(b.band)}</td>
+                      <td>${UI.esc(b.band.label)}</td>
+                      <td class="num">${b.count}</td>
+                      <td class="num">${((b.count / totalBandCount) * 100).toFixed(0)}%</td>
+                    </tr>`).join('')}
+                  </tbody>
+                </table>
+              </div>
             </div>`}
           </div>
         </div>

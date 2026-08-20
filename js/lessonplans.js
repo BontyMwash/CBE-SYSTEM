@@ -18,6 +18,18 @@
      skeleton around them, which the teacher then edits before
      saving — a starting draft, not a finished plan.
 
+   Both tabs also have "Generate with AI", a real call to Claude
+   (via the generate-curriculum-content Edge Function) grounded in
+   a curriculum design PDF the school uploads per subject+class
+   ("Manage curriculum PDFs"). On the Scheme tab it fills a whole
+   term's rows in one go, skipping rows already filled by hand; on
+   the Lesson Plans tab it drafts one lesson straight into the open
+   form for the teacher to review and edit before saving. "Generate
+   all with AI" on the Lesson Plans tab does the same thing for
+   every scheme row that doesn't have a lesson plan yet, one at a
+   time, saving each as it goes (rows that already have a plan are
+   left untouched).
+
    Scoped the same way as Assessments/Gradebook/Competency: a
    subject teacher only sees/edits their own assigned subject(s);
    admins see every subject in the school. Uses teacherScope() and
@@ -76,12 +88,82 @@ Views.lessonPlans = async function () {
         <select id="lpKlass">${myKlasses.map(k => `<option value="${UI.esc(k)}" ${k === picked.klass ? 'selected' : ''}>${UI.esc(k)}</option>`).join('')}</select>
         <select id="lpSubject">${mySubjects.map(s => `<option value="${s.id}" ${s.id === picked.subjectId ? 'selected' : ''}>${UI.esc(s.name)}</option>`).join('')}</select>
         ${lpTermYearRow('lp', picked)}
+        <button class="btn btn-sm btn-ghost" id="lpDocsBtn"><i class="fa-solid fa-file-pdf"></i> Manage curriculum PDFs</button>
       </div>
       <div class="tabs no-print" style="margin:14px 0;">
         <button class="tab-btn ${App.state._lpTab === 'scheme' ? 'active' : ''}" data-tab="scheme">Scheme of Work</button>
         <button class="tab-btn ${App.state._lpTab === 'plans' ? 'active' : ''}" data-tab="plans">Lesson Plans</button>
       </div>
     `;
+  }
+
+  /* ------------------------- CURRICULUM DOCUMENTS (AI grounding) ------------------------- */
+
+  async function openCurriculumDocsModal() {
+    let docs = await Store.curriculumDocsFor(picked.subjectId, picked.klass);
+
+    function render() {
+      return `
+        <h2>Curriculum design PDFs</h2>
+        <p class="field-hint">Upload the official KICD curriculum design for ${UI.esc(subjectName())} &middot; ${UI.esc(picked.klass)} here. "Generate with AI" on the Scheme of Work and Lesson Plans tabs reads these to draft content grounded in the actual curriculum, instead of guessing.</p>
+        <div id="lpDocsList" style="margin:14px 0;">
+          ${docs.length === 0 ? `<p class="muted">No curriculum PDF uploaded yet for this subject and class.</p>` : `
+            <ul style="list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:8px;">
+              ${docs.map(d => `
+                <li style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 10px; border:1px solid var(--paper-line, #e5e5e5); border-radius:8px;">
+                  <span><i class="fa-solid fa-file-pdf"></i> ${UI.esc(d.title || 'Curriculum design')}</span>
+                  <button class="btn btn-sm btn-danger" data-del-doc="${d.id}">Delete</button>
+                </li>
+              `).join('')}
+            </ul>
+          `}
+        </div>
+        <div class="form-grid">
+          <div class="field full"><label>Title (optional)</label><input type="text" id="docTitle" placeholder="e.g. ${UI.esc(subjectName())} ${UI.esc(picked.klass)} Curriculum Design"></div>
+          <div class="field full"><label>PDF file</label><input type="file" id="docFile" accept="application/pdf"></div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="closeBtn">Close</button>
+          <button class="btn btn-primary" id="uploadBtn">Upload</button>
+        </div>
+      `;
+    }
+
+    function wire(root) {
+      root.querySelector('#closeBtn').onclick = () => UI.closeModal();
+      root.querySelectorAll('[data-del-doc]').forEach(btn => {
+        btn.onclick = () => UI.confirmAction('Delete this curriculum design PDF?', async () => {
+          try { await Store.deleteCurriculumDoc(btn.dataset.delDoc); docs = await Store.curriculumDocsFor(picked.subjectId, picked.klass); UI.toast('PDF deleted'); rerender(); }
+          catch (err) { UI.toast('Could not delete: ' + err.message); }
+        });
+      });
+      root.querySelector('#uploadBtn').onclick = async () => {
+        const fileInput = root.querySelector('#docFile');
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) { UI.toast('Choose a PDF file first'); return; }
+        if (file.type && file.type !== 'application/pdf') { UI.toast('Please choose a PDF file'); return; }
+        const btn = root.querySelector('#uploadBtn');
+        btn.disabled = true; btn.textContent = 'Uploading…';
+        try {
+          await Store.uploadCurriculumDoc(picked.subjectId, picked.klass, root.querySelector('#docTitle').value, file);
+          docs = await Store.curriculumDocsFor(picked.subjectId, picked.klass);
+          UI.toast('Curriculum PDF uploaded');
+          rerender();
+        } catch (err) {
+          UI.toast('Could not upload: ' + err.message);
+          btn.disabled = false; btn.textContent = 'Upload';
+        }
+      };
+    }
+
+    function rerender() {
+      const modal = document.querySelector('.modal');
+      if (!modal) return;
+      modal.innerHTML = render();
+      wire(modal);
+    }
+
+    UI.openModal(render(), wire);
   }
 
   /* ------------------------- SCHEME OF WORK TAB ------------------------- */
@@ -121,6 +203,7 @@ Views.lessonPlans = async function () {
       <div class="no-print" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
         <button class="btn btn-primary" id="lpAddSchemeBtn">+ Add row</button>
         <button class="btn" id="lpGenSchemeBtn"><i class="fa-solid fa-wand-magic-sparkles"></i> Generate weeks…</button>
+        <button class="btn" id="lpAiSchemeBtn"><i class="fa-solid fa-robot"></i> Generate with AI…</button>
         <button class="btn" id="lpSchemeCsvBtn"><i class="fa-solid fa-download"></i> Download CSV</button>
         <button class="btn btn-brass" id="lpSchemePrintBtn">Print / Save as PDF</button>
       </div>
@@ -136,6 +219,7 @@ Views.lessonPlans = async function () {
   function wireSchemeTab() {
     document.getElementById('lpAddSchemeBtn').onclick = () => openSchemeForm(null);
     document.getElementById('lpGenSchemeBtn').onclick = () => openGenerateForm();
+    document.getElementById('lpAiSchemeBtn').onclick = () => openAiSchemeForm();
     document.getElementById('lpSchemePrintBtn').onclick = () => window.print();
     document.getElementById('lpSchemeCsvBtn').onclick = () => {
       if (schemeRows.length === 0) { UI.toast('Nothing to export yet'); return; }
@@ -186,6 +270,51 @@ Views.lessonPlans = async function () {
           await loadAll();
           paintBody();
         } catch (err) { UI.toast('Could not generate: ' + err.message); }
+      };
+    });
+  }
+
+  function openAiSchemeForm() {
+    UI.openModal(`
+      <h2>Generate with AI</h2>
+      <p class="field-hint">Drafts full scheme-of-work content (strand, sub-strand, outcomes, key inquiry question, learning experiences, resources, assessment) for the whole term, grounded in the curriculum design PDF(s) uploaded via "Manage curriculum PDFs". Rows you've already filled in by hand are left untouched.</p>
+      <div class="form-grid">
+        <div class="field"><label>Weeks in the term</label><input type="number" id="aiWeeks" value="13" min="1" max="20"></div>
+        <div class="field"><label>Lessons per week</label><input type="number" id="aiLessons" value="1" min="1" max="10"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
+        <button class="btn btn-primary" id="aiGenBtn"><i class="fa-solid fa-robot"></i> Generate</button>
+      </div>
+    `, (root) => {
+      root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
+      root.querySelector('#aiGenBtn').onclick = async () => {
+        const weeks = Number(root.querySelector('#aiWeeks').value) || 0;
+        const lessons = Number(root.querySelector('#aiLessons').value) || 0;
+        if (weeks < 1 || lessons < 1) { UI.toast('Enter at least 1 week and 1 lesson'); return; }
+        const btn = root.querySelector('#aiGenBtn');
+        btn.disabled = true; btn.innerHTML = 'Generating… this can take a minute';
+        try {
+          const aiRows = await Store.generateSchemeWithAI(picked.subjectId, picked.klass, picked.term, picked.year, weeks, lessons);
+          let filled = 0, skipped = 0;
+          for (const r of aiRows) {
+            const existing = schemeRows.find(row => row.week === r.week && row.lessonNo === r.lessonNo);
+            if (existing && (existing.strand || '').trim()) { skipped++; continue; }
+            await Store.saveSchemeRow({
+              id: existing ? existing.id : null, subjectId: picked.subjectId, klass: picked.klass, term: picked.term, year: picked.year,
+              week: r.week, lessonNo: r.lessonNo, strand: r.strand, subStrand: r.subStrand, outcomes: r.outcomes,
+              inquiryQuestion: r.inquiryQuestion, experiences: r.experiences, resources: r.resources, assessment: r.assessment
+            });
+            filled++;
+          }
+          UI.toast(`AI filled ${filled} row(s)${skipped ? `, left ${skipped} already-filled row(s) untouched` : ''}`);
+          UI.closeModal();
+          await loadAll();
+          paintBody();
+        } catch (err) {
+          UI.toast('Could not generate: ' + err.message);
+          btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-robot"></i> Generate';
+        }
       };
     });
   }
@@ -251,8 +380,9 @@ Views.lessonPlans = async function () {
         </div>
       </div>`).join('')}</div>`;
     return `
-      <div class="no-print" style="margin-bottom:14px;">
+      <div class="no-print" style="margin-bottom:14px; display:flex; gap:8px; flex-wrap:wrap;">
         <button class="btn btn-primary" id="lpAddPlanBtn">+ New lesson plan</button>
+        <button class="btn" id="lpBulkAiBtn"><i class="fa-solid fa-robot"></i> Generate all with AI…</button>
       </div>
       <div id="lpPlansListWrap">${cards}</div>
       <div id="lpPlanPrintArea"></div>
@@ -261,6 +391,7 @@ Views.lessonPlans = async function () {
 
   function wirePlansTab() {
     document.getElementById('lpAddPlanBtn').onclick = () => openPlanForm(null, null);
+    document.getElementById('lpBulkAiBtn').onclick = () => openBulkAiForm();
     document.querySelectorAll('[data-edit-plan]').forEach(btn => {
       btn.onclick = () => openPlanForm(planRows.find(p => p.id === btn.dataset.editPlan), null);
     });
@@ -291,6 +422,56 @@ Views.lessonPlans = async function () {
     };
   }
 
+  function openBulkAiForm() {
+    const targets = [...schemeRows]
+      .sort((a, b) => a.week - b.week || a.lessonNo - b.lessonNo)
+      .filter(s => !planRows.some(p => p.week === s.week && p.lessonNo === s.lessonNo));
+
+    if (schemeRows.length === 0) { UI.toast('Add or generate a scheme of work first'); return; }
+    if (targets.length === 0) { UI.toast('Every scheme of work row already has a lesson plan'); return; }
+
+    let cancelled = false;
+
+    UI.openModal(`
+      <h2>Generate all with AI</h2>
+      <p class="field-hint">Drafts a full lesson plan for every scheme-of-work row that doesn't have one yet (${targets.length} row${targets.length === 1 ? '' : 's'} — rows that already have a lesson plan are left alone), one at a time, grounded in the curriculum design PDF(s) uploaded via "Manage curriculum PDFs". Each is saved as a draft — review and edit any of them afterwards.</p>
+      <div id="bulkAiStatus" class="field-hint" style="margin:14px 0;">Ready to generate ${targets.length} lesson plan${targets.length === 1 ? '' : 's'}.</div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cancelBtn">${'Cancel'}</button>
+        <button class="btn btn-primary" id="startBtn"><i class="fa-solid fa-robot"></i> Start</button>
+      </div>
+    `, (root) => {
+      const statusEl = root.querySelector('#bulkAiStatus');
+      root.querySelector('#cancelBtn').onclick = () => { cancelled = true; UI.closeModal(); };
+      root.querySelector('#startBtn').onclick = async () => {
+        root.querySelector('#startBtn').style.display = 'none';
+        root.querySelector('#cancelBtn').textContent = 'Stop';
+        let done = 0, failed = 0;
+        for (const row of targets) {
+          if (cancelled) break;
+          statusEl.textContent = `Generating ${done + failed + 1} of ${targets.length} — Week ${row.week}, Lesson ${row.lessonNo}${row.strand ? ' (' + row.strand + ')' : ''}…`;
+          try {
+            const plan = await Store.generateLessonWithAI(picked.subjectId, picked.klass, picked.term, picked.year, row.week, row.lessonNo, row);
+            await Store.saveLessonPlan({
+              subjectId: picked.subjectId, klass: picked.klass, term: picked.term, year: picked.year,
+              week: row.week, lessonNo: row.lessonNo, strand: plan.strand || row.strand, subStrand: plan.subStrand || row.subStrand,
+              outcomes: plan.outcomes || row.outcomes, inquiryQuestion: plan.inquiryQuestion || row.inquiryQuestion,
+              coreCompetencies: plan.coreCompetencies, values: plan.values, pcis: plan.pcis,
+              resources: plan.resources || row.resources, introduction: plan.introduction, development: plan.development,
+              conclusion: plan.conclusion, extendedActivities: plan.extendedActivities
+            });
+            done++;
+          } catch (err) { failed++; }
+        }
+        statusEl.textContent = cancelled
+          ? `Stopped early — ${done} lesson plan${done === 1 ? '' : 's'} generated before stopping${failed ? `, ${failed} failed` : ''}.`
+          : `Done — ${done} lesson plan${done === 1 ? '' : 's'} generated${failed ? `, ${failed} failed` : ''}.`;
+        root.querySelector('#cancelBtn').textContent = 'Close';
+        root.querySelector('#cancelBtn').onclick = async () => { UI.closeModal(); await loadAll(); paintBody(); };
+      };
+    });
+  }
+
   function openPlanForm(existing, schemeRow) {
     const isEdit = !!existing;
     const draft = (!isEdit && schemeRow) ? draftFromScheme(schemeRow) : null;
@@ -302,6 +483,10 @@ Views.lessonPlans = async function () {
     UI.openModal(`
       <h2>${isEdit ? 'Edit' : schemeRow ? 'Lesson plan drafted from scheme' : 'New'} lesson plan</h2>
       ${schemeRow && !isEdit ? `<p class="field-hint">The Introduction, Lesson Development and Conclusion below are a starting draft from your scheme of work row — edit freely before saving.</p>` : ''}
+      <div class="no-print" style="margin-bottom:10px;">
+        <button class="btn btn-sm" id="pAiBtn" type="button"><i class="fa-solid fa-robot"></i> Generate with AI</button>
+        <span class="field-hint">Uses the curriculum design PDF uploaded via "Manage curriculum PDFs" — review and edit before saving.</span>
+      </div>
       <div class="form-grid">
         <div class="field"><label>Week</label><input type="number" id="pWeek" min="1" value="${base.week || 1}"></div>
         <div class="field"><label>Lesson</label><input type="number" id="pLesson" min="1" value="${base.lessonNo || 1}"></div>
@@ -332,6 +517,37 @@ Views.lessonPlans = async function () {
       </div>
     `, (root) => {
       root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
+      root.querySelector('#pAiBtn').onclick = async () => {
+        const week = Number(root.querySelector('#pWeek').value);
+        const lessonNo = Number(root.querySelector('#pLesson').value);
+        if (!week || !lessonNo) { UI.toast('Week and Lesson are required first'); return; }
+        const ctx = schemeRow || (root.querySelector('#pStrand').value ? {
+          strand: root.querySelector('#pStrand').value, subStrand: root.querySelector('#pSubStrand').value,
+          outcomes: root.querySelector('#pOutcomes').value, inquiryQuestion: root.querySelector('#pInquiry').value,
+          resources: root.querySelector('#pResources').value
+        } : null);
+        const btn = root.querySelector('#pAiBtn');
+        btn.disabled = true; btn.innerHTML = 'Generating…';
+        try {
+          const plan = await Store.generateLessonWithAI(picked.subjectId, picked.klass, picked.term, picked.year, week, lessonNo, ctx);
+          root.querySelector('#pStrand').value = plan.strand || root.querySelector('#pStrand').value;
+          root.querySelector('#pSubStrand').value = plan.subStrand || root.querySelector('#pSubStrand').value;
+          root.querySelector('#pOutcomes').value = plan.outcomes || root.querySelector('#pOutcomes').value;
+          root.querySelector('#pInquiry').value = plan.inquiryQuestion || root.querySelector('#pInquiry').value;
+          root.querySelector('#pCompetencies').value = plan.coreCompetencies || root.querySelector('#pCompetencies').value;
+          root.querySelector('#pValues').value = plan.values || root.querySelector('#pValues').value;
+          root.querySelector('#pPcis').value = plan.pcis || root.querySelector('#pPcis').value;
+          root.querySelector('#pResources').value = plan.resources || root.querySelector('#pResources').value;
+          root.querySelector('#pIntro').value = plan.introduction || root.querySelector('#pIntro').value;
+          root.querySelector('#pDevelopment').value = plan.development || root.querySelector('#pDevelopment').value;
+          root.querySelector('#pConclusion').value = plan.conclusion || root.querySelector('#pConclusion').value;
+          if (plan.extendedActivities) root.querySelector('#pExtended').value = plan.extendedActivities;
+          UI.toast('Drafted by AI — review before saving');
+        } catch (err) {
+          UI.toast('Could not generate: ' + err.message);
+        }
+        btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-robot"></i> Generate with AI';
+      };
       root.querySelector('#saveBtn').onclick = async () => {
         const week = Number(root.querySelector('#pWeek').value);
         const lessonNo = Number(root.querySelector('#pLesson').value);
@@ -374,6 +590,7 @@ Views.lessonPlans = async function () {
     document.querySelectorAll('.tab-btn').forEach(btn => {
       btn.onclick = () => { App.state._lpTab = btn.dataset.tab; paint(); };
     });
+    document.getElementById('lpDocsBtn').onclick = () => openCurriculumDocsModal();
   }
 
   async function paint() {

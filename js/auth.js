@@ -179,5 +179,22 @@ const Auth = {
     const { error } = await supabase.auth.updateUser({ password: newPassword });
     if (error) return { ok: false, error: error.message };
     return { ok: true };
+  },
+
+  // ---- generic Edge Function caller, reused by anything that needs
+  // server-side secrets (e.g. the Anthropic API key for AI-generated
+  // schemes/lesson plans — see generate-curriculum-content) ----
+  async callEdgeFunction(name, payload) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+    if (!token) return { ok: false, error: 'Not logged in' };
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/${name}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify(payload)
+    });
+    const json = await res.json();
+    if (!res.ok) return { ok: false, error: json.error || 'Request failed' };
+    return { ok: true, ...json };
   }
 };
