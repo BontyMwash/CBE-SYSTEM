@@ -2,13 +2,15 @@
 // supabase/functions/generate-curriculum-content/index.ts
 //
 // Deploy with:  supabase functions deploy generate-curriculum-content
-// Requires a secret:  supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
+// Requires a secret:  supabase secrets set OPENROUTER_API_KEY=sk-or-v1-...
+// (get one at https://openrouter.ai/keys — billed through your
+// OpenRouter account, not directly through Anthropic)
 //
-// Uses Claude to draft CBC scheme-of-work rows or a full lesson
+// Uses Claude (via OpenRouter) to draft CBC scheme-of-work rows or a full lesson
 // plan, grounded in the school's own uploaded KICD curriculum
 // design PDF(s) for that subject+class (see curriculum_documents
 // / the "curriculum-designs" storage bucket, migration 016).
-// The Anthropic API key must never reach the browser, so this
+// The OpenRouter API key must never reach the browser, so this
 // call happens only here, server-side — same reasoning as
 // manage-user for the service role key.
 //
@@ -23,11 +25,11 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
+const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
 
-// Pinned model snapshot — check platform.claude.com/docs for the
-// current recommended string before changing this.
-const ANTHROPIC_MODEL = "claude-sonnet-5";
+// OpenRouter model slug — check https://openrouter.ai/models for
+// the current Claude model slugs before changing this.
+const OPENROUTER_MODEL = "anthropic/claude-sonnet-4.5";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -176,27 +178,40 @@ Respond with ONLY a JSON object, no markdown fences, no commentary, in exactly t
 }
 
 async function callClaude(instructionText: string, documentBlocks: any[]): Promise<string> {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  // OpenRouter speaks the OpenAI chat-completions shape, not Anthropic's
+  // native messages shape. PDFs go in as "file" parts (data URL), not
+  // Anthropic's native "document" blocks.
+  const fileParts = documentBlocks.map((d) => ({
+    type: "file",
+    file: {
+      filename: d.title || "curriculum-design.pdf",
+      file_data: `data:application/pdf;base64,${d.source.data}`,
+    },
+  }));
+
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
+      "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+      // Optional but recommended by OpenRouter for their leaderboards/rate limiting:
+      "HTTP-Referer": "https://cbe-system.example",
+      "X-Title": "CBE System - Curriculum Content Generator",
     },
     body: JSON.stringify({
-      model: ANTHROPIC_MODEL,
+      model: OPENROUTER_MODEL,
       max_tokens: 8000,
       messages: [{
         role: "user",
-        content: [...documentBlocks, { type: "text", text: instructionText }],
+        content: [...fileParts, { type: "text", text: instructionText }],
       }],
     }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message || `Anthropic API error (${res.status})`);
-  const textBlock = (data.content || []).find((b: any) => b.type === "text");
-  if (!textBlock) throw new Error("No text in AI response");
-  return textBlock.text;
+  if (!res.ok) throw new Error(data?.error?.message || `OpenRouter API error (${res.status})`);
+  const text = data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error("No text in AI response");
+  return text;
 }
 
 function safeParseJSON(text: string): any {

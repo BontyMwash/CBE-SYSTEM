@@ -56,7 +56,7 @@ project/
         ├── manage-user/
         │   └── index.ts          # ⚠️ DEPLOY THIS as a Supabase Edge Function
         └── generate-curriculum-content/
-            └── index.ts          # ⚠️ DEPLOY THIS too — AI scheme/lesson-plan generation (needs ANTHROPIC_API_KEY secret, see step 3)
+            └── index.ts          # ⚠️ DEPLOY THIS too — AI scheme/lesson-plan generation (needs OPENROUTER_API_KEY secret, see step 3)
 ```
 
 **Everything in `js/`, `css/`, and `index.html` is a static site** — host
@@ -132,13 +132,13 @@ automatically for Edge Functions in your own project, so no extra
 config is needed for `manage-user`.
 
 `generate-curriculum-content` additionally needs an **Anthropic API
-key** (it calls Claude to draft schemes/lesson plans from the
-uploaded curriculum PDF). Get one from
-[console.anthropic.com](https://console.anthropic.com) → API Keys,
-then set it as a secret — it's never exposed to the browser:
+key** (it calls Claude, via OpenRouter, to draft schemes/lesson
+plans from the uploaded curriculum PDF). Get one from
+[openrouter.ai/keys](https://openrouter.ai/keys), then set it as a
+secret — it's never exposed to the browser:
 
 ```bash
-supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
+supabase secrets set OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
 Without this secret set, the SQL/table/UI for AI generation all work,
@@ -285,7 +285,7 @@ Assessments/Gradebook/Competency Assessment.
   saving each one as it's generated — rows that already have a plan
   are left alone. Requires `sql/016_curriculum_documents.sql`, the
   `generate-curriculum-content` function deployed, and an
-  `ANTHROPIC_API_KEY` secret set (see Setup, step 3).
+  `OPENROUTER_API_KEY` secret set (see Setup, step 3).
 - Both tabs support Print / Save as PDF (reusing the same school
   masthead/footer as report cards and broadsheets) and Download CSV.
 
@@ -306,7 +306,7 @@ run up your Anthropic bill from outside the app.
 caller is actually allowed to generate for that subject (admin in
 their own school, or a teacher assigned that subject) before it ever
 calls the Anthropic API, and the key itself lives only in the
-function's `ANTHROPIC_API_KEY` secret.
+function's `OPENROUTER_API_KEY` secret.
 
 ## Installable / offline app shell (PWA)
 
