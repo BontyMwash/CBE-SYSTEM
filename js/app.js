@@ -22,6 +22,7 @@ const App = {
     subjects: 'fa-book', exams: 'fa-file-pen', results: 'fa-list-check',
     myClasses: 'fa-chalkboard-user', learners: 'fa-people-group', assessments: 'fa-clipboard-list',
     gradebook: 'fa-book-open', attendance: 'fa-calendar-check', competency: 'fa-star-half-stroke',
+    lessonPlans: 'fa-chalkboard-teacher',
     reports: 'fa-file-lines', broadsheet: 'fa-table-list', analysis: 'fa-chart-column', notify: 'fa-paper-plane', users: 'fa-users-gear',
     settings: 'fa-gear', schools: 'fa-school'
   },
@@ -261,9 +262,30 @@ const App = {
   },
 
   async boot() {
-    const user = await Auth.restoreSession();
-    if (user) { this.showApp(); return; }
+    // Guard against a slow/hanging network call to Supabase leaving a
+    // signed-out visitor staring at a blank page indefinitely — after
+    // 6s, assume no session and show the homepage. If the real
+    // restoreSession() call resolves after that with an actual user,
+    // it still hands off to the app normally.
     const hash = (location.hash || '').replace('#', '');
+    let settled = false;
+    const fallback = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (hash === 'login') this.showLogin(); else this.showHome();
+    }, 6000);
+
+    let user = null;
+    try {
+      user = await Auth.restoreSession();
+    } catch (e) {
+      user = null;
+    }
+    if (settled) { if (user) this.showApp(); return; } // fallback already fired
+    settled = true;
+    clearTimeout(fallback);
+
+    if (user) { this.showApp(); return; }
     if (hash === 'login') this.showLogin();
     else this.showHome();
   },

@@ -19,7 +19,7 @@ const Auth = {
     superadmin: ['schools'],
     admin: [
       'dashboard', 'classes', 'students', 'subjects', 'exams', 'results', 'gradebook',
-      'reports', 'attendance', 'competency', 'broadsheet', 'analysis',
+      'reports', 'attendance', 'competency', 'lessonPlans', 'broadsheet', 'analysis',
       'notify', 'users', 'settings'
     ],
     // Teacher section — kept in this order because it's the order the
@@ -33,7 +33,7 @@ const Auth = {
     // added back in allowedRoutes() below for exactly those teachers.
     user: [
       'dashboard', 'myClasses', 'learners', 'assessments', 'results', 'analysis',
-      'gradebook', 'reports', 'attendance', 'competency'
+      'gradebook', 'reports', 'attendance', 'competency', 'lessonPlans'
     ],
     // Routes added on top of `user` only for teachers who are a class
     // teacher for at least one class (see _loadProfile / isClassTeacher).
@@ -45,6 +45,7 @@ const Auth = {
     myClasses: 'My Classes', learners: 'Learners', assessments: 'Assessments',
     results: 'Marks Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', analysis: 'Marks Analysis',
     gradebook: 'Gradebook', attendance: 'Attendance', competency: 'Competency Assessment',
+    lessonPlans: 'Lesson Plans & Schemes of Work',
     notify: 'Send Results to Parents',
     users: 'Users', settings: 'Settings', schools: 'Schools'
   },
@@ -53,6 +54,7 @@ const Auth = {
     myClasses: 'My Classes', learners: 'Learners', assessments: 'Assessments',
     results: 'Marks Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', analysis: 'Marks Analysis',
     gradebook: 'Gradebook', attendance: 'Attendance', competency: 'Competency',
+    lessonPlans: 'Lesson Plans',
     notify: 'Send to Parents',
     users: 'Users', settings: 'Settings', schools: 'Schools'
   },

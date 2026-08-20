@@ -37,6 +37,21 @@ const Store = {
     assessedBy: r.assessed_by, updatedAt: r.updated_at
   }),
   _mapPublished: (r) => ({ id: r.id, klass: r.klass, type: r.type, term: r.term, year: r.year, publishedAt: r.published_at, publishedBy: r.published_by }),
+  _mapScheme: (r) => ({
+    id: r.id, subjectId: r.subject_id, klass: r.klass, term: r.term, year: r.year, week: r.week, lessonNo: r.lesson_no,
+    strand: r.strand || '', subStrand: r.sub_strand || '', outcomes: r.specific_learning_outcomes || '',
+    inquiryQuestion: r.key_inquiry_question || '', experiences: r.learning_experiences || '',
+    resources: r.learning_resources || '', assessment: r.assessment_methods || '', reflection: r.reflection || '',
+    updatedAt: r.updated_at
+  }),
+  _mapLessonPlan: (r) => ({
+    id: r.id, subjectId: r.subject_id, klass: r.klass, term: r.term, year: r.year, week: r.week, lessonNo: r.lesson_no,
+    date: r.lesson_date || '', strand: r.strand || '', subStrand: r.sub_strand || '', outcomes: r.specific_learning_outcomes || '',
+    inquiryQuestion: r.key_inquiry_question || '', coreCompetencies: r.core_competencies || '', values: r.values_taught || '',
+    pcis: r.pcis || '', resources: r.learning_resources || '', introduction: r.introduction || '',
+    development: r.lesson_development || '', conclusion: r.conclusion || '', extendedActivities: r.extended_activities || '',
+    reflection: r.reflection || '', updatedAt: r.updated_at
+  }),
   _mapSchoolSettings: (r) => ({
     schoolName: r.name, motto: r.motto || '', term: r.term, year: r.year, gradingBands: r.grading_bands,
     frozen: !!r.frozen, frozenAt: r.frozen_at || null, frozenReason: r.frozen_reason || '', headName: r.head_name || ''
@@ -484,6 +499,82 @@ const Store = {
   async deleteCompetency(id) {
     const { error } = await supabase.from('competency_assessments').delete().eq('id', id);
     this._throwIfError('delete competency', error);
+  },
+
+  // ---- Schemes of Work (term-long plan, one row per week/lesson) ----
+  async schemesFor(subjectId, klass, term, year) {
+    const { data, error } = await supabase.from('schemes_of_work').select('*')
+      .eq('school_id', this.activeSchoolId).eq('subject_id', subjectId).eq('klass', klass).eq('term', term).eq('year', year)
+      .order('week', { ascending: true }).order('lesson_no', { ascending: true });
+    this._throwIfError('load schemes of work', error);
+    return (data || []).map(this._mapScheme);
+  },
+  async saveSchemeRow(s) {
+    const row = {
+      school_id: this.activeSchoolId, subject_id: s.subjectId, klass: s.klass, term: s.term, year: Number(s.year),
+      week: Number(s.week), lesson_no: Number(s.lessonNo || 1), strand: (s.strand || '').trim(), sub_strand: (s.subStrand || '').trim(),
+      specific_learning_outcomes: (s.outcomes || '').trim(), key_inquiry_question: (s.inquiryQuestion || '').trim(),
+      learning_experiences: (s.experiences || '').trim(), learning_resources: (s.resources || '').trim(),
+      assessment_methods: (s.assessment || '').trim(), reflection: (s.reflection || '').trim(), updated_at: new Date().toISOString()
+    };
+    if (!s.id) { const user = Auth.currentUser(); row.created_by = user ? user.id : null; }
+    const { data, error } = await supabase.from('schemes_of_work')
+      .upsert(row, { onConflict: 'subject_id,klass,term,year,week,lesson_no' }).select().single();
+    this._throwIfError('save scheme of work row', error);
+    return this._mapScheme(data);
+  },
+  // Bulk-fills empty skeleton rows (week/lesson only) for weeks that
+  // don't have a row yet — never overwrites a row a teacher has
+  // already started filling in, since it uses ignoreDuplicates.
+  async generateSchemeSkeleton(subjectId, klass, term, year, weeks, lessonsPerWeek) {
+    const user = Auth.currentUser();
+    const rows = [];
+    for (let w = 1; w <= weeks; w++) {
+      for (let l = 1; l <= lessonsPerWeek; l++) {
+        rows.push({
+          school_id: this.activeSchoolId, subject_id: subjectId, klass, term, year: Number(year),
+          week: w, lesson_no: l, created_by: user ? user.id : null
+        });
+      }
+    }
+    const { data, error } = await supabase.from('schemes_of_work')
+      .upsert(rows, { onConflict: 'subject_id,klass,term,year,week,lesson_no', ignoreDuplicates: true }).select();
+    this._throwIfError('generate scheme of work', error);
+    return (data || []).map(this._mapScheme);
+  },
+  async deleteSchemeRow(id) {
+    const { error } = await supabase.from('schemes_of_work').delete().eq('id', id);
+    this._throwIfError('delete scheme of work row', error);
+  },
+
+  // ---- Lesson Plans (one full CBC lesson document per week/lesson) ----
+  async lessonPlansFor(subjectId, klass, term, year) {
+    const { data, error } = await supabase.from('lesson_plans').select('*')
+      .eq('school_id', this.activeSchoolId).eq('subject_id', subjectId).eq('klass', klass).eq('term', term).eq('year', year)
+      .order('week', { ascending: true }).order('lesson_no', { ascending: true });
+    this._throwIfError('load lesson plans', error);
+    return (data || []).map(this._mapLessonPlan);
+  },
+  async saveLessonPlan(p) {
+    const row = {
+      school_id: this.activeSchoolId, subject_id: p.subjectId, klass: p.klass, term: p.term, year: Number(p.year),
+      week: Number(p.week), lesson_no: Number(p.lessonNo || 1), lesson_date: p.date || null,
+      strand: (p.strand || '').trim(), sub_strand: (p.subStrand || '').trim(), specific_learning_outcomes: (p.outcomes || '').trim(),
+      key_inquiry_question: (p.inquiryQuestion || '').trim(), core_competencies: (p.coreCompetencies || '').trim(),
+      values_taught: (p.values || '').trim(), pcis: (p.pcis || '').trim(), learning_resources: (p.resources || '').trim(),
+      introduction: (p.introduction || '').trim(), lesson_development: (p.development || '').trim(),
+      conclusion: (p.conclusion || '').trim(), extended_activities: (p.extendedActivities || '').trim(),
+      reflection: (p.reflection || '').trim(), updated_at: new Date().toISOString()
+    };
+    if (!p.id) { const user = Auth.currentUser(); row.created_by = user ? user.id : null; }
+    const { data, error } = await supabase.from('lesson_plans')
+      .upsert(row, { onConflict: 'subject_id,klass,term,year,week,lesson_no' }).select().single();
+    this._throwIfError('save lesson plan', error);
+    return this._mapLessonPlan(data);
+  },
+  async deleteLessonPlan(id) {
+    const { error } = await supabase.from('lesson_plans').delete().eq('id', id);
+    this._throwIfError('delete lesson plan', error);
   },
 
   // ---- Backup (export only — see README for why import/reset were dropped) ----

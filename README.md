@@ -37,6 +37,7 @@ project/
 │   ├── notify.js                  # Send Results to Parents (WhatsApp/SMS/email)
 │   ├── teacher.js                 # My Classes / Learners / Assessments / Gradebook / Reports hub
 │   ├── attendance.js              # Attendance register + Competency Assessment (CBC strands)
+│   ├── lessonplans.js              # Lesson Plans & Schemes of Work (generate + edit + print)
 │   └── app.js                    # router + login gate + sidebar
 ├── sql/
 │   ├── schema.sql                # ⚠️ RUN THIS in Supabase SQL Editor
@@ -47,7 +48,8 @@ project/
 │   └── 010_fix_attendance_access.sql # migration for existing installs — fixes Attendance saving for teachers only assigned a subject (not yet a class)
 │   └── 011_allow_manual_notification_channel.sql # migration for existing installs — lets "mark as sent" (bulk, no message) log a notification
 │   └── 012_class_teacher_add_students.sql # migration for existing installs — lets a class teacher add learners into their own class(es)
-│   └── 013_admin_section_scope.sql # migration for existing installs — lets a superadmin restrict an admin login to Primary, Junior Secondary, or Senior School only
+│   ├── 013_admin_section_scope.sql # migration for existing installs — lets a superadmin restrict an admin login to Primary, Junior Secondary, or Senior School only
+│   └── 015_lesson_plans_and_schemes.sql # migration for existing installs — adds Lesson Plans & Schemes of Work
 └── supabase/
     └── functions/
         └── manage-user/
@@ -98,7 +100,13 @@ Also run `sql/013_admin_section_scope.sql` — it adds the optional
 Senior School), used by the level switcher near the logo and the
 "Section" field on the Users page; without it, admin logins stay
 unrestricted as before, but the Section field/switcher won't have any
-effect at the database level.)
+effect at the database level. Also run
+`sql/015_lesson_plans_and_schemes.sql` — it adds the **Lesson Plans &
+Schemes of Work** screen (tables `schemes_of_work` and `lesson_plans`,
+scoped the same way as Competency Assessment: admins see every
+subject in their school, a subject teacher only their own); without
+it the sidebar entry still appears but every save fails since the
+tables don't exist yet.)
 
 ### 3. Deploy the Edge Function
 This requires the [Supabase CLI](https://supabase.com/docs/guides/cli):
@@ -208,6 +216,37 @@ Every entity below has full Create/Read/Update/Delete wired through
   day, upserted so re-marking a day updates rather than duplicates
 - **Competency Assessment** — `competency_assessments` table, one row
   per learner/subject/strand/term, rated EE/ME/AE/BE
+- **Lesson Plans & Schemes of Work** — `schemes_of_work` table (one row
+  per subject/class/term/week/lesson) and `lesson_plans` table (one full
+  CBC-format lesson document per subject/class/term/week/lesson); both
+  scoped like Competency Assessment (admin: whole school, teacher: own
+  assigned subject only)
+
+## Lesson Plans & Schemes of Work
+
+Reachable from the sidebar for both Admins and subject teachers (route
+`lessonPlans`, in `js/lessonplans.js`), scoped the same way as
+Assessments/Gradebook/Competency Assessment.
+
+- **Scheme of Work** tab — a term-long ledger, one row per week/lesson
+  (Strand, Sub-strand, Specific Learning Outcomes, Key Inquiry
+  Question, Learning Experiences, Learning Resources, Assessment
+  Methods, Reflection). **Generate weeks** fills in blank week/lesson
+  rows for the whole term in one click, so a teacher starts from a
+  skeleton instead of a blank page — it never overwrites a row that's
+  already been filled in (uses `ignoreDuplicates` on insert).
+- **Lesson Plans** tab — one full CBC-format lesson document per
+  week/lesson (adds Core Competencies, Values, Pertinent & Contemporary
+  Issues, Learning Resources, Introduction / Lesson Development /
+  Conclusion, Extended Activities, Reflection). **Use for Lesson
+  Plan** on any scheme row drafts a starting Introduction / Lesson
+  Development / Conclusion from that row's strand, outcomes, inquiry
+  question, resources, and assessment method — a template the teacher
+  edits before saving, not a finished plan and not an external AI call
+  (same "computed from what's already on screen" approach as the
+  Marks Analysis page's AI Insights).
+- Both tabs support Print / Save as PDF (reusing the same school
+  masthead/footer as report cards and broadsheets) and Download CSV.
 
 ## Why an Edge Function, not just direct table access?
 

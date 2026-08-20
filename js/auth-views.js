@@ -346,102 +346,131 @@ Views.home = function (onLogin) {
     const el = document.getElementById(id); if (el) el.onclick = () => UI.showTerms();
   });
 
-  // ---- sticky nav shadow + active-link tracking on scroll ----
-  const navEl = document.getElementById('homeNav');
-  const navLinks = Array.from(document.querySelectorAll('#homeNavLinks a'));
-  const sections = ['home', 'features', 'analytics', 'modules', 'about'].map(id => document.getElementById(id)).filter(Boolean);
-  function onScroll() {
-    navEl.classList.toggle('scrolled', window.scrollY > 8);
-    let current = sections[0];
-    sections.forEach(sec => { if (window.scrollY >= sec.offsetTop - 120) current = sec; });
-    navLinks.forEach(a => a.classList.toggle('active', current && a.getAttribute('href') === '#' + current.id));
-  }
-  window.addEventListener('scroll', onScroll, { passive: true });
-  onScroll();
-
-  // ---- mobile menu toggle ----
-  const navToggle = document.getElementById('homeNavToggle');
-  const mobileMenu = document.getElementById('homeMobileMenu');
-  navToggle.onclick = () => {
-    const open = mobileMenu.classList.toggle('open');
-    navToggle.setAttribute('aria-expanded', String(open));
-  };
-  document.querySelectorAll('#homeMobileMenu a').forEach(a => {
-    a.addEventListener('click', () => { mobileMenu.classList.remove('open'); navToggle.setAttribute('aria-expanded', 'false'); });
-  });
-
-  // ---- smooth scroll for in-page nav links ----
-  document.querySelectorAll('.home-nav-links a, .home-mobile-menu a').forEach(a => {
-    a.addEventListener('click', (e) => {
-      const target = document.getElementById(a.getAttribute('href').slice(1));
-      if (target) {
-        e.preventDefault();
-        target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
-      }
-    });
-  });
-
   // ---- fade-up reveal on scroll ----
-  if ('IntersectionObserver' in window && !reduceMotion) {
-    const io = new IntersectionObserver((entries) => {
-      entries.forEach(entry => { if (entry.isIntersecting) { entry.target.classList.add('in-view'); io.unobserve(entry.target); } });
-    }, { threshold: 0.12 });
-    document.querySelectorAll('.reveal').forEach(el => io.observe(el));
-  } else {
+  // Goes FIRST and is wrapped defensively: .reveal elements start
+  // hidden (opacity:0, see CSS) purely as a cosmetic entrance effect,
+  // so if anything below this point throws, or IntersectionObserver
+  // is unavailable/never fires for some element, the page must never
+  // be left permanently blank. Every path here — success, unsupported
+  // browser, thrown error, or just a safety timeout — ends with every
+  // .reveal element visible.
+  try {
+    const revealEls = document.querySelectorAll('.reveal');
+    if ('IntersectionObserver' in window && !reduceMotion) {
+      const io = new IntersectionObserver((entries) => {
+        entries.forEach(entry => { if (entry.isIntersecting) { entry.target.classList.add('in-view'); io.unobserve(entry.target); } });
+      }, { threshold: 0.12 });
+      revealEls.forEach(el => io.observe(el));
+      // Belt-and-suspenders: whatever hasn't revealed itself within
+      // 1.5s (offscreen sections on a short page, an observer that
+      // never fires, etc.) is force-shown rather than left invisible.
+      setTimeout(() => revealEls.forEach(el => el.classList.add('in-view')), 1500);
+    } else {
+      revealEls.forEach(el => el.classList.add('in-view'));
+    }
+  } catch (e) {
     document.querySelectorAll('.reveal').forEach(el => el.classList.add('in-view'));
   }
 
+  // ---- sticky nav shadow + active-link tracking on scroll ----
+  try {
+    const navEl = document.getElementById('homeNav');
+    const navLinks = Array.from(document.querySelectorAll('#homeNavLinks a'));
+    const sections = ['home', 'features', 'analytics', 'modules', 'about'].map(id => document.getElementById(id)).filter(Boolean);
+    function onScroll() {
+      if (navEl) navEl.classList.toggle('scrolled', window.scrollY > 8);
+      let current = sections[0];
+      sections.forEach(sec => { if (window.scrollY >= sec.offsetTop - 120) current = sec; });
+      navLinks.forEach(a => a.classList.toggle('active', current && a.getAttribute('href') === '#' + current.id));
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+  } catch (e) { /* purely cosmetic — never block the rest of the page */ }
+
+  // ---- mobile menu toggle ----
+  try {
+    const navToggle = document.getElementById('homeNavToggle');
+    const mobileMenu = document.getElementById('homeMobileMenu');
+    if (navToggle && mobileMenu) {
+      navToggle.onclick = () => {
+        const open = mobileMenu.classList.toggle('open');
+        navToggle.setAttribute('aria-expanded', String(open));
+      };
+      document.querySelectorAll('#homeMobileMenu a').forEach(a => {
+        a.addEventListener('click', () => { mobileMenu.classList.remove('open'); navToggle.setAttribute('aria-expanded', 'false'); });
+      });
+    }
+  } catch (e) { /* non-critical */ }
+
+  // ---- smooth scroll for in-page nav links ----
+  try {
+    document.querySelectorAll('.home-nav-links a, .home-mobile-menu a').forEach(a => {
+      a.addEventListener('click', (e) => {
+        const target = document.getElementById(a.getAttribute('href').slice(1));
+        if (target) {
+          e.preventDefault();
+          target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+        }
+      });
+    });
+  } catch (e) { /* non-critical */ }
+
   // ---- stat counters ----
-  const statTargets = { homeStat1: 1250, homeStat2: 8500, homeStat3: 12, homeStat4: 4000 };
-  Object.entries(statTargets).forEach(([id, val]) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    if (reduceMotion) el.textContent = val.toLocaleString() + '+';
-    else UI.animateCount(el, val, { suffix: '+' });
-  });
+  try {
+    const statTargets = { homeStat1: 1250, homeStat2: 8500, homeStat3: 12, homeStat4: 4000 };
+    Object.entries(statTargets).forEach(([id, val]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (reduceMotion) el.textContent = val.toLocaleString() + '+';
+      else UI.animateCount(el, val, { suffix: '+' });
+    });
+  } catch (e) { /* non-critical */ }
 
   // ---- dashboard-preview & analytics charts (purely illustrative,
-  // no live data — homepage is shown to signed-out visitors) ----
-  if (typeof Chart !== 'undefined') {
-    Views._homeCharts = Views._homeCharts || {};
-    Object.values(Views._homeCharts).forEach(c => { try { c.destroy(); } catch (e) {} });
-    Views._homeCharts = {};
+  // no live data — homepage is shown to signed-out visitors). Skipped
+  // entirely, never blocking, if the Chart.js CDN didn't load. ----
+  try {
+    if (typeof Chart !== 'undefined') {
+      Views._homeCharts = Views._homeCharts || {};
+      Object.values(Views._homeCharts).forEach(c => { try { c.destroy(); } catch (e) {} });
+      Views._homeCharts = {};
 
-    const trendCanvas = document.getElementById('homeChartTrend');
-    if (trendCanvas) {
-      Views._homeCharts.trend = new Chart(trendCanvas, {
-        type: 'line',
-        data: {
-          labels: ['Opener', 'Midterm', 'Endterm'],
-          datasets: [{ data: [64, 69, 72.4], borderColor: '#2563EB', backgroundColor: 'rgba(37,99,235,0.12)', fill: true, tension: 0.35, pointRadius: 3, borderWidth: 2 }]
-        },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
-          scales: { y: { display: false, min: 50, max: 90 }, x: { display: false } } }
-      });
-    }
+      const trendCanvas = document.getElementById('homeChartTrend');
+      if (trendCanvas) {
+        Views._homeCharts.trend = new Chart(trendCanvas, {
+          type: 'line',
+          data: {
+            labels: ['Opener', 'Midterm', 'Endterm'],
+            datasets: [{ data: [64, 69, 72.4], borderColor: '#2563EB', backgroundColor: 'rgba(37,99,235,0.12)', fill: true, tension: 0.35, pointRadius: 3, borderWidth: 2 }]
+          },
+          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+            scales: { y: { display: false, min: 50, max: 90 }, x: { display: false } } }
+        });
+      }
 
-    const levelsCanvas = document.getElementById('homeChartLevels');
-    if (levelsCanvas) {
-      Views._homeCharts.levels = new Chart(levelsCanvas, {
-        type: 'doughnut',
-        data: { labels: ['EE', 'ME', 'AE', 'BE'], datasets: [{ data: [30, 48, 20, 2], backgroundColor: ['#10B981', '#4F46E5', '#F59E0B', '#EF4444'], borderWidth: 0 }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, cutout: '68%' }
-      });
-    }
+      const levelsCanvas = document.getElementById('homeChartLevels');
+      if (levelsCanvas) {
+        Views._homeCharts.levels = new Chart(levelsCanvas, {
+          type: 'doughnut',
+          data: { labels: ['EE', 'ME', 'AE', 'BE'], datasets: [{ data: [30, 48, 20, 2], backgroundColor: ['#10B981', '#4F46E5', '#F59E0B', '#EF4444'], borderWidth: 0 }] },
+          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, cutout: '68%' }
+        });
+      }
 
-    const analyticsCanvas = document.getElementById('homeChartAnalyticsTrend');
-    if (analyticsCanvas) {
-      Views._homeCharts.analytics = new Chart(analyticsCanvas, {
-        type: 'bar',
-        data: {
-          labels: ['Term 1', 'Term 2', 'Term 3'],
-          datasets: [{ data: [66, 69.5, 72.4], backgroundColor: '#4F46E5', borderRadius: 6 }]
-        },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
-          scales: { y: { beginAtZero: true, max: 100, grid: { color: '#EEF2F8' } }, x: { grid: { display: false } } } }
-      });
+      const analyticsCanvas = document.getElementById('homeChartAnalyticsTrend');
+      if (analyticsCanvas) {
+        Views._homeCharts.analytics = new Chart(analyticsCanvas, {
+          type: 'bar',
+          data: {
+            labels: ['Term 1', 'Term 2', 'Term 3'],
+            datasets: [{ data: [66, 69.5, 72.4], backgroundColor: '#4F46E5', borderRadius: 6 }]
+          },
+          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, max: 100, grid: { color: '#EEF2F8' } }, x: { grid: { display: false } } } }
+        });
+      }
     }
-  }
+  } catch (e) { /* charts are decorative — never block the rest of the page */ }
 };
 
 Views.login = function (onSuccess) {
