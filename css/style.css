@@ -1241,6 +1241,49 @@ table.ledger-table .num {
   font-size: 12px;
 }
 
+/* ---------- Tall ledger: vertical scroll + sticky header + frozen
+   leading columns, for broadsheets/analysis tables that can run to
+   hundreds of rows. Opt-in via .ledger-scroll-y on the scroll
+   container and .freeze-1 / .freeze-2 on th/td that should stay
+   pinned while scrolling horizontally. ---------- */
+
+.ledger-scroll-y {
+  overflow-y: auto;
+  max-height: 62vh;
+}
+
+.ledger-scroll-y table.ledger-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
+table.ledger-table th.freeze-1, table.ledger-table td.freeze-1,
+table.ledger-table th.freeze-2, table.ledger-table td.freeze-2 {
+  position: sticky;
+  background: var(--paper-raised);
+  z-index: 1;
+}
+table.ledger-table thead th.freeze-1, table.ledger-table thead th.freeze-2 {
+  z-index: 4;
+  background: var(--paper-line-soft);
+}
+table.ledger-table th.freeze-1, table.ledger-table td.freeze-1 { left: 0; }
+table.ledger-table th.freeze-2, table.ledger-table td.freeze-2 { left: 64px; box-shadow: 2px 0 4px rgba(0,0,0,0.04); }
+
+table.ledger-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+table.ledger-table th.sortable:hover { color: var(--ink); }
+table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
+
+@media print {
+  .ledger-scroll-y { max-height: none; overflow: visible; }
+  table.ledger-table th.freeze-1, table.ledger-table td.freeze-1,
+  table.ledger-table th.freeze-2, table.ledger-table td.freeze-2 { position: static; box-shadow: none; }
+}
+
 /* ---------- Badges / performance levels ---------- */
 
 .badge {
@@ -1326,6 +1369,36 @@ table.ledger-table .num {
   width: 76px;
   font-family: var(--font-mono);
   text-align: right;
+}
+
+.mark-input-compact {
+  width: 56px;
+  font-family: var(--font-mono);
+  text-align: right;
+  padding: 4px 6px;
+  font-size: 13px;
+}
+
+.mark-input-compact.dirty {
+  border-color: var(--brass, #b8863b);
+  background: #FFF8EC;
+}
+
+.mark-input-compact.invalid {
+  border-color: var(--danger, #d64545);
+  background: #FDECEC;
+}
+
+.unsaved-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: #FFF3E0;
+  color: #96690E;
+  font-size: 12.5px;
+  font-weight: 600;
 }
 
 /* ---------- Empty state ---------- */

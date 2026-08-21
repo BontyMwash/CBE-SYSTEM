@@ -2,6 +2,10 @@
 -- Copyright (c) 2026 B~CBE Analytics. All rights reserved.
 -- Migration 015 — Lesson Plans & Schemes of Work.
 --
+-- NOTE: this feature was removed — see migration 017, which drops
+-- everything this file creates. Kept here only for migration
+-- history; do not run on a fresh install without 017 following it.
+--
 -- Adds what the new "Lesson Plans" screen needs:
 --   • schemes_of_work  -> the term-long plan, one row per week/lesson
 --     for a subject+class (Strand, Sub-strand, Specific Learning

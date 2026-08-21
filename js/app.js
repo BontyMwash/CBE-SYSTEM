@@ -22,7 +22,6 @@ const App = {
     subjects: 'fa-book', exams: 'fa-file-pen', results: 'fa-list-check',
     myClasses: 'fa-chalkboard-user', learners: 'fa-people-group', assessments: 'fa-clipboard-list',
     gradebook: 'fa-book-open', attendance: 'fa-calendar-check', competency: 'fa-star-half-stroke',
-    lessonPlans: 'fa-chalkboard-teacher',
     reports: 'fa-file-lines', broadsheet: 'fa-table-list', analysis: 'fa-chart-column', notify: 'fa-paper-plane', users: 'fa-users-gear',
     settings: 'fa-gear', schools: 'fa-school'
   },

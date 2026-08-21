@@ -19,7 +19,7 @@ const Auth = {
     superadmin: ['schools'],
     admin: [
       'dashboard', 'classes', 'students', 'subjects', 'exams', 'results', 'gradebook',
-      'reports', 'attendance', 'competency', 'lessonPlans', 'broadsheet', 'analysis',
+      'reports', 'attendance', 'competency', 'broadsheet', 'analysis',
       'notify', 'users', 'settings'
     ],
     // Teacher section — kept in this order because it's the order the
@@ -33,7 +33,7 @@ const Auth = {
     // added back in allowedRoutes() below for exactly those teachers.
     user: [
       'dashboard', 'myClasses', 'learners', 'assessments', 'results', 'analysis',
-      'gradebook', 'reports', 'attendance', 'competency', 'lessonPlans'
+      'gradebook', 'reports', 'attendance', 'competency'
     ],
     // Routes added on top of `user` only for teachers who are a class
     // teacher for at least one class (see _loadProfile / isClassTeacher).
@@ -45,7 +45,6 @@ const Auth = {
     myClasses: 'My Classes', learners: 'Learners', assessments: 'Assessments',
     results: 'Marks Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', analysis: 'Marks Analysis',
     gradebook: 'Gradebook', attendance: 'Attendance', competency: 'Competency Assessment',
-    lessonPlans: 'Lesson Plans & Schemes of Work',
     notify: 'Send Results to Parents',
     users: 'Users', settings: 'Settings', schools: 'Schools'
   },
@@ -54,7 +53,6 @@ const Auth = {
     myClasses: 'My Classes', learners: 'Learners', assessments: 'Assessments',
     results: 'Marks Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', analysis: 'Marks Analysis',
     gradebook: 'Gradebook', attendance: 'Attendance', competency: 'Competency',
-    lessonPlans: 'Lesson Plans',
     notify: 'Send to Parents',
     users: 'Users', settings: 'Settings', schools: 'Schools'
   },
@@ -182,8 +180,7 @@ const Auth = {
   },
 
   // ---- generic Edge Function caller, reused by anything that needs
-  // server-side secrets (e.g. the Anthropic API key for AI-generated
-  // schemes/lesson plans — see generate-curriculum-content) ----
+  // server-side secrets (e.g. the service role key — see manage-user) ----
   async callEdgeFunction(name, payload) {
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData.session?.access_token;

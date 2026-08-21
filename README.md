@@ -37,7 +37,6 @@ project/
 │   ├── notify.js                  # Send Results to Parents (WhatsApp/SMS/email)
 │   ├── teacher.js                 # My Classes / Learners / Assessments / Gradebook / Reports hub
 │   ├── attendance.js              # Attendance register + Competency Assessment (CBC strands)
-│   ├── lessonplans.js              # Lesson Plans & Schemes of Work (generate + edit + print)
 │   └── app.js                    # router + login gate + sidebar
 ├── sql/
 │   ├── schema.sql                # ⚠️ RUN THIS in Supabase SQL Editor
@@ -49,14 +48,13 @@ project/
 │   └── 011_allow_manual_notification_channel.sql # migration for existing installs — lets "mark as sent" (bulk, no message) log a notification
 │   └── 012_class_teacher_add_students.sql # migration for existing installs — lets a class teacher add learners into their own class(es)
 │   ├── 013_admin_section_scope.sql # migration for existing installs — lets a superadmin restrict an admin login to Primary, Junior Secondary, or Senior School only
-│   ├── 015_lesson_plans_and_schemes.sql # migration for existing installs — adds Lesson Plans & Schemes of Work
-│   └── 016_curriculum_documents.sql # migration for existing installs — adds curriculum design PDF uploads + storage bucket, for AI-generated schemes/lesson plans
+│   ├── 015_lesson_plans_and_schemes.sql # historical — feature removed, see 017
+│   ├── 016_curriculum_documents.sql # historical — feature removed, see 017
+│   └── 017_remove_lesson_plans_and_schemes.sql # ⚠️ RUN THIS if you ever ran 015/016 — drops the Lesson Plans & Schemes of Work feature
 └── supabase/
     └── functions/
-        ├── manage-user/
-        │   └── index.ts          # ⚠️ DEPLOY THIS as a Supabase Edge Function
-        └── generate-curriculum-content/
-            └── index.ts          # ⚠️ DEPLOY THIS too — AI scheme/lesson-plan generation (needs OPENROUTER_API_KEY secret, see step 3)
+        └── manage-user/
+            └── index.ts          # ⚠️ DEPLOY THIS as a Supabase Edge Function
 ```
 
 **Everything in `js/`, `css/`, and `index.html` is a static site** — host
@@ -103,48 +101,28 @@ Also run `sql/013_admin_section_scope.sql` — it adds the optional
 Senior School), used by the level switcher near the logo and the
 "Section" field on the Users page; without it, admin logins stay
 unrestricted as before, but the Section field/switcher won't have any
-effect at the database level. Also run
-`sql/015_lesson_plans_and_schemes.sql` — it adds the **Lesson Plans &
-Schemes of Work** screen (tables `schemes_of_work` and `lesson_plans`,
-scoped the same way as Competency Assessment: admins see every
-subject in their school, a subject teacher only their own); without
-it the sidebar entry still appears but every save fails since the
-tables don't exist yet. Also run `sql/016_curriculum_documents.sql` —
-it adds the `curriculum_documents` table and a private
-`curriculum-designs` storage bucket, for uploading the official KICD
-curriculum design PDF that grounds the **"Generate with AI"** buttons
-on the Lesson Plans screen; without it, "Manage curriculum PDFs" and
-"Generate with AI" will fail.)
+effect at the database level. If you previously ran
+`sql/015_lesson_plans_and_schemes.sql` and/or
+`sql/016_curriculum_documents.sql`, also run
+`sql/017_remove_lesson_plans_and_schemes.sql` — the Lesson Plans &
+Schemes of Work feature (and the curriculum-PDF upload + "Generate
+with AI" buttons that went with it) has been removed from the app,
+and this migration drops the now-unused tables and storage bucket.
+A fresh install can skip 015–017 entirely.)
 
-### 3. Deploy the Edge Functions
+### 3. Deploy the Edge Function
 This requires the [Supabase CLI](https://supabase.com/docs/guides/cli):
 
 ```bash
 supabase login
 supabase link --project-ref YOUR-PROJECT-REF
 supabase functions deploy manage-user
-supabase functions deploy generate-curriculum-content
 ```
 
-Both functions need your service role key available to them —
+`manage-user` needs your service role key available to it —
 Supabase sets `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`
 automatically for Edge Functions in your own project, so no extra
-config is needed for `manage-user`.
-
-`generate-curriculum-content` additionally needs an **Anthropic API
-key** (it calls Claude, via OpenRouter, to draft schemes/lesson
-plans from the uploaded curriculum PDF). Get one from
-[openrouter.ai/keys](https://openrouter.ai/keys), then set it as a
-secret — it's never exposed to the browser:
-
-```bash
-supabase secrets set OPENROUTER_API_KEY=sk-or-v1-...
-```
-
-Without this secret set, the SQL/table/UI for AI generation all work,
-but clicking "Generate with AI" will return an error. Note this uses
-your own Anthropic account and is billed per generation — it's
-separate from anything to do with Claude.ai.
+config is needed.
 
 ### 4. Create your first superadmin
 Every login *after* this one is created from inside the app — but the
@@ -241,53 +219,8 @@ Every entity below has full Create/Read/Update/Delete wired through
   day, upserted so re-marking a day updates rather than duplicates
 - **Competency Assessment** — `competency_assessments` table, one row
   per learner/subject/strand/term, rated EE/ME/AE/BE
-- **Lesson Plans & Schemes of Work** — `schemes_of_work` table (one row
-  per subject/class/term/week/lesson) and `lesson_plans` table (one full
-  CBC-format lesson document per subject/class/term/week/lesson); both
-  scoped like Competency Assessment (admin: whole school, teacher: own
-  assigned subject only)
 
-## Lesson Plans & Schemes of Work
 
-Reachable from the sidebar for both Admins and subject teachers (route
-`lessonPlans`, in `js/lessonplans.js`), scoped the same way as
-Assessments/Gradebook/Competency Assessment.
-
-- **Scheme of Work** tab — a term-long ledger, one row per week/lesson
-  (Strand, Sub-strand, Specific Learning Outcomes, Key Inquiry
-  Question, Learning Experiences, Learning Resources, Assessment
-  Methods, Reflection). **Generate weeks** fills in blank week/lesson
-  rows for the whole term in one click, so a teacher starts from a
-  skeleton instead of a blank page — it never overwrites a row that's
-  already been filled in (uses `ignoreDuplicates` on insert).
-- **Lesson Plans** tab — one full CBC-format lesson document per
-  week/lesson (adds Core Competencies, Values, Pertinent & Contemporary
-  Issues, Learning Resources, Introduction / Lesson Development /
-  Conclusion, Extended Activities, Reflection). **Use for Lesson
-  Plan** on any scheme row drafts a starting Introduction / Lesson
-  Development / Conclusion from that row's strand, outcomes, inquiry
-  question, resources, and assessment method — a template the teacher
-  edits before saving (same "computed from what's already on screen"
-  approach as the Marks Analysis page's AI Insights, no external AI
-  call).
-- **Generate with AI** (both tabs) — a genuine external AI call
-  (Claude, via the `generate-curriculum-content` Edge Function),
-  grounded in the school's own uploaded KICD curriculum design PDF
-  for that subject+class ("Manage curriculum PDFs" next to the
-  class/subject picker). On the Scheme of Work tab it drafts full
-  content for every week/lesson of the term and only writes into
-  rows that are still blank; on the Lesson Plans tab it drafts one
-  full lesson into the open form, which is then reviewed and edited
-  before saving — same "draft, don't auto-save" pattern as the rest
-  of the screen. **"Generate all with AI"** on the Lesson Plans tab
-  runs this for every scheme-of-work row that doesn't have a lesson
-  plan yet, one at a time (with live progress and a Stop button),
-  saving each one as it's generated — rows that already have a plan
-  are left alone. Requires `sql/016_curriculum_documents.sql`, the
-  `generate-curriculum-content` function deployed, and an
-  `OPENROUTER_API_KEY` secret set (see Setup, step 3).
-- Both tabs support Print / Save as PDF (reusing the same school
-  masthead/footer as report cards and broadsheets) and Download CSV.
 
 ## Why an Edge Function, not just direct table access?
 
@@ -298,15 +231,6 @@ key that bypasses Row Level Security entirely. That key must never reach
 the browser. `supabase/functions/manage-user/index.ts` runs server-side
 inside Supabase, checks the caller's own role/school before doing
 anything, and is the only place that key is ever used.
-
-Same reasoning for the Anthropic API key used by "Generate with AI":
-it must never reach the browser either, since anyone with it could
-run up your Anthropic bill from outside the app.
-`supabase/functions/generate-curriculum-content/index.ts` checks the
-caller is actually allowed to generate for that subject (admin in
-their own school, or a teacher assigned that subject) before it ever
-calls the Anthropic API, and the key itself lives only in the
-function's `OPENROUTER_API_KEY` secret.
 
 ## Installable / offline app shell (PWA)
 

@@ -42,15 +42,27 @@ Views.analysis = async function () {
     const students = st.students.filter(s => s.klass === klass).sort((a, b) => a.name.localeCompare(b.name));
 
     const studentRows = students.map(stu => {
-      const pcts = [];
-      subjectCols.forEach(col => {
+      const cells = subjectCols.map(col => {
         const res = st.results.find(r => r.examId === col.exam.id && r.studentId === stu.id);
-        if (res) pcts.push(Grading.percent(res.marks, col.exam.totalMarks));
+        return res ? { pct: Grading.percent(res.marks, col.exam.totalMarks), marks: res.marks, totalMarks: col.exam.totalMarks } : { pct: null, marks: null, totalMarks: col.exam.totalMarks };
       });
+      const pcts = cells.map(c => c.pct).filter(v => v !== null);
       const avg = Grading.average(pcts);
       const band = avg === null ? null : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
-      return { student: stu, avg, band };
+      return { student: stu, cells, avg, band };
     });
+
+    // Tie-aware rank by class average, same convention as the Broadsheet.
+    const rankOrder = [...studentRows].sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
+    let rnk = 0, lastAvg = null, seenR = 0;
+    const rankMap = new Map();
+    rankOrder.forEach(r => {
+      seenR++;
+      if (r.avg === null) { rankMap.set(r.student.id, null); return; }
+      if (r.avg !== lastAvg) { rnk = seenR; lastAvg = r.avg; }
+      rankMap.set(r.student.id, rnk);
+    });
+    studentRows.forEach(r => { r.rank = rankMap.get(r.student.id); });
 
     const validAvgs = studentRows.filter(r => r.avg !== null).map(r => r.avg);
     const classMean = Grading.average(validAvgs);
@@ -85,7 +97,8 @@ Views.analysis = async function () {
     return {
       klass, type, term, year, students, subjectCols,
       classMean, classHigh, classLow, passRate, completion, expectedEntries, enteredEntries,
-      subjectStats, bandCounts, topStudents, supportStudents
+      subjectStats, bandCounts, topStudents, supportStudents,
+      studentRows: [...studentRows].sort((a, b) => (a.rank ?? 9999) - (b.rank ?? 9999))
     };
   }
 
@@ -213,9 +226,102 @@ Views.analysis = async function () {
             </div>
           </div>
         </div>
+        <div class="section-block">
+          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+            <div class="section-title" style="margin:0;">All students &middot; every subject</div>
+            <div class="filter-row no-print" style="margin:0;">
+              <input type="text" id="anSearch" placeholder="Search learner name or adm. no…" style="min-width:220px;">
+              <select id="anLevelFilter">
+                <option value="all">All achievement levels</option>
+                ${(st.settings.gradingBands || []).map(b => `<option value="${UI.esc(b.code)}">${UI.esc(b.code)} — ${UI.esc(b.label)}</option>`).join('')}
+                <option value="none">Not yet assessed</option>
+              </select>
+              <button class="btn" id="anTableCsvBtn"><i class="fa-solid fa-download"></i> CSV</button>
+              <button class="btn" id="anTableExcelBtn"><i class="fa-solid fa-file-excel"></i> Excel</button>
+            </div>
+          </div>
+          ${data.subjectCols.length === 0 ? `<div class="empty"><div class="empty-title">No subjects sat</div></div>` : `
+          <div class="ledger">
+            <div class="ledger-scroll ledger-scroll-y">
+              <table class="ledger-table">
+                <thead>
+                  <tr>
+                    <th class="freeze-1">Rank</th>
+                    <th class="freeze-2">Name</th>
+                    <th>Adm. No.</th>
+                    ${data.subjectCols.map(c => `<th title="${UI.esc(c.subject.name)}">${UI.esc(c.subject.code || c.subject.name)}</th>`).join('')}
+                    <th>Average %</th>
+                    <th>Level</th>
+                  </tr>
+                </thead>
+                <tbody id="anAllTbody"></tbody>
+              </table>
+            </div>
+          </div>
+          <p class="field-hint no-print" id="anAllCount" style="margin-top:8px;"></p>`}
+        </div>
         ${buildPrintFooterHTML()}
       </div>
     `;
+  }
+
+  // ---- wires up the "All students · every subject" table's search box,
+  // achievement-level filter, and CSV/Excel export. Called after
+  // renderAnalysisBody() is dropped into the DOM, for both the admin
+  // and teacher flows below. ----
+  function wireAllStudentsTable(data) {
+    const tbody = document.getElementById('anAllTbody');
+    if (!tbody) return; // no subjects sat for this sitting — nothing to wire
+    const searchEl = document.getElementById('anSearch');
+    const levelEl = document.getElementById('anLevelFilter');
+    const countEl = document.getElementById('anAllCount');
+    const state = { search: '', level: 'all' };
+
+    function visible() {
+      let list = data.studentRows;
+      if (state.level !== 'all') list = list.filter(r => (r.band ? r.band.code : 'none') === state.level);
+      if (state.search.trim()) {
+        const q = state.search.trim().toLowerCase();
+        list = list.filter(r => r.student.name.toLowerCase().includes(q) || (r.student.admissionNo || '').toLowerCase().includes(q));
+      }
+      return list;
+    }
+
+    function rowsHtml(list) {
+      if (list.length === 0) return `<tr><td colspan="${5 + data.subjectCols.length}" style="text-align:center; color:var(--ink-soft); padding:24px;">No students match the current search / filter.</td></tr>`;
+      return list.map(r => `<tr>
+        <td class="num freeze-1">${r.rank === null ? '—' : r.rank}</td>
+        <td class="freeze-2">${UI.esc(r.student.name)}</td>
+        <td class="num">${UI.esc(r.student.admissionNo) || '—'}</td>
+        ${r.cells.map(c => `<td class="num" ${c.marks !== null ? `title="${c.marks}/${c.totalMarks} raw"` : ''}>${c.pct === null ? '<span class="row-index">—</span>' : c.pct.toFixed(1) + '%'}</td>`).join('')}
+        <td class="num">${r.avg === null ? '—' : r.avg.toFixed(1) + '%'}</td>
+        <td>${UI.badge(r.band)}</td>
+      </tr>`).join('');
+    }
+
+    function refresh() {
+      const list = visible();
+      tbody.innerHTML = rowsHtml(list);
+      if (countEl) countEl.textContent = `Showing ${list.length} of ${data.studentRows.length} student${data.studentRows.length === 1 ? '' : 's'}`;
+    }
+
+    if (searchEl) searchEl.oninput = (e) => { state.search = e.target.value; refresh(); };
+    if (levelEl) levelEl.onchange = (e) => { state.level = e.target.value; refresh(); };
+
+    const csvBtn = document.getElementById('anTableCsvBtn');
+    const excelBtn = document.getElementById('anTableExcelBtn');
+    const header = ['Rank', 'Name', 'Adm. No.', ...data.subjectCols.map(c => c.subject.name), 'Average %', 'Level'];
+    const buildRows = () => data.studentRows.map(r => [
+      r.rank === null ? '' : r.rank, r.student.name, r.student.admissionNo || '',
+      ...r.cells.map(c => c.pct === null ? '' : c.pct.toFixed(1)),
+      r.avg === null ? '' : r.avg.toFixed(1),
+      r.band ? r.band.code : ''
+    ]);
+    const filename = `all-students-${data.klass}-${data.type}-${data.term}-${data.year}`.replace(/\s+/g, '_');
+    if (csvBtn) csvBtn.onclick = () => UI.downloadCSV(filename, header, buildRows());
+    if (excelBtn) excelBtn.onclick = () => UI.downloadExcel(filename, header, buildRows(), 'All students');
+
+    refresh();
   }
 
   /* ------------------------------------------------------------
@@ -237,6 +343,7 @@ Views.analysis = async function () {
         : `<button class="btn btn-primary" id="anPublishBtn">Publish results</button>`;
 
       document.getElementById('anBody').innerHTML = renderAnalysisBody(data, publishControlsHtml);
+      wireAllStudentsTable(data);
       document.getElementById('anPrintBtn').onclick = () => window.print();
       document.getElementById('anPdfBtn').onclick = (e) => {
         const el = document.getElementById('anPrintArea');
@@ -324,6 +431,7 @@ Views.analysis = async function () {
     const chosen = publishedSorted.find(p => p.id === sel.value) || publishedSorted[0];
     const data = computeSitting(chosen.klass, chosen.type, chosen.term, chosen.year);
     document.getElementById('anBody').innerHTML = renderAnalysisBody(data, '');
+    wireAllStudentsTable(data);
     document.getElementById('anPrintBtn').onclick = () => window.print();
     document.getElementById('anPdfBtn').onclick = (e) => {
       const el = document.getElementById('anPrintArea');

@@ -3,6 +3,10 @@
 -- Migration 016 — Curriculum Documents (for AI-assisted
 -- schemes of work & lesson plans).
 --
+-- NOTE: this feature was removed — see migration 017, which drops
+-- everything this file creates. Kept here only for migration
+-- history; do not run on a fresh install without 017 following it.
+--
 -- Adds a place to upload the official KICD curriculum design
 -- PDF for a subject+class, so the "Generate with AI" buttons on
 -- the Lesson Plans screen have an authoritative source to ground

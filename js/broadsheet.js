@@ -4,16 +4,28 @@
    broadsheet.js — class broadsheet: every student x every
    subject for one exam sitting (type/term/year/class), with
    totals, mean %, rank position, and overall level.
+
+   Table supports: live search (name/adm. no.), achievement-level
+   filter, click-to-sort columns, sticky header + frozen Pos./Name
+   columns for long class lists, CSV / Excel / PDF export, AND
+   inline spreadsheet-style mark entry ("Edit marks") across every
+   subject a teacher is authorized for, with per-row live totals,
+   validation, an unsaved-changes indicator, and a batch Save/
+   Cancel workflow. A published (locked) sitting can't be edited
+   here — unpublish it from Analysis first, same rule as the
+   single-subject Marks Entry screen.
    ============================================================ */
 
 Views.broadsheet = async function () {
   setTopbarActions('');
   showLoading();
-  const st = await Store.current();
+  let st = await Store.current();
   const user = Auth.currentUser();
   // Broadsheet exposes every subject for a whole class — only reachable
   // in the nav for class teachers (see auth.js), and even then scoped
-  // to just the class(es) they hold, not the whole school.
+  // to just the class(es) they hold, not the whole school. Editing marks
+  // here is further scoped per-subject (scope.subjectIds), same rule as
+  // the single-subject Marks Entry screen.
   const scope = teacherScope(st, user);
 
   if (st.students.length === 0 || st.exams.length === 0) {
@@ -38,7 +50,8 @@ Views.broadsheet = async function () {
         ${['Term 1', 'Term 2', 'Term 3'].map(t => `<option value="${t}" ${st.settings.term === t ? 'selected' : ''}>${t}</option>`).join('')}
       </select>
       <input type="number" id="bsYear" value="${st.settings.year}" style="width:90px;">
-      <button class="btn" id="bsCsvBtn"><i class="fa-solid fa-download"></i> Download CSV</button>
+      <button class="btn" id="bsCsvBtn"><i class="fa-solid fa-download"></i> CSV</button>
+      <button class="btn" id="bsExcelBtn"><i class="fa-solid fa-file-excel"></i> Excel</button>
       <button class="btn btn-brass" id="bsPrintBtn">Print / Save as PDF</button>
       <button class="btn btn-brass" id="bsPdfBtn"><i class="fa-solid fa-file-pdf"></i> Download PDF</button>
     </div>
@@ -51,17 +64,46 @@ Views.broadsheet = async function () {
   const termSel = document.getElementById('bsTerm');
   const yearSel = document.getElementById('bsYear');
 
-  [classSel, typeSel, termSel, yearSel].forEach(el => el.onchange = render);
+  let lastCsv = null; // set inside render(); read by the CSV/Excel buttons
+  // Table-only state — re-applied without recomputing the whole
+  // sitting (search/sort/level filter never change the underlying data,
+  // only which rows show and in what order).
+  const tableState = { search: '', level: 'all', sortKey: 'rank', sortDir: 'asc' };
+  let editMode = false;
+  const pending = new Map(); // `${examId}::${studentId}` -> {examId, studentId, marks}
 
-  let lastCsv = null; // set inside render(); read by the Download CSV button
+  // Guards against silently discarding unsaved marks when the sitting
+  // (class/type/term/year) is changed mid-edit or the tab is closed.
+  function guardedChange(selectEl) {
+    selectEl.addEventListener('mousedown', () => { selectEl.dataset.prev = selectEl.value; });
+    selectEl.onchange = () => {
+      const prevValue = selectEl.dataset.prev ?? selectEl.value;
+      if (pending.size > 0) {
+        const newValue = selectEl.value;
+        selectEl.value = prevValue; // revert now; only apply if the user confirms below
+        UI.confirmAction(
+          `You have ${pending.size} unsaved change${pending.size === 1 ? '' : 's'}. Discard them and switch?`,
+          () => { pending.clear(); editMode = false; window.onbeforeunload = null; selectEl.value = newValue; render(); },
+          { confirmLabel: 'Discard and switch', confirmClass: 'btn-danger' }
+        );
+      } else {
+        render();
+      }
+    };
+  }
+  [classSel, typeSel, termSel, yearSel].forEach(guardedChange);
 
   function render() {
     lastCsv = null;
+    editMode = false;
+    pending.clear();
+    window.onbeforeunload = null;
     const klass = classSel.value;
     const type = typeSel.value;
     const term = termSel.value;
     const year = yearSel.value;
     const wrap = document.getElementById('bsWrap');
+    tableState.search = ''; tableState.level = 'all'; tableState.sortKey = 'rank'; tableState.sortDir = 'asc';
 
     if (!klass || !type) {
       wrap.innerHTML = `<div class="empty"><div class="empty-title">Choose a class and exam type</div><p>The broadsheet will list every student against every subject sat for that exam.</p></div>`;
@@ -82,6 +124,12 @@ Views.broadsheet = async function () {
       .sort((a, b) => a.subject.name.localeCompare(b.subject.name));
 
     const students = st.students.filter(s => s.klass === klass).sort((a, b) => a.name.localeCompare(b.name));
+
+    // A published sitting is locked everywhere marks can be entered
+    // (this table included) — unpublish it from Analysis first.
+    const locked = (st.published || []).some(p => p.klass === klass && p.type === type && p.term === term && String(p.year) === String(year));
+    const canEditCol = (col) => !scope.isTeacher || scope.subjectIds.has(col.subject.id);
+    const canEditAny = !locked && subjectCols.some(canEditCol);
 
     // Build per-student rows
     const rows = students.map(stu => {
@@ -106,26 +154,29 @@ Views.broadsheet = async function () {
     const rankMap = new Map();
     ranked.forEach(r => {
       seen++;
-      if (r.meanPct === null) { rankMap.set(r.student.id, '—'); return; }
+      if (r.meanPct === null) { rankMap.set(r.student.id, null); return; }
       if (r.meanPct !== lastMean) { rank = seen; lastMean = r.meanPct; }
       rankMap.set(r.student.id, rank);
+    });
+
+    // Attach rank/band/points once so filtering/sorting never recomputes them
+    const rowsExtra = ranked.map(r => {
+      const band = r.meanPct === null ? null : Grading.levelForMarks(r.meanPct, 100, st.settings.gradingBands);
+      const points = Grading.pointsForBand(band, st.settings.gradingBands);
+      return { ...r, rank: rankMap.get(r.student.id), band, points };
     });
 
     lastCsv = {
       filename: `broadsheet-${klass}-${type}-${term}-${year}`.replace(/\s+/g, '_'),
       header: ['Pos.', 'Name', 'Adm. No.', ...subjectCols.map(c => c.subject.name), 'Total Marks', 'Mean %', 'Points', 'Level'],
-      rows: ranked.map(r => {
-        const band = r.meanPct === null ? null : Grading.levelForMarks(r.meanPct, 100, st.settings.gradingBands);
-        const points = Grading.pointsForBand(band, st.settings.gradingBands);
-        return [
-          rankMap.get(r.student.id), r.student.name, r.student.admissionNo || '',
-          ...r.cells.map(c => c.pct === null ? '' : c.pct.toFixed(1)),
-          r.totalObtained === null ? '' : `${r.totalObtained}/${r.totalPossible}`,
-          r.meanPct === null ? '' : r.meanPct.toFixed(1),
-          points === null ? '' : points,
-          band ? band.code : ''
-        ];
-      })
+      rows: rowsExtra.map(r => [
+        r.rank === null ? '' : r.rank, r.student.name, r.student.admissionNo || '',
+        ...r.cells.map(c => c.pct === null ? '' : c.pct.toFixed(1)),
+        r.totalObtained === null ? '' : `${r.totalObtained}/${r.totalPossible}`,
+        r.meanPct === null ? '' : r.meanPct.toFixed(1),
+        r.points === null ? '' : r.points,
+        r.band ? r.band.code : ''
+      ])
     };
 
     // Class-level subject averages (bottom row)
@@ -134,10 +185,7 @@ Views.broadsheet = async function () {
       return Grading.average(pcts);
     });
     const classMean = Grading.average(rows.map(r => r.meanPct).filter(v => v !== null));
-    const classMeanPoints = Grading.average(rows.map(r => {
-      const band = r.meanPct === null ? null : Grading.levelForMarks(r.meanPct, 100, st.settings.gradingBands);
-      return Grading.pointsForBand(band, st.settings.gradingBands);
-    }).filter(v => v !== null));
+    const classMeanPoints = Grading.average(rowsExtra.map(r => r.points).filter(v => v !== null));
 
     /* ---- Subject performance: mean/high/low/entries for each
        subject sat, so a teacher/admin can see which subjects are
@@ -164,10 +212,7 @@ Views.broadsheet = async function () {
     const enteredEntries = subjectCols.reduce((sum, col) => sum + st.results.filter(r => r.examId === col.exam.id).length, 0);
     const completion = expectedEntries > 0 ? (enteredEntries / expectedEntries) * 100 : null;
     const bandCounts = [...(st.settings.gradingBands || [])].sort((a, b) => b.min - a.min).map(b => ({
-      band: b, count: ranked.filter(r => {
-        const band = r.meanPct === null ? null : Grading.levelForMarks(r.meanPct, 100, st.settings.gradingBands);
-        return band && band.code === b.code;
-      }).length
+      band: b, count: rowsExtra.filter(r => r.band && r.band.code === b.code).length
     }));
     const totalBandCount = bandCounts.reduce((s, b) => s + b.count, 0) || 1;
 
@@ -196,38 +241,101 @@ Views.broadsheet = async function () {
     }).sort((a, b) => (b.mean ?? -1) - (a.mean ?? -1));
     const showStreamSection = streamStats.length > 1;
 
+    // ---- filter + sort the display rows (search box / level select /
+    // sortable column headers) without touching the underlying stats
+    // above, which always reflect the whole class regardless of filter ----
+    function visibleRows() {
+      let list = rowsExtra;
+      if (tableState.level !== 'all') {
+        list = list.filter(r => (r.band ? r.band.code : 'none') === tableState.level);
+      }
+      if (tableState.search.trim()) {
+        const q = tableState.search.trim().toLowerCase();
+        list = list.filter(r => r.student.name.toLowerCase().includes(q) || (r.student.admissionNo || '').toLowerCase().includes(q));
+      }
+      const dir = tableState.sortDir === 'asc' ? 1 : -1;
+      list = [...list].sort((a, b) => {
+        if (tableState.sortKey === 'name') return dir * a.student.name.localeCompare(b.student.name);
+        if (tableState.sortKey === 'mean') return dir * ((a.meanPct ?? -1) - (b.meanPct ?? -1));
+        return dir * ((a.rank ?? 9999) - (b.rank ?? 9999));
+      });
+      return list;
+    }
+
+    // One editable subject cell: an input if this column is editable and
+    // we're in edit mode, else the usual read-only percentage.
+    function subjectCellHtml(row, col) {
+      const idx = subjectCols.indexOf(col);
+      const c = row.cells[idx];
+      const editable = editMode && canEditCol(col);
+      if (!editable) {
+        return `<td class="num subj-cell" data-max="${col.exam.totalMarks}" data-marks="${c.marks === null ? '' : c.marks}" ${c.marks !== null ? `title="${c.marks}/${c.totalMarks} raw"` : ''}>${c.pct === null ? '<span class="row-index">—</span>' : c.pct.toFixed(1) + '%'}</td>`;
+      }
+      const key = `${col.exam.id}::${row.student.id}`;
+      const overridden = pending.get(key);
+      const val = overridden ? overridden.marks : (c.marks === null ? '' : c.marks);
+      return `<td class="subj-cell" data-max="${col.exam.totalMarks}" data-marks="${val === '' ? '' : val}">
+        <input type="number" class="mark-input-compact ${overridden ? 'dirty' : ''}" min="0" max="${col.exam.totalMarks}"
+          data-exam="${col.exam.id}" data-student="${row.student.id}" data-max="${col.exam.totalMarks}" value="${val}">
+      </td>`;
+    }
+
+    function rowsHtml(list) {
+      if (list.length === 0) {
+        return `<tr><td colspan="${5 + subjectCols.length}" style="text-align:center; color:var(--ink-soft); padding:24px;">No students match the current search / filter.</td></tr>`;
+      }
+      return list.map(r => `<tr>
+        <td class="num freeze-1">${r.rank === null ? '—' : r.rank}</td>
+        <td class="freeze-2">${UI.esc(r.student.name)}</td>
+        <td class="num">${UI.esc(r.student.admissionNo) || '—'}</td>
+        ${subjectCols.map(col => subjectCellHtml(r, col)).join('')}
+        <td class="num" data-total-cell>${r.totalObtained === null ? '—' : `${r.totalObtained}/${r.totalPossible}`}</td>
+        <td class="num" data-mean-cell>${r.meanPct === null ? '—' : r.meanPct.toFixed(1) + '%'}</td>
+        <td class="num" data-points-cell>${r.points === null ? '—' : r.points}</td>
+        <td data-level-cell>${UI.badge(r.band)}</td>
+      </tr>`).join('');
+    }
+
+    function sortArrow(key) {
+      if (tableState.sortKey !== key) return '';
+      return `<i class="fa-solid fa-arrow-${tableState.sortDir === 'asc' ? 'up' : 'down'} sort-arrow"></i>`;
+    }
+
     wrap.innerHTML = `
+      <div class="filter-row no-print" style="margin-bottom:12px;">
+        <input type="text" id="bsSearch" placeholder="Search learner name or adm. no…" style="min-width:220px;">
+        <select id="bsLevel">
+          <option value="all">All achievement levels</option>
+          ${(st.settings.gradingBands || []).map(b => `<option value="${UI.esc(b.code)}">${UI.esc(b.code)} — ${UI.esc(b.label)}</option>`).join('')}
+          <option value="none">Not yet assessed</option>
+        </select>
+        <button class="btn" id="bsResetBtn"><i class="fa-solid fa-rotate-left"></i> Reset filters</button>
+        ${canEditAny ? `
+          <button class="btn" id="bsEditBtn"><i class="fa-solid fa-pen"></i> Edit marks</button>
+          <button class="btn btn-primary" id="bsSaveBtn" style="display:none;" disabled><i class="fa-solid fa-floppy-disk"></i> Save Changes</button>
+          <button class="btn btn-danger" id="bsCancelBtn" style="display:none;">Cancel Changes</button>
+          <span class="unsaved-pill" id="bsUnsavedPill" style="display:none;"><i class="fa-solid fa-circle-exclamation"></i> 0 unsaved changes</span>
+        ` : locked ? `<span class="field-hint"><i class="fa-solid fa-lock"></i> Marks are locked — this sitting is published. Unpublish it from Analysis to edit.</span>` : ''}
+        <span id="bsCount" class="field-hint" style="margin-left:auto;"></span>
+      </div>
       <div class="ledger" id="bsPrintArea">
         <div style="padding:16px 16px 0 16px;">${buildReportMastheadHTML(st, `Broadsheet — ${klass}`, `${type} Results`, term, year)}</div>
-        <div class="ledger-scroll">
+        <div class="ledger-scroll ledger-scroll-y">
           <table class="ledger-table">
             <thead>
               <tr>
-                <th>Pos.</th>
-                <th>Name</th>
+                <th class="sortable freeze-1" data-sort="rank" data-label="Pos.">Pos. ${sortArrow('rank')}</th>
+                <th class="sortable freeze-2" data-sort="name" data-label="Name">Name ${sortArrow('name')}</th>
                 <th>Adm. No.</th>
-                ${subjectCols.map(c => `<th title="${UI.esc(c.subject.name)}">${UI.esc(c.subject.code || c.subject.name)}</th>`).join('')}
+                ${subjectCols.map(c => `<th title="${UI.esc(c.subject.name)}">${UI.esc(c.subject.code || c.subject.name)}${editMode && !canEditCol(c) ? ' <i class="fa-solid fa-lock" title="Not your subject to edit" style="font-size:10px; opacity:0.6;"></i>' : ''}</th>`).join('')}
                 <th>Total Marks</th>
-                <th>Mean %</th>
+                <th class="sortable" data-sort="mean" data-label="Mean %">Mean % ${sortArrow('mean')}</th>
                 <th>Points</th>
                 <th>Level</th>
               </tr>
             </thead>
-            <tbody>
-              ${ranked.map(r => {
-                const band = r.meanPct === null ? null : Grading.levelForMarks(r.meanPct, 100, st.settings.gradingBands);
-                const points = Grading.pointsForBand(band, st.settings.gradingBands);
-                return `<tr>
-                  <td class="num">${rankMap.get(r.student.id)}</td>
-                  <td>${UI.esc(r.student.name)}</td>
-                  <td class="num">${UI.esc(r.student.admissionNo) || '—'}</td>
-                  ${r.cells.map(c => `<td class="num" ${c.marks !== null ? `title="${c.marks}/${c.totalMarks} raw"` : ''}>${c.pct === null ? '<span class="row-index">—</span>' : c.pct.toFixed(1) + '%'}</td>`).join('')}
-                  <td class="num">${r.totalObtained === null ? '—' : `${r.totalObtained}/${r.totalPossible}`}</td>
-                  <td class="num">${r.meanPct === null ? '—' : r.meanPct.toFixed(1) + '%'}</td>
-                  <td class="num">${points === null ? '—' : points}</td>
-                  <td>${UI.badge(band)}</td>
-                </tr>`;
-              }).join('')}
+            <tbody id="bsTbody">
+              ${rowsHtml(visibleRows())}
             </tbody>
             <tfoot>
               <tr>
@@ -246,6 +354,7 @@ Views.broadsheet = async function () {
       <p class="field-hint no-print" style="margin-top:10px;">
         ${UI.esc(klass)} &middot; ${UI.esc(type)} &middot; ${UI.esc(term)} ${UI.esc(year)} &middot;
         ${students.length} student${students.length === 1 ? '' : 's'} &middot; ${subjectCols.length} subject${subjectCols.length === 1 ? '' : 's'}
+        ${editMode ? ' &middot; Editing — totals below update as you type; positions refresh after you save.' : ''}
       </p>
 
       <div id="bsAnalysisArea" style="margin-top:28px;">
@@ -344,6 +453,191 @@ Views.broadsheet = async function () {
         </div>
       </div>
     `;
+
+    // Recomputes ONE row's Total Marks / Mean % / Points / Level from
+    // whatever's currently in its subject cells (inputs where editable,
+    // the original marks otherwise) — instant feedback per row without
+    // waiting on Save. Class-wide stats (mean, rank, distribution) only
+    // refresh after Save, since ties/positions depend on every row.
+    function recomputeRowLive(tr) {
+      const cells = [...tr.querySelectorAll('td.subj-cell')];
+      let obtained = 0, possible = 0;
+      const pcts = [];
+      cells.forEach(td => {
+        const max = Number(td.dataset.max);
+        const raw = td.dataset.marks;
+        if (raw !== '' && raw !== undefined) {
+          const marksVal = Number(raw);
+          obtained += marksVal; possible += max;
+          pcts.push(Grading.percent(marksVal, max));
+        }
+      });
+      const meanPct = Grading.average(pcts);
+      const band = meanPct === null ? null : Grading.levelForMarks(meanPct, 100, st.settings.gradingBands);
+      const points = Grading.pointsForBand(band, st.settings.gradingBands);
+      tr.querySelector('[data-total-cell]').textContent = pcts.length ? `${obtained}/${possible}` : '—';
+      tr.querySelector('[data-mean-cell]').textContent = meanPct === null ? '—' : meanPct.toFixed(1) + '%';
+      tr.querySelector('[data-points-cell]').textContent = points === null ? '—' : points;
+      tr.querySelector('[data-level-cell]').innerHTML = UI.badge(band);
+    }
+
+    function syncSaveState() {
+      const pill = document.getElementById('bsUnsavedPill');
+      const saveBtn = document.getElementById('bsSaveBtn');
+      if (pill) {
+        pill.style.display = pending.size ? 'inline-flex' : 'none';
+        pill.innerHTML = `<i class="fa-solid fa-circle-exclamation"></i> ${pending.size} unsaved change${pending.size === 1 ? '' : 's'}`;
+      }
+      if (saveBtn) saveBtn.disabled = pending.size === 0;
+      window.onbeforeunload = pending.size ? () => true : null;
+    }
+
+    function handleCellChange(input) {
+      const examId = input.dataset.exam;
+      const studentId = input.dataset.student;
+      const max = Number(input.dataset.max);
+      const raw = input.value.trim();
+      const td = input.closest('td');
+      const tr = input.closest('tr');
+      const key = `${examId}::${studentId}`;
+      const originalRes = st.results.find(r => r.examId === examId && r.studentId === studentId);
+      const original = originalRes ? originalRes.marks : null;
+
+      const revert = () => { input.value = original === null ? '' : original; };
+
+      if (raw === '') {
+        if (original === null) pending.delete(key);
+        else pending.set(key, { examId, studentId, marks: '' });
+        input.classList.remove('invalid');
+        input.classList.toggle('dirty', pending.has(key));
+        td.dataset.marks = '';
+        recomputeRowLive(tr);
+        syncSaveState();
+        return;
+      }
+      if (!/^\d+(\.\d+)?$/.test(raw)) {
+        UI.toast('Please enter a valid number.');
+        input.classList.add('invalid'); revert(); syncSaveState(); return;
+      }
+      const num = Number(raw);
+      if (num < 0) {
+        UI.toast('Score cannot be negative.');
+        input.classList.add('invalid'); revert(); syncSaveState(); return;
+      }
+      if (num > max) {
+        UI.toast(`Score cannot exceed the maximum mark of ${max}.`);
+        input.classList.add('invalid'); revert(); syncSaveState(); return;
+      }
+
+      input.classList.remove('invalid');
+      if (original !== null && num === original) {
+        pending.delete(key);
+        input.classList.remove('dirty');
+      } else {
+        pending.set(key, { examId, studentId, marks: num });
+        input.classList.add('dirty');
+      }
+      td.dataset.marks = num;
+      recomputeRowLive(tr);
+      syncSaveState();
+    }
+
+    function wireEditableInputs() {
+      const tbody = document.getElementById('bsTbody');
+      if (!tbody) return;
+      tbody.querySelectorAll('input.mark-input-compact').forEach((input) => {
+        input.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter') return;
+          e.preventDefault();
+          const tr = input.closest('tr');
+          const colIdx = [...tr.querySelectorAll('input.mark-input-compact')].indexOf(input);
+          const nextTr = tr.nextElementSibling;
+          if (nextTr) {
+            const nextInputs = nextTr.querySelectorAll('input.mark-input-compact');
+            if (nextInputs[colIdx]) nextInputs[colIdx].focus();
+          }
+        });
+        input.addEventListener('change', () => handleCellChange(input));
+      });
+    }
+
+    function refreshTable() {
+      const list = visibleRows();
+      document.getElementById('bsTbody').innerHTML = rowsHtml(list);
+      const countEl = document.getElementById('bsCount');
+      if (countEl) countEl.textContent = `Showing ${list.length} of ${rowsExtra.length} student${rowsExtra.length === 1 ? '' : 's'}`;
+      wrap.querySelectorAll('th.sortable').forEach(th => {
+        const key = th.dataset.sort;
+        th.innerHTML = `${th.dataset.label} ${tableState.sortKey === key ? sortArrow(key) : ''}`;
+      });
+      if (editMode) { wireEditableInputs(); syncSaveState(); }
+    }
+
+    document.getElementById('bsSearch').oninput = (e) => { tableState.search = e.target.value; refreshTable(); };
+    document.getElementById('bsLevel').onchange = (e) => { tableState.level = e.target.value; refreshTable(); };
+    document.getElementById('bsResetBtn').onclick = () => {
+      tableState.search = ''; tableState.level = 'all'; tableState.sortKey = 'rank'; tableState.sortDir = 'asc';
+      document.getElementById('bsSearch').value = '';
+      document.getElementById('bsLevel').value = 'all';
+      render();
+    };
+    wrap.querySelectorAll('th.sortable').forEach(th => {
+      th.onclick = () => {
+        const key = th.dataset.sort;
+        if (tableState.sortKey === key) tableState.sortDir = tableState.sortDir === 'asc' ? 'desc' : 'asc';
+        else { tableState.sortKey = key; tableState.sortDir = key === 'name' ? 'asc' : 'desc'; }
+        refreshTable();
+      };
+    });
+    const countEl0 = document.getElementById('bsCount');
+    if (countEl0) countEl0.textContent = `Showing ${rowsExtra.length} of ${rowsExtra.length} student${rowsExtra.length === 1 ? '' : 's'}`;
+
+    const editBtn = document.getElementById('bsEditBtn');
+    const saveBtn = document.getElementById('bsSaveBtn');
+    const cancelBtn = document.getElementById('bsCancelBtn');
+
+    if (editBtn) editBtn.onclick = () => {
+      editMode = true;
+      editBtn.style.display = 'none';
+      if (saveBtn) saveBtn.style.display = '';
+      if (cancelBtn) cancelBtn.style.display = '';
+      refreshTable();
+      UI.toast('Editing marks — click a cell to change it, Enter moves to the next student, Save Changes when done.');
+    };
+
+    if (cancelBtn) cancelBtn.onclick = () => {
+      const doCancel = () => { pending.clear(); editMode = false; window.onbeforeunload = null; render(); };
+      if (pending.size > 0) {
+        UI.confirmAction(`Discard ${pending.size} unsaved change${pending.size === 1 ? '' : 's'}?`, doCancel, { confirmLabel: 'Discard changes', confirmClass: 'btn-danger' });
+      } else {
+        doCancel();
+      }
+    };
+
+    if (saveBtn) saveBtn.onclick = async () => {
+      if (pending.size === 0) return;
+      saveBtn.disabled = true;
+      const prevLabel = saveBtn.innerHTML;
+      saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving…';
+      const entries = [...pending.entries()];
+      const results = await Promise.allSettled(entries.map(([, p]) => Store.setResult(p.examId, p.studentId, p.marks)));
+      const failed = [];
+      results.forEach((res, i) => { if (res.status === 'rejected') failed.push(entries[i]); });
+      if (failed.length === 0) {
+        UI.toast('Broadsheet marks saved successfully.');
+        pending.clear();
+        editMode = false;
+        window.onbeforeunload = null;
+        st = await Store.current();
+        render();
+      } else {
+        UI.toast(`Unable to save ${failed.length} mark${failed.length === 1 ? '' : 's'}. Please try again.`);
+        failed.forEach(([key, p]) => pending.set(key, p));
+        saveBtn.disabled = false;
+        saveBtn.innerHTML = prevLabel;
+        syncSaveState();
+      }
+    };
   }
 
   document.getElementById('bsPrintBtn').onclick = () => window.print();
@@ -355,6 +649,10 @@ Views.broadsheet = async function () {
   document.getElementById('bsCsvBtn').onclick = () => {
     if (!lastCsv) { UI.toast('Choose a class and exam type first'); return; }
     UI.downloadCSV(lastCsv.filename, lastCsv.header, lastCsv.rows);
+  };
+  document.getElementById('bsExcelBtn').onclick = () => {
+    if (!lastCsv) { UI.toast('Choose a class and exam type first'); return; }
+    UI.downloadExcel(lastCsv.filename, lastCsv.header, lastCsv.rows, 'Broadsheet');
   };
   render();
 };

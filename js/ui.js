@@ -142,6 +142,27 @@ const UI = {
     URL.revokeObjectURL(url);
   },
 
+  // Same header + array-of-arrays shape as downloadCSV, but produces a
+  // real .xlsx workbook (via SheetJS, loaded in index.html) instead of
+  // plain text — proper column widths, and numbers stay numbers rather
+  // than becoming text-that-looks-like-a-number in Excel.
+  downloadExcel(filename, header, rows, sheetName) {
+    if (typeof XLSX === 'undefined') { this.toast('Excel export is unavailable right now.'); return; }
+    const toCell = (v) => {
+      if (v === null || v === undefined || v === '') return '';
+      const n = Number(v);
+      return (v !== '' && !isNaN(n) && /^-?\d+(\.\d+)?%?$/.test(String(v).trim())) ? n : v;
+    };
+    const aoa = [header, ...rows.map(r => r.map(toCell))];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = header.map((h, i) => ({
+      wch: Math.max(String(h).length, ...rows.map(r => String(r[i] ?? '').length)) + 2
+    }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, (sheetName || 'Sheet1').slice(0, 31));
+    XLSX.writeFile(wb, filename.endsWith('.xlsx') ? filename : `${filename}.xlsx`);
+  },
+
   // One-click "Download PDF": renders a printable element (or several,
   // e.g. a whole class of report cards) straight to a downloadable PDF
   // file client-side, using html2pdf.js (loaded in index.html). This is
