@@ -644,7 +644,14 @@ Views.broadsheet = async function () {
   document.getElementById('bsPdfBtn').onclick = (e) => {
     const el = document.getElementById('bsPrintArea');
     if (!el) { UI.toast('Choose a class and exam type first.'); return; }
-    UI.downloadPDF(el, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, { orientation: 'landscape' });
+    // Bundle the ledger table together with the Performance analysis
+    // section (Subject performance, Class performance level
+    // distribution, Stream performance) that renders right below it —
+    // same two "pages" the Print button already shows, now included
+    // in the direct PDF download too.
+    const analysisEl = document.getElementById('bsAnalysisArea');
+    const targets = analysisEl ? [el, analysisEl] : el;
+    UI.downloadPDF(targets, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, { orientation: 'landscape' });
   };
   document.getElementById('bsCsvBtn').onclick = () => {
     if (!lastCsv) { UI.toast('Choose a class and exam type first'); return; }

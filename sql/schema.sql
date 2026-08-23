@@ -158,7 +158,7 @@ create table result_notifications (
   type        text not null,
   term        text not null check (term in ('Term 1','Term 2','Term 3')),
   year        int  not null,
-  channel     text not null check (channel in ('whatsapp','sms','email','manual')),
+  channel     text not null check (channel in ('whatsapp','sms','email','manual','sms-system')),
   sent_at     timestamptz not null default now(),
   sent_by     uuid references profiles(id) on delete set null
 );

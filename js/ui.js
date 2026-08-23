@@ -163,6 +163,66 @@ const UI = {
     XLSX.writeFile(wb, filename.endsWith('.xlsx') ? filename : `${filename}.xlsx`);
   },
 
+  // Shared builder behind downloadPDF/pdfBlob. Clones the source
+  // element(s) into an OFF-SCREEN container that is actually attached
+  // to the document (position:fixed, far off-screen) — html2canvas
+  // needs real layout to measure against, so a detached clone can
+  // collapse to the wrong width and silently crop wide tables.
+  //
+  // It also mirrors the same un-clip/flatten treatment the @media
+  // print stylesheet applies (see style.css), since html2canvas does
+  // NOT evaluate print media styles: horizontal-scroll ledger boxes
+  // are forced open so the FULL table is captured instead of just
+  // whatever fit in the on-screen scroll window, sticky/frozen
+  // columns are unstuck so they don't double up in the flattened
+  // image, and a fixed desktop-width viewport is used so a phone
+  // download doesn't accidentally get the narrow mobile layout.
+  _buildPdfWrap(els, orientation) {
+    const vw = orientation === 'landscape' ? 1500 : 1050;
+    const wrap = document.createElement('div');
+    wrap.style.position = 'fixed';
+    wrap.style.top = '0';
+    wrap.style.left = '-10000px';
+    wrap.style.zIndex = '-1';
+    wrap.style.background = '#fff';
+    wrap.style.width = vw + 'px';
+
+    els.forEach((el, i) => {
+      const clone = el.cloneNode(true);
+      clone.querySelectorAll('.no-print').forEach(n => n.remove());
+
+      // Un-clip any horizontally-scrolling ledger/table boxes so the
+      // whole width is captured, not just the visible scroll window.
+      clone.querySelectorAll('.ledger-scroll, .ledger-scroll-y').forEach(sc => {
+        sc.style.overflow = 'visible';
+        sc.style.maxHeight = 'none';
+        sc.style.width = '100%';
+      });
+      // Sticky header + frozen Pos./Name columns only make sense with
+      // real scrolling — flatten them for a static image capture.
+      clone.querySelectorAll('thead th').forEach(th => { th.style.position = 'static'; });
+      clone.querySelectorAll('.freeze-1, .freeze-2').forEach(c => {
+        c.style.position = 'static';
+        c.style.boxShadow = 'none';
+      });
+      clone.querySelectorAll('table.ledger-table').forEach(t => {
+        t.style.width = '100%';
+        t.style.tableLayout = 'auto';
+      });
+      // Decorative absolutely-positioned stat-card icons/corners can
+      // land in the wrong place once flattened out of their on-screen
+      // container — drop them, same as print does.
+      clone.querySelectorAll('.stat-icon').forEach(ic => { ic.style.display = 'none'; });
+
+      clone.style.pageBreakAfter = i < els.length - 1 ? 'always' : 'auto';
+      clone.style.background = '#fff';
+      clone.style.width = '100%';
+      wrap.appendChild(clone);
+    });
+    document.body.appendChild(wrap);
+    return wrap;
+  },
+
   // One-click "Download PDF": renders a printable element (or several,
   // e.g. a whole class of report cards) straight to a downloadable PDF
   // file client-side, using html2pdf.js (loaded in index.html). This is
@@ -181,34 +241,23 @@ const UI = {
     if (els.length === 0) { UI.toast('Nothing to download yet.'); return; }
     const orientation = (opts && opts.orientation) || 'portrait';
 
-    // Wrap every source element's *content* in a plain, unstyled
-    // container for the PDF render, so app chrome (theme colors, dark
-    // mode, sidebar, etc.) never leaks into the exported file and every
-    // page is a clean white portrait sheet regardless of on-screen theme.
-    const wrap = document.createElement('div');
-    els.forEach((el, i) => {
-      const clone = el.cloneNode(true);
-      clone.querySelectorAll('.no-print').forEach(n => n.remove());
-      clone.style.pageBreakAfter = i < els.length - 1 ? 'always' : 'auto';
-      clone.style.background = '#fff';
-      wrap.appendChild(clone);
-    });
-    wrap.style.background = '#fff';
-
     const originalLabel = btn ? btn.innerHTML : null;
     if (btn) { btn.disabled = true; btn.innerHTML = 'Preparing PDF…'; }
+    const wrap = UI._buildPdfWrap(els, orientation);
     try {
       await html2pdf().set({
         margin: 8,
         filename: filename.endsWith('.pdf') ? filename : `${filename}.pdf`,
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', windowWidth: wrap.scrollWidth, width: wrap.scrollWidth },
         jsPDF: { unit: 'mm', format: 'a4', orientation },
         pagebreak: { mode: ['css', 'legacy'] }
       }).from(wrap).save();
     } catch (e) {
       UI.toast('Could not generate PDF: ' + e.message);
+    } finally {
+      wrap.remove();
+      if (btn) { btn.disabled = false; btn.innerHTML = originalLabel; }
     }
-    if (btn) { btn.disabled = false; btn.innerHTML = originalLabel; }
   },
 
   // Same as downloadPDF, but returns the PDF as a Blob instead of
@@ -218,22 +267,18 @@ const UI = {
     if (typeof html2pdf === 'undefined') return null;
     const els = target instanceof Element ? [target] : Array.from(target || []);
     if (els.length === 0) return null;
-    const wrap = document.createElement('div');
-    els.forEach((el, i) => {
-      const clone = el.cloneNode(true);
-      clone.querySelectorAll('.no-print').forEach(n => n.remove());
-      clone.style.pageBreakAfter = i < els.length - 1 ? 'always' : 'auto';
-      clone.style.background = '#fff';
-      wrap.appendChild(clone);
-    });
-    wrap.style.background = '#fff';
     const orientation = (opts && opts.orientation) || 'portrait';
-    return html2pdf().set({
-      margin: 8,
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
-      jsPDF: { unit: 'mm', format: 'a4', orientation },
-      pagebreak: { mode: ['css', 'legacy'] }
-    }).from(wrap).outputPdf('blob');
+    const wrap = UI._buildPdfWrap(els, orientation);
+    try {
+      return await html2pdf().set({
+        margin: 8,
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', windowWidth: wrap.scrollWidth, width: wrap.scrollWidth },
+        jsPDF: { unit: 'mm', format: 'a4', orientation },
+        pagebreak: { mode: ['css', 'legacy'] }
+      }).from(wrap).outputPdf('blob');
+    } finally {
+      wrap.remove();
+    }
   },
 
   // Lightweight "more actions" menu, shown as a modal action sheet

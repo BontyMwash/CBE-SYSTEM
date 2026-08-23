@@ -183,16 +183,38 @@ href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css"
     });
   }
 
-  // Offer "Add to Home Screen" once, the first time the browser says it's
-  // installable, using the app's own toast so it matches the design.
-  let deferredInstallPrompt = null;
+  // Shared "install this app" handle — used both for the automatic
+  // one-time toast below AND the explicit "Install App" button on the
+  // homepage (see auth-views.js Views.home). Kept on window so any
+  // screen can check availability / trigger the native install prompt,
+  // since the `beforeinstallprompt` event can only be captured once,
+  // globally, whenever the browser decides to fire it.
+  window.CBEInstall = {
+    deferredPrompt: null,
+    installed: window.matchMedia && window.matchMedia('(display-mode: standalone)').matches,
+    listeners: [],
+    onChange(fn) { this.listeners.push(fn); },
+    _notify() { this.listeners.forEach(fn => { try { fn(); } catch (e) {} }); },
+    async promptInstall() {
+      if (!this.deferredPrompt) return 'unavailable';
+      this.deferredPrompt.prompt();
+      const choice = await this.deferredPrompt.userChoice;
+      this.deferredPrompt = null;
+      this._notify();
+      return choice.outcome; // 'accepted' | 'dismissed'
+    }
+  };
+
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
-    deferredInstallPrompt = e;
+    window.CBEInstall.deferredPrompt = e;
+    window.CBEInstall._notify();
+
+    // Also offer the automatic one-time toast, same as before.
     if (sessionStorage.getItem('cbeInstallOffered')) return;
     sessionStorage.setItem('cbeInstallOffered', '1');
     setTimeout(() => {
-      if (!deferredInstallPrompt) return;
+      if (!window.CBEInstall.deferredPrompt) return;
       const root = document.getElementById('toastRoot');
       if (!root) return;
       const el = document.createElement('div');
@@ -201,14 +223,17 @@ href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css"
       el.textContent = 'Install this app on your device — tap here';
       el.addEventListener('click', async () => {
         el.remove();
-        if (!deferredInstallPrompt) return;
-        deferredInstallPrompt.prompt();
-        await deferredInstallPrompt.userChoice;
-        deferredInstallPrompt = null;
+        await window.CBEInstall.promptInstall();
       });
       root.appendChild(el);
       setTimeout(() => el.remove(), 8000);
     }, 2500);
+  });
+
+  window.addEventListener('appinstalled', () => {
+    window.CBEInstall.installed = true;
+    window.CBEInstall.deferredPrompt = null;
+    window.CBEInstall._notify();
   });
 </script>
 </body>

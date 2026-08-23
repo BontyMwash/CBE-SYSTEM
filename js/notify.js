@@ -7,12 +7,15 @@
    then message each student's parent/guardian their result summary
    via WhatsApp, SMS, or email.
 
-   There's no paid SMS/email gateway wired in here (that needs a
-   provider account + API keys the app doesn't have), so sending
-   opens the parent's own WhatsApp/Messages/Mail app pre-filled with
-   the message — one tap to actually send it. Anthropic/this app
-   just builds the message and logs that it was sent, in
-   result_notifications, so the screen can show who's been
+   WhatsApp/Email always go through the sender's own device (opens
+   WhatsApp/Mail pre-filled, one tap to send) — there's no gateway
+   for those. SMS has TWO options: "SMS (my phone)" opens the
+   sender's own Messages app like before; "SMS (system)" sends
+   straight from the school's own SMS gateway via the send-sms Edge
+   Function (see supabase/functions/send-sms/index.ts) — needs an
+   Africa's Talking account + API key configured once by an admin,
+   see that file's setup notes. Either way, every send gets logged
+   in result_notifications, so the screen can show who's been
    contacted and who hasn't.
    ============================================================ */
 
@@ -241,10 +244,11 @@ Views.notify = async function () {
       <div class="card no-print" id="ntBulkBar" style="margin-bottom:14px; display:${selectedCount ? 'flex' : 'none'}; gap:8px; flex-wrap:wrap; align-items:center;">
         <strong style="font-size:13.5px;">Bulk send to ${selectedCount} parent${selectedCount === 1 ? '' : 's'}:</strong>
         <button class="btn btn-sm btn-primary" id="ntBulkWhatsApp"><i class="fa-brands fa-whatsapp"></i> WhatsApp</button>
-        <button class="btn btn-sm btn-primary" id="ntBulkSms"><i class="fa-solid fa-comment-sms"></i> SMS</button>
+        <button class="btn btn-sm btn-primary" id="ntBulkSms"><i class="fa-solid fa-comment-sms"></i> SMS (my phone)</button>
+        <button class="btn btn-sm btn-primary" id="ntBulkSmsSystem"><i class="fa-solid fa-server"></i> SMS (system)</button>
         <button class="btn btn-sm btn-primary" id="ntBulkEmail"><i class="fa-solid fa-envelope"></i> Email</button>
         <button class="btn btn-sm btn-ghost" id="ntBulkMarkSent">Mark all as sent (no message)</button>
-        <p class="field-hint" style="margin:4px 0 0 0; width:100%;">WhatsApp/SMS/Email open one at a time so your browser doesn't block the pop-ups — confirm each send and it moves to the next automatically.</p>
+        <p class="field-hint" style="margin:4px 0 0 0; width:100%;">WhatsApp/SMS/Email open one at a time so your browser doesn't block the pop-ups — confirm each send and it moves to the next automatically. "SMS (system)" sends straight from the school's own SMS gateway, in one batch, without using your phone.</p>
       </div>
       ${rows.length === 0 ? `<div class="empty"><div class="empty-title">No students match</div></div>` : `
       <div class="ledger">
@@ -283,7 +287,8 @@ Views.notify = async function () {
                   <td>
                     <div style="display:flex; flex-direction:column; gap:4px; min-width:110px;">
                       <button class="btn btn-sm" data-send="whatsapp" data-student="${stu.id}" ${hasPhone ? '' : 'disabled'} title="${hasPhone ? '' : 'No parent phone on file'}">WhatsApp</button>
-                      <button class="btn btn-sm" data-send="sms" data-student="${stu.id}" ${hasPhone ? '' : 'disabled'} title="${hasPhone ? '' : 'No parent phone on file'}">SMS</button>
+                      <button class="btn btn-sm" data-send="sms" data-student="${stu.id}" ${hasPhone ? '' : 'disabled'} title="${hasPhone ? '' : 'No parent phone on file'}">SMS (my phone)</button>
+                      <button class="btn btn-sm" data-sendsys="sms" data-student="${stu.id}" ${hasPhone ? '' : 'disabled'} title="${hasPhone ? 'Send from the school\'s SMS gateway, no phone needed' : 'No parent phone on file'}"><i class="fa-solid fa-server"></i> SMS (system)</button>
                       <button class="btn btn-sm" data-send="email" data-student="${stu.id}" ${hasEmail ? '' : 'disabled'} title="${hasEmail ? '' : 'No parent email on file'}">Email</button>
                       <button class="btn btn-sm btn-ghost" data-copy="${stu.id}" title="${UI.esc(previewMsg)}">Copy text</button>
                       <button class="btn btn-sm btn-ghost" data-report="${stu.id}"><i class="fa-solid fa-file-pdf"></i> Report PDF</button>
@@ -384,6 +389,35 @@ Views.notify = async function () {
     if (bulkSms) bulkSms.onclick = () => runBulkSend('sms');
     const bulkEmail = document.getElementById('ntBulkEmail');
     if (bulkEmail) bulkEmail.onclick = () => runBulkSend('email');
+
+    // ---- Bulk "SMS (system)": one batch call to the send-sms Edge
+    // Function, straight from the school's own SMS gateway — no phone,
+    // no pop-ups, nothing for the sender to tap through per student. ----
+    const bulkSmsSystem = document.getElementById('ntBulkSmsSystem');
+    if (bulkSmsSystem) bulkSmsSystem.onclick = async () => {
+      const queue = rows.filter(r => selected.has(r.student.id) && r.student.parentPhone);
+      if (queue.length === 0) { UI.toast('None of the selected parents have a phone number on file'); return; }
+      const originalLabel = bulkSmsSystem.innerHTML;
+      bulkSmsSystem.disabled = true;
+      bulkSmsSystem.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Sending ${queue.length}…`;
+      const recipients = queue.map(r => ({ phone: r.student.parentPhone, message: messageFor(r.student, r) }));
+      const res = await Auth.callEdgeFunction('send-sms', { recipients });
+      bulkSmsSystem.disabled = false;
+      bulkSmsSystem.innerHTML = originalLabel;
+      if (!res.ok) { UI.toast(res.error || 'Could not reach the SMS gateway.'); return; }
+      const successes = (res.results || []).filter(r => r.ok);
+      const failures = (res.results || []).filter(r => !r.ok);
+      await Promise.allSettled(successes.map((r) => {
+        const row = queue.find(q => q.student.parentPhone === r.phone);
+        if (!row) return Promise.resolve();
+        return Store.logNotification({ studentId: row.student.id, klass: chosen.klass, type: chosen.type, term: chosen.term, year: chosen.year, channel: 'sms-system' });
+      }));
+      selected.clear();
+      UI.toast(failures.length === 0
+        ? `Sent ${successes.length} SMS via the system.`
+        : `Sent ${successes.length}, ${failures.length} failed — check phone numbers and try those again.`);
+      paint();
+    };
     const bulkMarkSent = document.getElementById('ntBulkMarkSent');
     if (bulkMarkSent) bulkMarkSent.onclick = () => {
       const ids = [...selected];
@@ -419,6 +453,30 @@ Views.notify = async function () {
           UI.toast(`Marked as sent to ${stu.name}'s parent via ${channel}.`);
           paint();
         } catch (e) { UI.toast('Opened message, but could not save the "sent" record: ' + e.message); }
+      };
+    });
+
+    // ---- Per-student "SMS (system)": sends straight from the school's
+    // SMS gateway via the send-sms Edge Function, instead of opening
+    // the sender's own Messages app. ----
+    document.querySelectorAll('[data-sendsys="sms"]').forEach(btn => {
+      btn.onclick = async () => {
+        const stu = results.find(r => r.student.id === btn.dataset.student)?.student;
+        if (!stu || !stu.parentPhone) return;
+        const r = results.find(x => x.student.id === stu.id);
+        const message = messageFor(stu, r);
+        const originalLabel = btn.innerHTML;
+        btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending…';
+        const res = await Auth.callEdgeFunction('send-sms', { recipients: [{ phone: stu.parentPhone, message }] });
+        btn.disabled = false; btn.innerHTML = originalLabel;
+        if (!res.ok) { UI.toast(res.error || 'Could not reach the SMS gateway.'); return; }
+        const result = (res.results || [])[0];
+        if (!result || !result.ok) { UI.toast(`Could not send to ${stu.name}'s parent: ${result?.error || 'unknown error'}`); return; }
+        try {
+          await Store.logNotification({ studentId: stu.id, klass: chosen.klass, type: chosen.type, term: chosen.term, year: chosen.year, channel: 'sms-system' });
+          UI.toast(`SMS sent to ${stu.name}'s parent via the system.`);
+          paint();
+        } catch (e) { UI.toast('Sent, but could not save the "sent" record: ' + e.message); }
       };
     });
 

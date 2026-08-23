@@ -77,6 +77,7 @@ Views.home = function (onLogin) {
         </nav>
 
         <div class="home-nav-actions">
+          <button class="btn btn-ghost" id="homeInstallBtn" style="display:none;"><i class="fa-solid fa-download"></i> Install App</button>
           <button class="btn btn-ghost" id="homeLoginBtn">Log in</button>
           <button class="btn btn-primary" id="homeGetStartedBtn">Get Started</button>
           <button class="home-nav-toggle" id="homeNavToggle" aria-label="Open menu" aria-expanded="false" aria-controls="homeMobileMenu">
@@ -92,6 +93,7 @@ Views.home = function (onLogin) {
         <a href="#analytics">Analytics</a>
         <a href="#about">About</a>
         <div class="home-mobile-actions">
+          <button class="btn btn-ghost" id="homeInstallBtnMobile" style="width:100%; justify-content:center; display:none;"><i class="fa-solid fa-download"></i> Install App</button>
           <button class="btn btn-ghost" id="homeLoginBtnMobile" style="width:100%; justify-content:center;">Log in</button>
           <button class="btn btn-primary" id="homeGetStartedBtnMobile" style="width:100%; justify-content:center;">Get Started</button>
         </div>
@@ -111,6 +113,7 @@ Views.home = function (onLogin) {
             <div class="home-hero-actions">
               <button class="btn btn-primary btn-lg" id="homeHeroLoginBtn">Get Started <i class="fa-solid fa-arrow-right"></i></button>
               <a class="btn btn-secondary btn-lg" href="#features">Explore Features</a>
+              <button class="btn btn-secondary btn-lg" id="homeHeroInstallBtn" style="display:none;"><i class="fa-solid fa-download"></i> Install App</button>
             </div>
             <ul class="home-trust">
               <li><i class="fa-solid fa-circle-check"></i> Built for modern schools</li>
@@ -345,6 +348,58 @@ Views.home = function (onLogin) {
   ['homeTermsLink', 'homeTermsLink2', 'homeHelpLink', 'homeSupportLink', 'homeDocsLink'].forEach(id => {
     const el = document.getElementById(id); if (el) el.onclick = () => UI.showTerms();
   });
+
+  // ---- "Install App" (add to home screen / desktop) ----
+  // Chrome/Edge/Android fire `beforeinstallprompt` and let us trigger
+  // the native install dialog directly (see window.CBEInstall in
+  // index.html). iOS Safari and some other browsers never fire that
+  // event at all — there, we show the manual "Share -> Add to Home
+  // Screen" steps instead, since that's the only way to install a PWA
+  // there.
+  (function wireInstall() {
+    const ids = ['homeInstallBtn', 'homeInstallBtnMobile', 'homeHeroInstallBtn'];
+    const btns = ids.map(id => document.getElementById(id)).filter(Boolean);
+    if (btns.length === 0 || !window.CBEInstall) return;
+
+    function isIOS() { return /iphone|ipad|ipod/i.test(navigator.userAgent); }
+
+    function refresh() {
+      const already = window.CBEInstall.installed;
+      const canPrompt = !!window.CBEInstall.deferredPrompt;
+      // Keep the button visible on iOS too (manual instructions),
+      // hide it once the app is already installed, or on a desktop
+      // browser that supports neither path.
+      const show = !already && (canPrompt || isIOS());
+      btns.forEach(b => { b.style.display = show ? '' : 'none'; });
+    }
+
+    async function handleClick() {
+      if (window.CBEInstall.deferredPrompt) {
+        const outcome = await window.CBEInstall.promptInstall();
+        if (outcome === 'accepted') UI.toast('Installing B~CBE Analytics…');
+        return;
+      }
+      if (isIOS()) {
+        UI.openModal(`
+          <h2>Install B~CBE Analytics</h2>
+          <p>On iPhone/iPad, install happens through Safari's Share menu:</p>
+          <ol style="margin:10px 0 0 18px; line-height:1.9;">
+            <li>Open this site in <strong>Safari</strong> (not Chrome).</li>
+            <li>Tap the <strong>Share</strong> icon <i class="fa-solid fa-arrow-up-from-bracket"></i> in the toolbar.</li>
+            <li>Scroll down and tap <strong>Add to Home Screen</strong>.</li>
+            <li>Tap <strong>Add</strong> — B~CBE Analytics will appear as an app icon.</li>
+          </ol>
+          <div class="modal-actions"><button class="btn btn-primary" id="installTipsClose">Got it</button></div>
+        `, (root) => { root.querySelector('#installTipsClose').onclick = () => UI.closeModal(); });
+        return;
+      }
+      UI.toast("Your browser doesn't support one-tap install here — look for \"Install app\" in your browser's menu.");
+    }
+
+    btns.forEach(b => { b.onclick = handleClick; });
+    window.CBEInstall.onChange(refresh);
+    refresh();
+  })();
 
   // ---- fade-up reveal on scroll ----
   // Goes FIRST and is wrapped defensively: .reveal elements start

@@ -1663,7 +1663,7 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
   /* Broadsheet / ledger tables: let them shrink to fit the printed page
      instead of being clipped by overflow-x scrolling, and ask for a
      landscape page. */
-  #bsPrintArea, #cpPrintArea, .ledger {
+  #bsPrintArea, #cpPrintArea, #arPrintArea, .ledger {
     page: broadsheet-page;
     border: none;
     box-shadow: none;
@@ -1676,7 +1676,8 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
     width: 100%;
   }
   #bsPrintArea table.ledger-table,
-  #cpPrintArea table.ledger-table {
+  #cpPrintArea table.ledger-table,
+  #arPrintArea table.ledger-table {
     width: 100%;
     table-layout: auto;
     font-size: 10px;
@@ -1684,14 +1685,18 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
   #bsPrintArea table.ledger-table th,
   #bsPrintArea table.ledger-table td,
   #cpPrintArea table.ledger-table th,
-  #cpPrintArea table.ledger-table td {
+  #cpPrintArea table.ledger-table td,
+  #arPrintArea table.ledger-table th,
+  #arPrintArea table.ledger-table td {
     padding: 4px 6px;
     white-space: normal;
   }
   #bsPrintArea table.ledger-table th:first-child,
   #bsPrintArea table.ledger-table td:first-child,
   #cpPrintArea table.ledger-table th:first-child,
-  #cpPrintArea table.ledger-table td:first-child {
+  #cpPrintArea table.ledger-table td:first-child,
+  #arPrintArea table.ledger-table th:first-child,
+  #arPrintArea table.ledger-table td:first-child {
     padding-left: 6px;
   }
   /* Single exam report and any other .report-card table also shrink
