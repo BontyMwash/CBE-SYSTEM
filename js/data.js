@@ -21,10 +21,10 @@ const Store = {
   // ---- mappers: DB snake_case -> app camelCase ----
   _mapClass: (r) => ({ id: r.id, name: r.name, stream: r.stream || '', label: r.stream ? `${r.name} ${r.stream}` : r.name, teacherName: r.teacher_name || '' }),
   _mapStudent: (r) => ({
-    id: r.id, name: r.name, admissionNo: r.admission_no || '', klass: r.klass,
+    id: r.id, name: r.name, admissionNo: r.admission_no || '', klass: r.klass, gender: r.gender || '',
     parentName: r.parent_name || '', parentPhone: r.parent_phone || '', parentEmail: r.parent_email || ''
   }),
-  _mapSubject: (r) => ({ id: r.id, name: r.name, code: r.code || '' }),
+  _mapSubject: (r) => ({ id: r.id, name: r.name, code: r.code || '', section: r.section || '' }),
   _mapExamType: (r) => ({ id: r.id, name: r.name, sortOrder: r.sort_order || 0 }),
   _mapExam: (r) => ({ id: r.id, type: r.type, term: r.term, year: r.year, klass: r.klass, subjectId: r.subject_id, totalMarks: Number(r.total_marks), date: r.exam_date || '' }),
   _mapResult: (r) => ({ id: r.id, examId: r.exam_id, studentId: r.student_id, marks: Number(r.marks) }),
@@ -202,6 +202,7 @@ const Store = {
   async addStudent(s) {
     const { data, error } = await supabase.from('students').insert({
       school_id: this.activeSchoolId, name: s.name.trim(), admission_no: (s.admissionNo || '').trim(), klass: s.klass.trim(),
+      gender: (s.gender || '').trim(),
       parent_name: (s.parentName || '').trim(), parent_phone: (s.parentPhone || '').trim(), parent_email: (s.parentEmail || '').trim()
     }).select().single();
     this._throwIfError('add student', error);
@@ -212,6 +213,7 @@ const Store = {
     if (patch.name !== undefined) dbPatch.name = patch.name;
     if (patch.admissionNo !== undefined) dbPatch.admission_no = patch.admissionNo;
     if (patch.klass !== undefined) dbPatch.klass = patch.klass;
+    if (patch.gender !== undefined) dbPatch.gender = patch.gender;
     if (patch.parentName !== undefined) dbPatch.parent_name = (patch.parentName || '').trim();
     if (patch.parentPhone !== undefined) dbPatch.parent_phone = (patch.parentPhone || '').trim();
     if (patch.parentEmail !== undefined) dbPatch.parent_email = (patch.parentEmail || '').trim();
@@ -246,6 +248,7 @@ const Store = {
       name: r.name.trim(),
       admission_no: (r.admissionNo || '').trim(),
       klass: r.klass.trim(),
+      gender: (r.gender || '').trim(),
       parent_name: (r.parentName || '').trim(),
       parent_phone: (r.parentPhone || '').trim(),
       parent_email: (r.parentEmail || '').trim()
@@ -286,7 +289,7 @@ const Store = {
   // ---- Subjects ----
   async addSubject(s) {
     const { data, error } = await supabase.from('subjects').insert({
-      school_id: this.activeSchoolId, name: s.name.trim(), code: (s.code || '').trim().toUpperCase()
+      school_id: this.activeSchoolId, name: s.name.trim(), code: (s.code || '').trim().toUpperCase(), section: s.section || ''
     }).select().single();
     this._throwIfError('add subject', error);
     return this._mapSubject(data);
@@ -295,6 +298,7 @@ const Store = {
     const dbPatch = {};
     if (s.name !== undefined) dbPatch.name = s.name.trim();
     if (s.code !== undefined) dbPatch.code = (s.code || '').trim().toUpperCase();
+    if (s.section !== undefined) dbPatch.section = s.section || '';
     const { data, error } = await supabase.from('subjects').update(dbPatch).eq('id', id).select().single();
     this._throwIfError('update subject', error);
     return this._mapSubject(data);

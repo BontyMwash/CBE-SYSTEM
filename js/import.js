@@ -221,5 +221,142 @@ const Importer = {
         }
       };
     });
+  },
+
+  // Turn a 2D array of rows into marks matched against `students`
+  // (already scoped to the exam's class) by admission number. Detects
+  // a header row containing recognizable column names; otherwise
+  // assumes column order: Admission No., Marks (Name, if present, is
+  // ignored — admission number is the join key).
+  rowsToMarks(rows, students, totalMarks) {
+    if (!rows.length) return [];
+    const norm = s => (s || '').toString().trim().toLowerCase();
+    const headerCandidates = rows[0].map(norm);
+    const looksLikeHeader = headerCandidates.some(h =>
+      h.includes('admission') || h.includes('adm') || h.includes('reg') || h.includes('mark') || h.includes('score')
+    );
+    let admIdx = 0, marksIdx = 1, nameIdx = -1;
+    let dataRows = rows;
+    if (looksLikeHeader) {
+      headerCandidates.forEach((h, i) => {
+        if (h.includes('admission') || h.includes('adm') || h.includes('reg')) admIdx = i;
+        else if (h.includes('mark') || h.includes('score')) marksIdx = i;
+        else if (h.includes('name')) nameIdx = i;
+      });
+      dataRows = rows.slice(1);
+    }
+    const byAdm = new Map(students.filter(s => s.admissionNo).map(s => [norm(s.admissionNo), s]));
+    return dataRows.map(r => {
+      const admissionNo = (r[admIdx] || '').toString().trim();
+      const rawMarks = (r[marksIdx] || '').toString().trim();
+      const rowName = nameIdx >= 0 ? (r[nameIdx] || '').toString().trim() : '';
+      const student = admissionNo ? byAdm.get(norm(admissionNo)) : null;
+      let marks = null, error = '';
+      if (!admissionNo) error = 'Missing admission no.';
+      else if (!student) error = 'No matching student in this class';
+      else if (rawMarks === '') error = 'No marks value';
+      else {
+        const n = Number(rawMarks);
+        if (isNaN(n)) error = 'Marks is not a number';
+        else if (n < 0 || n > Number(totalMarks || 100)) error = `Out of range (0–${totalMarks})`;
+        else marks = n;
+      }
+      return { admissionNo, name: student ? student.name : rowName, studentId: student ? student.id : null, marks, error };
+    });
+  },
+
+  // Opens the "Import marks" flow for one exam: upload -> preview
+  // (matched/unmatched rows shown separately) -> confirm. Writes each
+  // valid row via Store.setResult (the same call the marks-entry grid
+  // itself uses), so nothing bypasses normal save/validation logic.
+  // onImported(count) is called after marks are saved.
+  async openImportMarksModal(exam, subjectName, onImported) {
+    const st = await Store.current();
+    const classStudents = st.students.filter(s => s.klass === exam.klass);
+    UI.openModal(`
+      <h2>Import marks</h2>
+      <p class="field-hint" style="margin-bottom:14px;">
+        ${UI.esc(exam.type)} &middot; ${UI.esc(exam.term)} ${UI.esc(exam.year)} &middot; ${UI.esc(exam.klass)} &middot;
+        ${UI.esc(subjectName)} (out of ${exam.totalMarks})
+      </p>
+      <div class="field full">
+        <label>File</label>
+        <input type="file" id="marksFileInput" accept=".csv,.xlsx,.xls">
+      </div>
+      <p class="field-hint">
+        Upload a .csv or .xlsx file with <strong>Admission No.</strong> and <strong>Marks</strong> columns
+        (a header row is detected automatically — otherwise the first two columns are read as
+        Admission No., Marks in that order). Matched by admission number against students in ${UI.esc(exam.klass)}.
+      </p>
+      <div id="marksPreviewWrap"></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
+        <button class="btn btn-primary" id="confirmMarksBtn" disabled>Import 0 marks</button>
+      </div>
+    `, (root) => {
+      let parsed = [];
+      root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
+
+      function renderPreview() {
+        const wrap = root.querySelector('#marksPreviewWrap');
+        const confirmBtn = root.querySelector('#confirmMarksBtn');
+        if (!parsed.length) {
+          wrap.innerHTML = '';
+          confirmBtn.disabled = true;
+          confirmBtn.textContent = 'Import 0 marks';
+          return;
+        }
+        const valid = parsed.filter(p => p.studentId && p.marks !== null);
+        const invalid = parsed.length - valid.length;
+        wrap.innerHTML = `
+          <p class="field-hint" style="margin:14px 0 8px 0;">
+            ${valid.length} mark${valid.length === 1 ? '' : 's'} ready to import
+            ${invalid ? `&middot; ${invalid} row${invalid === 1 ? '' : 's'} skipped (see below)` : ''}
+          </p>
+          <div class="ledger" style="max-height:240px; overflow-y:auto;">
+            <div class="ledger-scroll">
+              <table class="ledger-table">
+                <thead><tr><th>Admission No.</th><th>Name</th><th>Marks</th><th>Status</th></tr></thead>
+                <tbody>
+                  ${parsed.slice(0, 300).map(r => `<tr>
+                    <td class="num">${UI.esc(r.admissionNo) || '—'}</td>
+                    <td>${UI.esc(r.name) || '—'}</td>
+                    <td class="num">${r.marks === null ? '—' : r.marks}</td>
+                    <td>${r.error ? `<span class="row-index" style="color:var(--danger);">${UI.esc(r.error)}</span>` : '<span class="row-index" style="color:var(--success);">OK</span>'}</td>
+                  </tr>`).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          ${parsed.length > 300 ? `<p class="field-hint">Showing first 300 rows.</p>` : ''}
+        `;
+        confirmBtn.disabled = valid.length === 0;
+        confirmBtn.textContent = `Import ${valid.length} mark${valid.length === 1 ? '' : 's'}`;
+      }
+
+      root.querySelector('#marksFileInput').onchange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        Importer.parseFile(file, (rows) => {
+          parsed = Importer.rowsToMarks(rows, classStudents, exam.totalMarks);
+          renderPreview();
+        }, (err) => { UI.toast(err.message || 'Could not parse that file'); });
+      };
+
+      root.querySelector('#confirmMarksBtn').onclick = async () => {
+        const valid = parsed.filter(p => p.studentId && p.marks !== null);
+        const confirmBtn = root.querySelector('#confirmMarksBtn');
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Importing…';
+        let ok = 0, failed = 0;
+        for (const r of valid) {
+          try { await Store.setResult(exam.id, r.studentId, r.marks); ok++; }
+          catch (e) { failed++; }
+        }
+        UI.closeModal();
+        UI.toast(`Imported ${ok} mark${ok === 1 ? '' : 's'}${failed ? `, ${failed} failed` : ''}`);
+        if (onImported) onImported(ok);
+      };
+    });
   }
 };

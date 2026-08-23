@@ -236,6 +236,29 @@ const UI = {
     }).from(wrap).outputPdf('blob');
   },
 
+  // Lightweight "more actions" menu, shown as a modal action sheet
+  // rather than a floating dropdown — safe inside scroll/overflow
+  // containers (e.g. a table) where a positioned dropdown could get
+  // clipped, and it doubles as a clean full-screen sheet on mobile
+  // (the modal already goes full-screen under 900px).
+  // items: [{ label, icon (fa- class suffix), danger, onClick }]
+  openActionSheet(title, items) {
+    UI.openModal(`
+      <h2>${UI.esc(title)}</h2>
+      <div class="action-sheet">
+        ${items.map((it, i) => `
+          <button class="action-sheet-item${it.danger ? ' danger' : ''}" data-i="${i}">
+            <i class="fa-solid ${it.icon || 'fa-circle'}"></i> ${UI.esc(it.label)}
+          </button>
+        `).join('')}
+      </div>
+    `, (root) => {
+      root.querySelectorAll('.action-sheet-item').forEach(btn => {
+        btn.onclick = () => { UI.closeModal(); items[Number(btn.dataset.i)].onClick(); };
+      });
+    });
+  },
+
   confirmAction(message, onConfirm, opts) {
     const confirmLabel = (opts && opts.confirmLabel) || 'Delete';
     const confirmClass = (opts && opts.confirmClass) || 'btn-danger';

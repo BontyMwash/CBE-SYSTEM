@@ -290,6 +290,19 @@ function sectionForKlassLabel(st, klassLabel) {
   return gradeSection(classEntry ? classEntry.name : klassLabel);
 }
 
+// Primary, Junior Secondary and Senior School genuinely offer different
+// subjects (e.g. Chemistry doesn't exist below Senior School) — a
+// subject with section:'' is shared across every level (the default,
+// so nothing already set up disappears); anything else only shows up
+// for classes in that one section. Used everywhere a subject picker is
+// scoped to an already-chosen class (exam creation, results entry).
+function subjectsForKlass(st, klassLabel) {
+  if (!klassLabel) return st.subjects;
+  const section = sectionForKlassLabel(st, klassLabel);
+  if (!section) return st.subjects;
+  return st.subjects.filter(s => !s.section || s.section === section.key);
+}
+
 // Shared by the teacher-facing screens (My Classes, Learners,
 // Assessments, Gradebook, Attendance, Competency Assessment): works
 // out which classes/subjects a "user" (teacher) login is scoped to.
@@ -826,6 +839,12 @@ Views.students = async function () {
         <option value="">All classes</option>
         ${classes.map(c => `<option value="${UI.esc(c)}">${UI.esc(c)}</option>`).join('')}
       </select>
+      <select id="genderFilter">
+        <option value="all">All genders</option>
+        <option value="M">Male</option>
+        <option value="F">Female</option>
+        <option value="none">Not specified</option>
+      </select>
       <input type="text" id="searchBox" placeholder="Search by name or admission no." style="min-width:220px;">
       <button class="btn" id="studentsCsvBtn"><i class="fa-solid fa-download"></i> Download CSV</button>
     </div>
@@ -837,10 +856,17 @@ Views.students = async function () {
     return `<span class="badge badge-${section.key === 'primary' ? 'ME' : section.key === 'junior-secondary' ? 'AE' : 'EE'}">${UI.esc(section.label)}</span>`;
   }
 
-  function renderTable(filterClass, search, filterSection) {
+  function genderBadge(s) {
+    if (s.gender === 'M') return '<span class="badge badge-ME">Male</span>';
+    if (s.gender === 'F') return '<span class="badge badge-AE">Female</span>';
+    return '<span class="row-index">—</span>';
+  }
+
+  function renderTable(filterClass, search, filterSection, filterGender) {
     let rows = st.students.filter(s => levelAllows(s.klass));
     if (filterClass) rows = rows.filter(s => s.klass === filterClass);
     if (filterSection) rows = rows.filter(s => { const sec = sectionForKlassLabel(st, s.klass); return sec && sec.key === filterSection; });
+    if (filterGender && filterGender !== 'all') rows = rows.filter(s => (s.gender || '') === (filterGender === 'none' ? '' : filterGender));
     if (search) {
       const q = search.toLowerCase();
       rows = rows.filter(s => s.name.toLowerCase().includes(q) || (s.admissionNo || '').toLowerCase().includes(q));
@@ -855,7 +881,7 @@ Views.students = async function () {
       <div class="ledger">
         <div class="ledger-scroll">
           <table class="ledger-table">
-            <thead><tr><th>#</th><th>Name</th><th>Admission No.</th><th>Class</th><th>Section</th><th>Parent Contact</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>Name</th><th>Admission No.</th><th>Class</th><th>Gender</th><th>Section</th><th>Parent Contact</th><th></th></tr></thead>
             <tbody>
               ${rows.map((s, i) => `
                 <tr>
@@ -863,6 +889,7 @@ Views.students = async function () {
                   <td>${UI.esc(s.name)}</td>
                   <td class="num">${UI.esc(s.admissionNo) || '—'}</td>
                   <td>${UI.esc(s.klass)}</td>
+                  <td>${genderBadge(s)}</td>
                   <td>${sectionBadge(s)}</td>
                   <td>${UI.esc(s.parentPhone) || UI.esc(s.parentEmail) || '<span class="row-index">—</span>'}</td>
                   <td>
@@ -878,10 +905,11 @@ Views.students = async function () {
     `;
   }
 
-  function filteredRows(filterClass, search, filterSection) {
+  function filteredRows(filterClass, search, filterSection, filterGender) {
     let rows = st.students.filter(s => levelAllows(s.klass));
     if (filterClass) rows = rows.filter(s => s.klass === filterClass);
     if (filterSection) rows = rows.filter(s => { const sec = sectionForKlassLabel(st, s.klass); return sec && sec.key === filterSection; });
+    if (filterGender && filterGender !== 'all') rows = rows.filter(s => (s.gender || '') === (filterGender === 'none' ? '' : filterGender));
     if (search) {
       const q = search.toLowerCase();
       rows = rows.filter(s => s.name.toLowerCase().includes(q) || (s.admissionNo || '').toLowerCase().includes(q));
@@ -892,14 +920,15 @@ Views.students = async function () {
   function paint() {
     const filterClass = document.getElementById('classFilter')?.value || '';
     const filterSection = document.getElementById('sectionFilter')?.value || '';
+    const filterGender = document.getElementById('genderFilter')?.value || 'all';
     const search = document.getElementById('searchBox')?.value || '';
-    document.getElementById('studentsTableWrap').innerHTML = renderTable(filterClass, search, filterSection);
+    document.getElementById('studentsTableWrap').innerHTML = renderTable(filterClass, search, filterSection, filterGender);
     wireRowActions();
     document.getElementById('studentsCsvBtn').onclick = () => {
-      const rows = filteredRows(filterClass, search, filterSection);
+      const rows = filteredRows(filterClass, search, filterSection, filterGender);
       if (rows.length === 0) { UI.toast('No students to download'); return; }
-      const header = ['Name', 'Admission No.', 'Class', 'Parent name', 'Parent phone', 'Parent email'];
-      const csvRows = rows.map(s => [s.name, s.admissionNo || '', s.klass, s.parentName || '', s.parentPhone || '', s.parentEmail || '']);
+      const header = ['Name', 'Admission No.', 'Class', 'Gender', 'Parent name', 'Parent phone', 'Parent email'];
+      const csvRows = rows.map(s => [s.name, s.admissionNo || '', s.klass, s.gender || '', s.parentName || '', s.parentPhone || '', s.parentEmail || '']);
       UI.downloadCSV(`class-list-${filterClass || 'all-classes'}`.replace(/\s+/g, '_'), header, csvRows);
     };
   }
@@ -946,6 +975,14 @@ Views.students = async function () {
           <label>Class / Grade</label>
           ${classField}
         </div>
+        <div class="field">
+          <label>Gender</label>
+          <select id="f_gender">
+            <option value="" ${isEdit && !existing.gender ? 'selected' : ''}>Not specified</option>
+            <option value="M" ${isEdit && existing.gender === 'M' ? 'selected' : ''}>Male</option>
+            <option value="F" ${isEdit && existing.gender === 'F' ? 'selected' : ''}>Female</option>
+          </select>
+        </div>
         <div class="field full" style="margin-top:4px; border-top:1px solid var(--paper-line); padding-top:14px;">
           <label style="font-weight:600;">Parent / guardian contact <span class="field-hint" style="font-weight:400;">(optional — used to send results)</span></label>
         </div>
@@ -972,16 +1009,17 @@ Views.students = async function () {
         const name = root.querySelector('#f_name').value.trim();
         const admissionNo = root.querySelector('#f_admno').value.trim();
         const klass = root.querySelector('#f_klass').value.trim();
+        const gender = root.querySelector('#f_gender').value;
         const parentName = root.querySelector('#f_parentname').value.trim();
         const parentPhone = root.querySelector('#f_parentphone').value.trim();
         const parentEmail = root.querySelector('#f_parentemail').value.trim();
         if (!name || !klass) { UI.toast('Name and class are required'); return; }
         try {
           if (isEdit) {
-            await Store.updateStudent(existing.id, { name, admissionNo, klass, parentName, parentPhone, parentEmail });
+            await Store.updateStudent(existing.id, { name, admissionNo, klass, gender, parentName, parentPhone, parentEmail });
             UI.toast('Student updated');
           } else {
-            await Store.addStudent({ name, admissionNo, klass, parentName, parentPhone, parentEmail });
+            await Store.addStudent({ name, admissionNo, klass, gender, parentName, parentPhone, parentEmail });
             UI.toast('Student added');
           }
           UI.closeModal();
@@ -1001,12 +1039,13 @@ Views.students = async function () {
   document.getElementById('importStudentsBtn').onclick = () => Importer.openImportModal(() => Views.students());
   document.getElementById('classFilter').onchange = paint;
   document.getElementById('sectionFilter').onchange = paint;
+  document.getElementById('genderFilter').onchange = paint;
   document.getElementById('searchBox').oninput = paint;
   document.getElementById('studentsCsvBtn').onclick = () => {
-    const rows = filteredRows(document.getElementById('classFilter').value, document.getElementById('searchBox').value, document.getElementById('sectionFilter').value);
+    const rows = filteredRows(document.getElementById('classFilter').value, document.getElementById('searchBox').value, document.getElementById('sectionFilter').value, document.getElementById('genderFilter').value);
     if (rows.length === 0) { UI.toast('No students to download'); return; }
-    const header = ['Name', 'Admission No.', 'Class', 'Parent name', 'Parent phone', 'Parent email'];
-    const csvRows = rows.map(s => [s.name, s.admissionNo || '', s.klass, s.parentName || '', s.parentPhone || '', s.parentEmail || '']);
+    const header = ['Name', 'Admission No.', 'Class', 'Gender', 'Parent name', 'Parent phone', 'Parent email'];
+    const csvRows = rows.map(s => [s.name, s.admissionNo || '', s.klass, s.gender || '', s.parentName || '', s.parentPhone || '', s.parentEmail || '']);
     UI.downloadCSV(`class-list-${document.getElementById('classFilter').value || 'all-classes'}`.replace(/\s+/g, '_'), header, csvRows);
   };
   // If the topbar search sent us here (App.navigate('students') after
@@ -1026,16 +1065,27 @@ Views.subjects = async function () {
   showLoading();
   const st = await Store.current();
 
-  function renderTable() {
+  const SECTION_LABELS = { '': 'All levels', 'primary': 'Primary', 'junior-secondary': 'Junior Secondary', 'senior-school': 'Senior School' };
+  function sectionBadge(s) {
+    const key = s.section || '';
+    const cls = key === 'primary' ? 'ME' : key === 'junior-secondary' ? 'AE' : key === 'senior-school' ? 'EE' : 'none';
+    return `<span class="badge badge-${cls}">${UI.esc(SECTION_LABELS[key])}</span>`;
+  }
+
+  function renderTable(filterSection) {
+    let rows = [...st.subjects].sort((a, b) => a.name.localeCompare(b.name));
+    if (filterSection) rows = rows.filter(s => (s.section || '') === filterSection);
     if (st.subjects.length === 0) {
       return `<div class="empty"><div class="empty-title">No subjects yet</div><p>Add subjects like Mathematics, English, Integrated Science.</p></div>`;
     }
-    const rows = [...st.subjects].sort((a, b) => a.name.localeCompare(b.name));
+    if (rows.length === 0) {
+      return `<div class="empty"><div class="empty-title">No subjects in this section</div><p>Try a different filter, or add a subject scoped to it.</p></div>`;
+    }
     return `
       <div class="ledger">
         <div class="ledger-scroll">
           <table class="ledger-table">
-            <thead><tr><th>#</th><th>Subject</th><th>Code</th><th>Exams recorded</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>Subject</th><th>Code</th><th>Section</th><th>Exams recorded</th><th></th></tr></thead>
             <tbody>
               ${rows.map((s, i) => {
                 const examCount = st.exams.filter(e => e.subjectId === s.id).length;
@@ -1043,6 +1093,7 @@ Views.subjects = async function () {
                   <td class="row-index">${i + 1}</td>
                   <td>${UI.esc(s.name)}</td>
                   <td class="num">${UI.esc(s.code) || '—'}</td>
+                  <td>${sectionBadge(s)}</td>
                   <td class="num">${examCount}</td>
                   <td>
                     <button class="btn btn-sm btn-ghost" data-edit="${s.id}">Edit</button>
@@ -1091,6 +1142,16 @@ Views.subjects = async function () {
           <input type="text" id="f_code" maxlength="6" style="text-transform:uppercase;" value="${isEdit ? UI.esc(existing.code) : ''}" placeholder="e.g. MAT">
           <p class="field-hint">Short code used on the broadsheet so more subjects fit the printable page.</p>
         </div>
+        <div class="field">
+          <label>Level</label>
+          <select id="f_section">
+            <option value="" ${!isEdit || !existing.section ? 'selected' : ''}>All levels (Primary, Junior Secondary & Senior School)</option>
+            <option value="primary" ${isEdit && existing.section === 'primary' ? 'selected' : ''}>Primary only</option>
+            <option value="junior-secondary" ${isEdit && existing.section === 'junior-secondary' ? 'selected' : ''}>Junior Secondary only</option>
+            <option value="senior-school" ${isEdit && existing.section === 'senior-school' ? 'selected' : ''}>Senior School only</option>
+          </select>
+          <p class="field-hint">Scoping a subject (e.g. Chemistry) to one level keeps it out of the picker when creating exams for other levels.</p>
+        </div>
       </div>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
@@ -1110,11 +1171,12 @@ Views.subjects = async function () {
       root.querySelector('#saveBtn').onclick = async () => {
         const name = nameInput.value.trim();
         let code = codeInput.value.trim().toUpperCase();
+        const section = root.querySelector('#f_section').value;
         if (!name) { UI.toast('Subject name is required'); return; }
         if (!code) code = suggestCode(name);
         try {
-          if (isEdit) { await Store.updateSubject(existing.id, { name, code }); UI.toast('Subject updated'); }
-          else { await Store.addSubject({ name, code }); UI.toast('Subject added'); }
+          if (isEdit) { await Store.updateSubject(existing.id, { name, code, section }); UI.toast('Subject updated'); }
+          else { await Store.addSubject({ name, code, section }); UI.toast('Subject added'); }
           UI.closeModal();
           Views.subjects();
         } catch (err) {
@@ -1124,51 +1186,246 @@ Views.subjects = async function () {
     });
   }
 
-  document.getElementById('content').innerHTML = `<div id="wrap">${renderTable()}</div>`;
+  document.getElementById('content').innerHTML = `
+    <div class="filter-row">
+      <select id="sectionFilter">
+        <option value="">All levels</option>
+        <option value="primary">Primary</option>
+        <option value="junior-secondary">Junior Secondary</option>
+        <option value="senior-school">Senior School</option>
+      </select>
+    </div>
+    <div id="wrap">${renderTable('')}</div>
+  `;
   document.getElementById('addSubjectBtn').onclick = () => openForm(null);
+  document.getElementById('sectionFilter').onchange = (e) => {
+    document.getElementById('wrap').innerHTML = renderTable(e.target.value);
+    wireRowActions();
+  };
   wireRowActions();
 };
 
 /* ------------------------- EXAMS ------------------------- */
 
+// Skeleton shown while Store.current() resolves — mirrors the real
+// layout (stat row -> filter toolbar -> table) instead of a blank
+// screen, per the loading-state requirement.
+function showExamsSkeleton() {
+  document.getElementById('content').innerHTML = `
+    <div class="grid grid-4 section-block">
+      ${[0, 1, 2, 3].map(() => `<div class="skeleton skeleton-stat"></div>`).join('')}
+    </div>
+    <div class="skeleton skeleton-line" style="width:70%; height:44px; border-radius:10px; margin-bottom:18px;"></div>
+    <div class="skeleton skeleton-card" style="height:320px;"></div>
+  `;
+}
+
 Views.exams = async function () {
-  showLoading();
+  showExamsSkeleton();
   const st = await Store.current();
-  setTopbarActions(`
-    <button class="btn" id="addExamSingleBtn" ${st.subjects.length === 0 ? 'disabled' : ''}>+ Add single subject</button>
-    <button class="btn btn-primary" id="addExamAllBtn" ${st.subjects.length === 0 ? 'disabled' : ''}>+ New exam (all subjects)</button>
-  `);
 
   function subjectName(id) {
     return st.subjects.find(s => s.id === id)?.name || '—';
   }
 
-  function renderTable() {
-    if (st.exams.length === 0) {
-      return `<div class="empty"><div class="empty-title">No exams yet</div><p>Create an exam for a class and subject. Manage which exam types (Opener, Midterm, Endterm, etc.) are available from Settings.</p></div>`;
+  // A sitting (class/type/term/year) that's been published is locked
+  // for marks editing everywhere else in the app (see Views.results) —
+  // surfaced here too, purely as a status indicator.
+  function isLockedExam(e) {
+    return !!(st.published || []).find(p => p.klass === e.klass && p.type === e.type && p.term === e.term && String(p.year) === String(e.year));
+  }
+
+  // ---- augmented rows: one per exam, with real, calculated stats ----
+  function buildRows() {
+    return [...st.exams].filter(e => levelAllows(e.klass)).map(e => {
+      const studentCount = st.students.filter(s => s.klass === e.klass).length;
+      const entries = st.results.filter(r => r.examId === e.id).length;
+      const pct = studentCount > 0 ? Math.round((entries / studentCount) * 100) : 0;
+      const status = entries === 0 ? 'not-started' : (studentCount > 0 && entries >= studentCount ? 'complete' : 'in-progress');
+      return { exam: e, studentCount, entries, pct, status, locked: isLockedExam(e) };
+    }).sort((a, b) => (b.exam.year - a.exam.year) || a.exam.term.localeCompare(b.exam.term) || a.exam.klass.localeCompare(b.exam.klass));
+  }
+
+  const allRows = buildRows();
+
+  const PAGE_SIZE = 10;
+  const filters = { search: '', term: '', year: '', klass: '', type: '', subject: '', status: '' };
+  let page = 1;
+
+  // ---- dropdown option sources ----
+  const termOptions = ['Term 1', 'Term 2', 'Term 3'];
+  const yearOptions = [...new Set(allRows.map(r => String(r.exam.year)))].sort((a, b) => b - a);
+  const klassOptions = classOptionLabels(st).length ? classOptionLabels(st) : [...new Set(allRows.map(r => r.exam.klass))].sort();
+  const typeOptions = st.examTypes.length ? st.examTypes.map(t => t.name) : [...new Set(allRows.map(r => r.exam.type))].sort();
+
+  function applyFilters(rows) {
+    const q = filters.search.trim().toLowerCase();
+    return rows.filter(r => {
+      const e = r.exam;
+      if (q) {
+        const hay = `${e.type} ${e.klass} ${subjectName(e.subjectId)}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      if (filters.term && e.term !== filters.term) return false;
+      if (filters.year && String(e.year) !== filters.year) return false;
+      if (filters.klass && e.klass !== filters.klass) return false;
+      if (filters.type && e.type !== filters.type) return false;
+      if (filters.subject && e.subjectId !== filters.subject) return false;
+      if (filters.status && r.status !== filters.status) return false;
+      return true;
+    });
+  }
+
+  function examTypeBadge(type) {
+    const t = (type || '').toLowerCase();
+    const cls = t.includes('open') ? 'et-opener' : t.includes('mid') ? 'et-midterm' : t.includes('end') ? 'et-endterm' : 'et-other';
+    return `<span class="examtype-badge ${cls}">${UI.esc((type || '—').toUpperCase())}</span>`;
+  }
+
+  function statusPill(status) {
+    if (status === 'complete') return `<span class="status-pill status-complete"><i class="fa-solid fa-circle-check"></i> Complete</span>`;
+    if (status === 'in-progress') return `<span class="status-pill status-progress"><i class="fa-solid fa-circle-dot"></i> In Progress</span>`;
+    return `<span class="status-pill status-none"><i class="fa-regular fa-circle"></i> Not Started</span>`;
+  }
+
+  function entriesCellHTML(r) {
+    const fillClass = r.status === 'complete' ? 'success' : r.status === 'in-progress' ? 'warning' : '';
+    return `
+      <div class="entries-cell">
+        <span class="entries-count">${r.entries} / ${r.studentCount}</span>
+        <div class="progress-track sm"><div class="progress-fill ${fillClass}" style="width:${r.pct}%;"></div></div>
+      </div>
+    `;
+  }
+
+  // ---- Exam Summary stat cards (calculated from the full, unfiltered
+  // level-scoped set, so they always reflect the whole picture) ----
+  function renderStatCards() {
+    const total = allRows.length;
+    const active = allRows.filter(r => r.status === 'in-progress').length;
+    const completed = allRows.filter(r => r.status === 'complete').length;
+    const pending = allRows.filter(r => r.status === 'not-started').length;
+    return `
+      <div class="grid grid-4 section-block">
+        <div class="card stat-card-compact plain">
+          <i class="fa-solid fa-file-pen stat-icon"></i>
+          <p class="stat-label">Total Exams</p>
+          <p class="stat-value">${total}</p>
+          <p class="stat-sub">currently configured</p>
+        </div>
+        <div class="card stat-card-compact plain">
+          <i class="fa-solid fa-circle-dot stat-icon" style="color:var(--warning);"></i>
+          <p class="stat-label">Active Exams</p>
+          <p class="stat-value">${active}</p>
+          <p class="stat-sub">accepting marks now</p>
+        </div>
+        <div class="card stat-card-compact plain">
+          <i class="fa-solid fa-circle-check stat-icon" style="color:var(--success);"></i>
+          <p class="stat-label">Completed Exams</p>
+          <p class="stat-value">${completed}</p>
+          <p class="stat-sub">marks entry complete</p>
+        </div>
+        <div class="card stat-card-compact plain">
+          <i class="fa-solid fa-triangle-exclamation stat-icon" style="color:var(--danger);"></i>
+          <p class="stat-label">Pending Marks</p>
+          <p class="stat-value">${pending}</p>
+          <p class="stat-sub">not started yet</p>
+        </div>
+      </div>
+    `;
+  }
+
+  function opt(value, label, current) {
+    return `<option value="${UI.esc(value)}" ${value === current ? 'selected' : ''}>${UI.esc(label)}</option>`;
+  }
+
+  function renderFilterBar() {
+    return `
+      <div class="exam-filters" id="examsFilterBar">
+        <div class="toolbar-search">
+          <i class="fa-solid fa-magnifying-glass"></i>
+          <input type="text" id="examSearch" placeholder="Search type, class, subject…" value="${UI.esc(filters.search)}">
+          <button class="clear-btn" id="examSearchClear" style="${filters.search ? '' : 'display:none;'}" aria-label="Clear search"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <button class="btn btn-ghost exam-filters-toggle" id="examFiltersToggle"><i class="fa-solid fa-sliders"></i> Filters</button>
+        <div class="exam-filters-fields" id="examFiltersFields">
+          <select id="fTerm"><option value="">All terms</option>${termOptions.map(t => opt(t, t, filters.term)).join('')}</select>
+          <select id="fYear"><option value="">All years</option>${yearOptions.map(y => opt(y, y, filters.year)).join('')}</select>
+          <select id="fKlass"><option value="">All classes</option>${klassOptions.map(k => opt(k, k, filters.klass)).join('')}</select>
+          <select id="fType"><option value="">All exam types</option>${typeOptions.map(t => opt(t, t, filters.type)).join('')}</select>
+          <select id="fSubject"><option value="">All subjects</option>${st.subjects.map(s => opt(s.id, s.name, filters.subject)).join('')}</select>
+          <select id="fStatus">
+            <option value="">All statuses</option>
+            <option value="not-started" ${filters.status === 'not-started' ? 'selected' : ''}>Not Started</option>
+            <option value="in-progress" ${filters.status === 'in-progress' ? 'selected' : ''}>In Progress</option>
+            <option value="complete" ${filters.status === 'complete' ? 'selected' : ''}>Complete</option>
+          </select>
+          <button class="btn btn-sm btn-ghost" id="fReset">Reset filters</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderPaginationHTML(totalItems) {
+    const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+    if (page > totalPages) page = totalPages;
+    if (totalItems === 0) return '';
+    const start = (page - 1) * PAGE_SIZE + 1;
+    const end = Math.min(totalItems, page * PAGE_SIZE);
+    const pages = [];
+    for (let p = 1; p <= totalPages; p++) pages.push(p);
+    return `
+      <div class="pagination">
+        <span class="pagination-count">Showing ${start}–${end} of ${totalItems} examination${totalItems === 1 ? '' : 's'}</span>
+        <div class="pagination-btns">
+          <button class="page-btn" id="pagePrev" ${page === 1 ? 'disabled' : ''}>Previous</button>
+          ${pages.map(p => `<button class="page-btn ${p === page ? 'active' : ''}" data-page="${p}">${p}</button>`).join('')}
+          <button class="page-btn" id="pageNext" ${page === totalPages ? 'disabled' : ''}>Next</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderTableArea() {
+    if (allRows.length === 0) {
+      return `<div class="empty"><div class="empty-title">No examinations yet</div><p>Create your first examination to start entering learner marks.</p><button class="btn btn-primary" id="emptyCreateBtn" ${st.subjects.length === 0 ? 'disabled' : ''}>+ Create Examination</button></div>`;
     }
-    const rows = [...st.exams].filter(e => levelAllows(e.klass)).sort((a, b) => (b.year - a.year) || a.term.localeCompare(b.term) || a.klass.localeCompare(b.klass));
+    const filtered = applyFilters(allRows);
+    if (filtered.length === 0) {
+      return `<div class="empty"><div class="empty-title">No exams match your filters</div><p>Try widening your search or resetting the filters below.</p><button class="btn btn-ghost" id="noMatchResetBtn">Reset filters</button></div>`;
+    }
+    const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+    if (page > totalPages) page = totalPages;
+    const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
     return `
       <div class="ledger">
         <div class="ledger-scroll">
-          <table class="ledger-table">
-            <thead><tr><th>#</th><th>Type</th><th>Term</th><th>Year</th><th>Class</th><th>Subject</th><th>Total marks</th><th>Entries</th><th></th></tr></thead>
+          <table class="ledger-table sticky-head">
+            <thead><tr>
+              <th>#</th><th>Exam Type</th><th>Term</th><th>Year</th><th>Class</th><th>Subject</th>
+              <th>Total Marks</th><th>Entries</th><th>Completion</th><th></th>
+            </tr></thead>
             <tbody>
-              ${rows.map((e, i) => {
-                const count = st.results.filter(r => r.examId === e.id).length;
+              ${paged.map((r, i) => {
+                const e = r.exam;
                 return `<tr>
-                  <td class="row-index">${i + 1}</td>
-                  <td>${UI.esc(e.type)}</td>
+                  <td class="row-index">${(page - 1) * PAGE_SIZE + i + 1}</td>
+                  <td>${examTypeBadge(e.type)}</td>
                   <td>${UI.esc(e.term)}</td>
                   <td class="num">${UI.esc(e.year)}</td>
-                  <td>${UI.esc(e.klass)}</td>
+                  <td>
+                    <div class="class-cell">${UI.esc(e.klass)}</div>
+                    ${r.studentCount ? `<div class="class-cell-sub">${r.studentCount} learner${r.studentCount === 1 ? '' : 's'}</div>` : ''}
+                  </td>
                   <td>${UI.esc(subjectName(e.subjectId))}</td>
                   <td class="num">${UI.esc(e.totalMarks)}</td>
-                  <td class="num">${count}</td>
+                  <td>${entriesCellHTML(r)}</td>
+                  <td>${statusPill(r.status)}${r.locked ? ' <i class="fa-solid fa-lock locked-flag" title="Published & locked"></i>' : ''}</td>
                   <td>
-                    <button class="btn btn-sm btn-ghost" data-enter="${e.id}">Enter marks</button>
-                    <button class="btn btn-sm btn-ghost" data-edit="${e.id}">Edit</button>
-                    <button class="btn btn-sm btn-danger" data-del="${e.id}">Delete</button>
+                    <div class="row-actions">
+                      <button class="btn btn-sm btn-primary" data-enter="${e.id}">Enter Marks</button>
+                      <button class="icon-btn icon-btn-sm" data-more="${e.id}" aria-label="More actions" title="More actions"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+                    </div>
                   </td>
                 </tr>`;
               }).join('')}
@@ -1176,27 +1433,184 @@ Views.exams = async function () {
           </table>
         </div>
       </div>
+      ${renderPaginationHTML(filtered.length)}
     `;
+  }
+
+  // ---- row-level "more actions" (action sheet, not a floating
+  // dropdown — see UI.openActionSheet for why) ----
+  function openRowActions(r) {
+    const e = r.exam;
+    const items = [
+      { label: 'View Results', icon: 'fa-chart-simple', onClick: () => { App.state.selectedExamId = e.id; App.navigate('analysis'); } },
+      { label: 'Edit Exam', icon: 'fa-pen', onClick: () => openForm(e) },
+      {
+        label: 'Duplicate Exam', icon: 'fa-clone', onClick: async () => {
+          try {
+            await Store.addExam({ type: e.type, term: e.term, year: e.year, klass: e.klass, subjectId: e.subjectId, totalMarks: e.totalMarks, date: e.date });
+            UI.toast('Exam duplicated');
+            Views.exams();
+          } catch (err) { UI.toast('Could not duplicate: ' + err.message); }
+        }
+      },
+      { label: 'Import Marks', icon: 'fa-file-import', onClick: () => Importer.openImportMarksModal(e, subjectName(e.subjectId), () => Views.exams()) },
+      { label: 'Export Marks', icon: 'fa-file-export', onClick: () => exportExamMarksCSV(e) },
+      { label: 'Delete Exam', icon: 'fa-trash', danger: true, onClick: () => {
+          UI.confirmAction(`Delete this ${e.type} exam? Recorded marks for it will also be removed.`, async () => {
+            await Store.deleteExam(e.id);
+            UI.toast('Exam deleted');
+            Views.exams();
+          });
+        }
+      }
+    ];
+    UI.openActionSheet(`${e.type} · ${e.klass}`, items);
+  }
+
+  function exportExamMarksCSV(e) {
+    const students = st.students.filter(s => s.klass === e.klass).sort((a, b) => a.name.localeCompare(b.name));
+    const rows = students.map(s => {
+      const res = st.results.find(x => x.examId === e.id && x.studentId === s.id);
+      const pct = res ? Grading.percent(res.marks, e.totalMarks) : null;
+      const band = res ? Grading.levelForMarks(res.marks, e.totalMarks, st.settings.gradingBands) : null;
+      return [s.admissionNo || '', s.name, res ? res.marks : '', pct === null ? '' : pct.toFixed(1) + '%', band ? band.code : ''];
+    });
+    UI.downloadCSV(`${e.type}-${e.klass}-${subjectName(e.subjectId)}-marks`, ['Admission No.', 'Name', 'Marks', 'Percentage', 'Level'], rows);
+  }
+
+  function exportExamsCSV() {
+    const filtered = applyFilters(allRows);
+    const rows = filtered.map((r, i) => [i + 1, r.exam.type, r.exam.term, r.exam.year, r.exam.klass, subjectName(r.exam.subjectId), r.exam.totalMarks, `${r.entries}/${r.studentCount}`, `${r.pct}%`, r.status]);
+    UI.downloadCSV('exams-export', ['#', 'Exam Type', 'Term', 'Year', 'Class', 'Subject', 'Total Marks', 'Entries', 'Completion %', 'Status'], rows);
+  }
+
+  function downloadMarksTemplate() {
+    UI.downloadCSV('marks-import-template', ['Admission No.', 'Name', 'Marks'], [['e.g. 1234', 'e.g. Jane Doe', 'e.g. 78']]);
+  }
+
+  function openMoreActions() {
+    UI.openActionSheet('More actions', [
+      { label: 'Import Marks', icon: 'fa-file-import', onClick: () => openImportPicker() },
+      { label: 'Export Exams', icon: 'fa-file-export', onClick: () => exportExamsCSV() },
+      { label: 'Download Template', icon: 'fa-file-arrow-down', onClick: () => downloadMarksTemplate() },
+      { label: 'Examination Settings', icon: 'fa-gear', onClick: () => App.navigate('settings') }
+    ]);
+  }
+
+  // Picking which exam to bulk-import marks for, from the page-level
+  // "More actions" menu (the per-row menu already knows its exam).
+  function openImportPicker() {
+    if (allRows.length === 0) { UI.toast('Create an exam first'); return; }
+    UI.openModal(`
+      <h2>Import marks — choose an exam</h2>
+      <div class="field full">
+        <label>Exam</label>
+        <select id="importExamSelect">
+          ${allRows.map(r => `<option value="${r.exam.id}">${UI.esc(r.exam.type)} · ${UI.esc(r.exam.klass)} · ${UI.esc(subjectName(r.exam.subjectId))} · ${UI.esc(r.exam.term)} ${UI.esc(r.exam.year)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
+        <button class="btn btn-primary" id="continueBtn">Continue</button>
+      </div>
+    `, (root) => {
+      root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
+      root.querySelector('#continueBtn').onclick = () => {
+        const examId = root.querySelector('#importExamSelect').value;
+        const r = allRows.find(x => x.exam.id === examId);
+        UI.closeModal();
+        if (r) Importer.openImportMarksModal(r.exam, subjectName(r.exam.subjectId), () => Views.exams());
+      };
+    });
   }
 
   function wireRowActions() {
     document.querySelectorAll('[data-enter]').forEach(btn => {
       btn.onclick = () => { App.state.selectedExamId = btn.dataset.enter; App.navigate('results'); };
     });
-    document.querySelectorAll('[data-edit]').forEach(btn => {
-      btn.onclick = () => openForm(st.exams.find(e => e.id === btn.dataset.edit));
-    });
-    document.querySelectorAll('[data-del]').forEach(btn => {
+    document.querySelectorAll('[data-more]').forEach(btn => {
       btn.onclick = () => {
-        const e = st.exams.find(e => e.id === btn.dataset.del);
-        UI.confirmAction(`Delete this ${e.type} exam? Recorded marks for it will also be removed.`, async () => {
-          await Store.deleteExam(e.id);
-          UI.toast('Exam deleted');
-          Views.exams();
-        });
+        const r = allRows.find(x => x.exam.id === btn.dataset.more);
+        if (r) openRowActions(r);
       };
     });
+    const emptyBtn = document.getElementById('emptyCreateBtn');
+    if (emptyBtn) emptyBtn.onclick = () => openAllSubjectsForm();
+    const noMatchBtn = document.getElementById('noMatchResetBtn');
+    if (noMatchBtn) noMatchBtn.onclick = () => { resetFilters(); };
   }
+
+  function wirePagination() {
+    const prev = document.getElementById('pagePrev');
+    const next = document.getElementById('pageNext');
+    if (prev) prev.onclick = () => { page--; repaintTable(); };
+    if (next) next.onclick = () => { page++; repaintTable(); };
+    document.querySelectorAll('.page-btn[data-page]').forEach(btn => {
+      btn.onclick = () => { page = Number(btn.dataset.page); repaintTable(); };
+    });
+  }
+
+  function repaintTable() {
+    document.getElementById('examsTableArea').innerHTML = renderTableArea();
+    wireRowActions();
+    wirePagination();
+  }
+
+  function resetFilters() {
+    filters.search = ''; filters.term = ''; filters.year = ''; filters.klass = ''; filters.type = ''; filters.subject = ''; filters.status = '';
+    page = 1;
+    document.getElementById('examsFilterBar').outerHTML = renderFilterBar();
+    wireFilterBar();
+    repaintTable();
+  }
+
+  function wireFilterBar() {
+    const searchInput = document.getElementById('examSearch');
+    const clearBtn = document.getElementById('examSearchClear');
+    searchInput.addEventListener('input', () => {
+      filters.search = searchInput.value;
+      clearBtn.style.display = filters.search ? '' : 'none';
+      page = 1;
+      repaintTable();
+    });
+    clearBtn.onclick = () => { searchInput.value = ''; filters.search = ''; clearBtn.style.display = 'none'; page = 1; repaintTable(); searchInput.focus(); };
+
+    const bind = (id, key) => {
+      const el = document.getElementById(id);
+      el.addEventListener('change', () => { filters[key] = el.value; page = 1; repaintTable(); });
+    };
+    bind('fTerm', 'term'); bind('fYear', 'year'); bind('fKlass', 'klass'); bind('fType', 'type'); bind('fSubject', 'subject'); bind('fStatus', 'status');
+
+    document.getElementById('fReset').onclick = () => resetFilters();
+
+    const toggle = document.getElementById('examFiltersToggle');
+    const fields = document.getElementById('examFiltersFields');
+    if (toggle) toggle.onclick = () => fields.classList.toggle('expanded');
+  }
+
+  setTopbarActions(`
+    <button class="btn" id="addExamSingleBtn" ${st.subjects.length === 0 ? 'disabled' : ''}>+ Add Subject Exam</button>
+    <button class="btn btn-primary" id="addExamAllBtn" ${st.subjects.length === 0 ? 'disabled' : ''}>+ New Examination</button>
+    <button class="icon-btn" id="examsMoreBtn" aria-label="More actions" title="More actions"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+  `);
+
+  document.getElementById('content').innerHTML = `
+    <p class="page-intro">Manage examinations, subjects and learner assessments.</p>
+    ${renderStatCards()}
+    ${renderFilterBar()}
+    <div id="examsTableArea">${renderTableArea()}</div>
+  `;
+
+  const addBtn = document.getElementById('addExamSingleBtn');
+  if (addBtn) addBtn.onclick = () => openForm(null);
+  const addAllBtn = document.getElementById('addExamAllBtn');
+  if (addAllBtn) addAllBtn.onclick = () => openAllSubjectsForm();
+  const moreBtn = document.getElementById('examsMoreBtn');
+  if (moreBtn) moreBtn.onclick = () => openMoreActions();
+
+  wireFilterBar();
+  wireRowActions();
+  wirePagination();
 
   function openForm(existing) {
     const isEdit = !!existing;
@@ -1236,9 +1650,8 @@ Views.exams = async function () {
         </div>
         <div class="field">
           <label>Subject</label>
-          <select id="f_subject">
-            ${st.subjects.map(s => `<option value="${s.id}" ${isEdit && existing.subjectId === s.id ? 'selected' : ''}>${UI.esc(s.name)}</option>`).join('')}
-          </select>
+          <select id="f_subject"></select>
+          <p class="field-hint" id="f_subject_hint"></p>
         </div>
         <div class="field">
           <label>Total marks</label>
@@ -1254,6 +1667,33 @@ Views.exams = async function () {
         <button class="btn btn-primary" id="saveBtn">${isEdit ? 'Save changes' : 'Create exam'}</button>
       </div>
     `, (root) => {
+      const klassField = root.querySelector('#f_klass');
+      const subjectField = root.querySelector('#f_subject');
+      const subjectHint = root.querySelector('#f_subject_hint');
+      // Primary/Junior Secondary/Senior School offer different subjects —
+      // only show the ones actually available for whichever class is
+      // picked, but always keep an exam's existing subject selectable
+      // when editing even if it's outside that section (so editing
+      // never silently swaps the subject out from under you).
+      function refreshSubjectOptions() {
+        const klass = klassField.value.trim();
+        let options = subjectsForKlass(st, klass);
+        if (isEdit && !options.some(s => s.id === existing.subjectId)) {
+          const forced = st.subjects.find(s => s.id === existing.subjectId);
+          if (forced) options = [forced, ...options];
+        }
+        const prevValue = subjectField.value;
+        subjectField.innerHTML = options.map(s => `<option value="${s.id}">${UI.esc(s.name)}</option>`).join('');
+        const keep = isEdit && !subjectField.dataset.touched ? existing.subjectId : prevValue;
+        if (options.some(s => s.id === keep)) subjectField.value = keep;
+        const section = klass ? sectionForKlassLabel(st, klass) : null;
+        subjectHint.textContent = section ? `Showing subjects for ${section.label}${options.length !== st.subjects.length ? ` (${options.length} of ${st.subjects.length} total)` : ''}.` : 'Pick a class to narrow this list to its level.';
+      }
+      subjectField.addEventListener('change', () => { subjectField.dataset.touched = '1'; });
+      klassField.addEventListener('change', refreshSubjectOptions);
+      klassField.addEventListener('input', refreshSubjectOptions);
+      refreshSubjectOptions();
+
       root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
       root.querySelector('#saveBtn').onclick = async () => {
         const payload = {
@@ -1322,23 +1762,45 @@ Views.exams = async function () {
           <input type="date" id="f_date">
         </div>
       </div>
-      <div class="field-hint" style="margin-top:14px;">Will create exam entries for: ${st.subjects.map(s => UI.esc(s.name)).join(', ')}</div>
+      <div class="field-hint" id="f_allsubjects_hint" style="margin-top:14px;"></div>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
-        <button class="btn btn-primary" id="saveBtn">Create for all ${st.subjects.length} subjects</button>
+        <button class="btn btn-primary" id="saveBtn">Create exams</button>
       </div>
     `, (root) => {
+      const klassField = root.querySelector('#f_klass');
+      const hintEl = root.querySelector('#f_allsubjects_hint');
+      const saveBtn = root.querySelector('#saveBtn');
+      // Same section-scoping as the single-subject form — a class only
+      // gets exams for subjects actually offered at its level.
+      function scopedSubjects() { return subjectsForKlass(st, klassField.value.trim()); }
+      function refreshHint() {
+        const subs = scopedSubjects();
+        const klass = klassField.value.trim();
+        const section = klass ? sectionForKlassLabel(st, klass) : null;
+        hintEl.textContent = subs.length
+          ? `Will create exam entries for: ${subs.map(s => s.name).join(', ')}${section && subs.length !== st.subjects.length ? ` (${section.label} only)` : ''}`
+          : (klass ? `No subjects are set up for ${section ? section.label : klass} yet — add one on the Subjects page.` : 'Pick a class to see which subjects this will create exams for.');
+        saveBtn.textContent = `Create for ${subs.length} subject${subs.length === 1 ? '' : 's'}`;
+        saveBtn.disabled = subs.length === 0;
+      }
+      klassField.addEventListener('change', refreshHint);
+      klassField.addEventListener('input', refreshHint);
+      refreshHint();
+
       root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
-      root.querySelector('#saveBtn').onclick = async () => {
+      saveBtn.onclick = async () => {
         const type = root.querySelector('#f_type').value;
         const term = root.querySelector('#f_term').value;
         const year = Number(root.querySelector('#f_year').value);
-        const klass = root.querySelector('#f_klass').value.trim();
+        const klass = klassField.value.trim();
         const date = root.querySelector('#f_date').value;
         if (!klass) { UI.toast('Class is required'); return; }
+        const subjectsToUse = scopedSubjects();
+        if (subjectsToUse.length === 0) { UI.toast('No subjects are set up for this class\u2019s level'); return; }
 
         let created = 0, skipped = 0;
-        for (const subj of st.subjects) {
+        for (const subj of subjectsToUse) {
           const exists = st.exams.some(e => e.type === type && e.term === term && String(e.year) === String(year) && e.klass === klass && e.subjectId === subj.id);
           if (exists) { skipped++; continue; }
           try {
@@ -1354,13 +1816,6 @@ Views.exams = async function () {
       };
     });
   }
-
-  document.getElementById('content').innerHTML = `<div id="wrap">${renderTable()}</div>`;
-  const addBtn = document.getElementById('addExamSingleBtn');
-  if (addBtn) addBtn.onclick = () => openForm(null);
-  const addAllBtn = document.getElementById('addExamAllBtn');
-  if (addAllBtn) addAllBtn.onclick = () => openAllSubjectsForm();
-  wireRowActions();
 };
 
 /* ------------------------- RESULTS ENTRY ------------------------- */

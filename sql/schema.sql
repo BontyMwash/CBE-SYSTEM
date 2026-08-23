@@ -59,8 +59,9 @@ create table students (
   name          text not null,
   admission_no  text default '',
   klass         text not null,
-  -- Optional parent/guardian contact, used by the "Send Results to
-  -- Parents" screen to pre-fill a WhatsApp/SMS/email message.
+  -- '' = unspecified, 'M' or 'F' — optional, used for the Gender
+  -- column/filter on the Students, Broadsheet and Analysis pages.
+  gender        text not null default '' check (gender in ('', 'M', 'F')),
   parent_name   text not null default '',
   parent_phone  text not null default '',
   parent_email  text not null default '',
@@ -74,6 +75,10 @@ create table subjects (
   -- Short code (e.g. "MAT", "ENG") used on the broadsheet instead of the
   -- full subject name, so more subject columns fit the printable page width.
   code        text not null default '',
+  -- '' = shared across every level, or 'primary' / 'junior-secondary' /
+  -- 'senior-school' to scope this subject to just that CBC section
+  -- (e.g. Chemistry only offered from Senior School up).
+  section     text not null default '' check (section in ('', 'primary', 'junior-secondary', 'senior-school')),
   created_at  timestamptz not null default now()
 );
 

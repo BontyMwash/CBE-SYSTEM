@@ -112,6 +112,13 @@ html, body {
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   transition: background 0.2s ease, color 0.2s ease;
+  /* Grid/flex children default to a content-based min-width, which can
+     quietly force the page wider than the viewport on narrow phones
+     (classic CSS grid gotcha — see the min-width:0 rules below for the
+     actual fix). This is the safety net so that even if something is
+     missed, the page never gains a horizontal scrollbar of its own. */
+  max-width: 100vw;
+  overflow-x: hidden;
 }
 
 button, input, select, textarea {
@@ -1850,6 +1857,10 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
   max-width: 1280px; margin: 0 auto;
   display: grid; grid-template-columns: 1.05fr 1fr; gap: 56px; align-items: center;
 }
+/* Grid items default to min-width:auto (sized to their widest unbreakable
+   content), which is the #1 cause of "page doesn't fit on my phone" bugs
+   with CSS grid — the fix is simply letting them shrink. */
+.home-hero-inner > *, .home-analytics-grid > *, .home-steps > * { min-width: 0; }
 
 .home-badge {
   display: inline-block; font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em;
@@ -2357,4 +2368,248 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
 
 .toggle-password:focus {
     outline: none;
+}
+
+/* ============================================================
+   Exams page — 2026 redesign
+   ============================================================ */
+
+.page-intro {
+  font-size: 13.5px;
+  color: var(--ink-soft);
+  margin: -8px 0 18px 0;
+}
+
+/* Compact stat cards (Exam Summary row) — smaller than the dashboard's
+   stat-card so the table stays visible without excessive scrolling. */
+.stat-card-compact {
+  padding: 14px 16px;
+  position: relative;
+}
+.stat-card-compact .stat-icon {
+  position: absolute;
+  right: 14px; top: 14px;
+  font-size: 15px;
+  opacity: 0.7;
+}
+.stat-card-compact .stat-label {
+  font-size: 10.5px;
+  margin-bottom: 4px;
+}
+.stat-card-compact .stat-value {
+  font-size: 22px;
+}
+.stat-card-compact .stat-sub {
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+/* ---------- Filter toolbar ---------- */
+
+.exam-filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.toolbar-search {
+  position: relative;
+  flex: 1;
+  min-width: 200px;
+  max-width: 320px;
+}
+.toolbar-search i.fa-magnifying-glass {
+  position: absolute;
+  left: 11px; top: 50%;
+  transform: translateY(-50%);
+  color: var(--ink-faint);
+  font-size: 13px;
+  pointer-events: none;
+}
+.toolbar-search input {
+  width: 100%;
+  padding: 8px 32px 8px 32px;
+  border: 1px solid var(--paper-line);
+  border-radius: 8px;
+  background: var(--paper-raised);
+  color: var(--ink);
+  font-size: 13.5px;
+}
+.toolbar-search .clear-btn {
+  position: absolute;
+  right: 6px; top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.toolbar-search .clear-btn:hover { color: var(--ink); }
+
+.exam-filters-toggle { display: none; }
+
+.exam-filters-fields {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.exam-filters-fields select {
+  border: 1px solid var(--paper-line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--paper-raised);
+  color: var(--ink);
+  font-size: 13px;
+  max-width: 160px;
+}
+
+/* ---------- Exam type badges ---------- */
+
+.examtype-badge {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.examtype-badge.et-opener   { background: #EAF0FD; color: #2856B8; }
+.examtype-badge.et-midterm  { background: #FDF1DD; color: #96690E; }
+.examtype-badge.et-endterm  { background: #EFE9FD; color: #5B32B8; }
+.examtype-badge.et-other    { background: var(--paper-line-soft); color: var(--ink-soft); }
+html[data-theme="dark"] .examtype-badge.et-opener  { background: rgba(40,86,184,0.22); color: #9DB8F0; }
+html[data-theme="dark"] .examtype-badge.et-midterm { background: rgba(150,105,14,0.22); color: #F0C97F; }
+html[data-theme="dark"] .examtype-badge.et-endterm { background: rgba(91,50,184,0.22); color: #C7AAF0; }
+
+/* ---------- Class cell ---------- */
+
+.class-cell { font-weight: 600; }
+.class-cell-sub { font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+
+/* ---------- Entries cell (count + mini progress) ---------- */
+
+.entries-cell { min-width: 96px; }
+.entries-count {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+  color: var(--ink);
+  display: block;
+  margin-bottom: 4px;
+}
+.progress-track.sm { height: 6px; margin: 0; }
+
+/* ---------- Completion status pills ---------- */
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.status-pill.status-complete { background: var(--ok-bg); color: #197A46; }
+.status-pill.status-progress { background: #FDF1DD; color: #96690E; }
+.status-pill.status-none     { background: var(--paper-line-soft); color: var(--ink-soft); }
+html[data-theme="dark"] .status-pill.status-progress { background: rgba(150,105,14,0.22); color: #F0C97F; }
+
+.locked-flag { color: var(--warning); font-size: 11px; margin-left: 4px; }
+
+/* ---------- Row actions / more-actions button ---------- */
+
+.row-actions { display: flex; align-items: center; gap: 6px; }
+.icon-btn-sm {
+  width: 30px; height: 30px;
+  font-size: 12.5px;
+}
+
+/* ---------- Action sheet (row / page "more actions" menu) ---------- */
+
+.action-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.action-sheet-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 11px 12px;
+  border: none;
+  background: none;
+  border-radius: 8px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+}
+.action-sheet-item i { width: 16px; text-align: center; color: var(--ink-soft); }
+.action-sheet-item:hover { background: var(--paper-line-soft); }
+.action-sheet-item.danger { color: var(--danger); }
+.action-sheet-item.danger i { color: var(--danger); }
+
+/* ---------- Pagination ---------- */
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+.pagination-count { font-size: 12.5px; color: var(--ink-soft); }
+.pagination-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.page-btn {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--paper-line);
+  background: var(--paper-raised);
+  color: var(--ink-soft);
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.page-btn:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+.page-btn.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.page-btn:disabled { opacity: 0.45; cursor: default; }
+
+/* Sticky table header for the exams ledger */
+table.ledger-table.sticky-head thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+/* ---------- Mobile ---------- */
+
+@media (max-width: 768px) {
+  .exam-filters-toggle { display: inline-flex; }
+  .exam-filters-fields { display: none; width: 100%; }
+  .exam-filters-fields.expanded {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    background: var(--paper-raised);
+    border: 1px solid var(--paper-line);
+    border-radius: var(--radius-lg);
+    padding: 12px;
+    margin-top: 6px;
+  }
+  .exam-filters-fields select { max-width: none; }
+  .toolbar-search { max-width: none; flex: 1 1 100%; }
+  .pagination { flex-direction: column; align-items: flex-start; }
 }
