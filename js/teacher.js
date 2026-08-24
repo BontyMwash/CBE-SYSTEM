@@ -182,14 +182,14 @@ Views.learners = async function () {
             <tbody>
               ${rows.map((s, i) => {
                 const avg = overallAverage(s.id);
-                const band = avg === null ? null : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
+                const band = avg === null ? Grading.MISSING_BAND : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
                 const contact = [s.parentName, s.parentPhone].filter(Boolean).map(UI.esc).join(' &middot; ') || '<span class="row-index">—</span>';
                 return `<tr>
                   <td class="row-index">${i + 1}</td>
                   <td>${UI.esc(s.name)}</td>
                   <td class="num">${UI.esc(s.admissionNo) || '—'}</td>
                   <td>${UI.esc(s.klass)}</td>
-                  <td>${avg === null ? '<span class="row-index">—</span>' : `${avg.toFixed(1)}% ${UI.badge(band)}`}</td>
+                  <td>${avg === null ? UI.badge(Grading.MISSING_BAND) : `${avg.toFixed(1)}% ${UI.badge(band)}`}</td>
                   <td>${contact}</td>
                 </tr>`;
               }).join('')}
@@ -236,8 +236,8 @@ Views.learners = async function () {
       const header = ['Name', 'Admission No.', 'Class', 'Average %', 'Level', 'Guardian name', 'Guardian phone'];
       const csvRows = rows.map(s => {
         const avg = overallAverage(s.id);
-        const band = avg === null ? null : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
-        return [s.name, s.admissionNo || '', s.klass, avg === null ? '' : avg.toFixed(1), band ? band.code : '', s.parentName || '', s.parentPhone || ''];
+        const band = avg === null ? Grading.MISSING_BAND : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
+        return [s.name, s.admissionNo || '', s.klass, avg === null ? 'M' : avg.toFixed(1), band.code, s.parentName || '', s.parentPhone || ''];
       });
       UI.downloadCSV(`class-list-${klassFilter || 'all-my-classes'}`.replace(/\s+/g, '_'), header, csvRows);
     };
@@ -458,12 +458,12 @@ Views.gradebook = async function () {
                   return `<td class="num">${res.marks}</td>`;
                 }).join('');
                 const avg = Grading.average(pcts);
-                const band = avg === null ? null : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
+                const band = avg === null ? Grading.MISSING_BAND : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
                 return `<tr>
                   <td class="row-index">${i + 1}</td>
                   <td>${UI.esc(s.name)}</td>
                   ${cells}
-                  <td class="num">${avg === null ? '—' : avg.toFixed(1) + '%'}</td>
+                  <td class="num">${avg === null ? UI.badge(Grading.MISSING_BAND) : avg.toFixed(1) + '%'}</td>
                   <td>${UI.badge(band)}</td>
                 </tr>`;
               }).join('')}

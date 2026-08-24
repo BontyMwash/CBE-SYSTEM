@@ -139,7 +139,12 @@ const UI = {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
+    // Revoking the object URL immediately races the browser's own
+    // (async) handling of the click-triggered download — on several
+    // browsers/webviews this was winning the race and producing a
+    // download with the right filename but 0 bytes of content.
+    // Deferring the revoke lets the download actually start first.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
 
   // Same header + array-of-arrays shape as downloadCSV, but produces a

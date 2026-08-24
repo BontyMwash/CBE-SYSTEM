@@ -1310,6 +1310,7 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
 .badge-AE { background: #FDF1DD; color: #96690E; }
 .badge-BE { background: var(--danger-bg); color: var(--ledger-red); }
 .badge-none { background: var(--paper-line-soft); color: var(--ink-soft); }
+.badge-M { background: rgba(245, 158, 11, 0.16); color: #92600A; }
 
 .stamp {
   display: inline-flex;

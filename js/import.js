@@ -37,19 +37,21 @@ const Importer = {
     return rows.filter(r => r.some(cell => cell.trim() !== ''));
   },
 
-  // Turn a 2D array of rows into {name, admissionNo, klass} records.
-  // Detects a header row if it contains recognizable column names;
-  // otherwise assumes column order: Name, Admission No, Class.
+  // Turn a 2D array of rows into {name, admissionNo, klass, gender}
+  // records. Detects a header row if it contains recognizable column
+  // names; otherwise assumes column order: Name, Admission No, Class.
+  // Gender is optional in either case — a bare 'M'/'F'/'Male'/'Female'
+  // (any case) is normalized to 'M'/'F'; anything else is left blank.
   rowsToStudents(rows, defaultKlass) {
     if (!rows.length) return { records: [], skipped: 0 };
 
     const norm = s => (s || '').toString().trim().toLowerCase();
     const headerCandidates = rows[0].map(norm);
     const looksLikeHeader = headerCandidates.some(h =>
-      h.includes('name') || h.includes('admission') || h.includes('class') || h.includes('grade')
+      h.includes('name') || h.includes('admission') || h.includes('class') || h.includes('grade') || h.includes('gender') || h.includes('sex')
     );
 
-    let nameIdx = 0, admIdx = -1, klassIdx = -1;
+    let nameIdx = 0, admIdx = -1, klassIdx = -1, genderIdx = -1;
     let dataRows = rows;
 
     if (looksLikeHeader) {
@@ -57,11 +59,19 @@ const Importer = {
         if (h.includes('name')) nameIdx = i;
         else if (h.includes('admission') || h.includes('adm') || h.includes('reg')) admIdx = i;
         else if (h.includes('class') || h.includes('grade') || h.includes('stream')) klassIdx = i;
+        else if (h.includes('gender') || h.includes('sex')) genderIdx = i;
       });
       dataRows = rows.slice(1);
     } else {
-      nameIdx = 0; admIdx = 1; klassIdx = 2;
+      nameIdx = 0; admIdx = 1; klassIdx = 2; genderIdx = 3;
     }
+
+    const normGender = (v) => {
+      const g = (v || '').toString().trim().toLowerCase();
+      if (g === 'm' || g === 'male') return 'M';
+      if (g === 'f' || g === 'female') return 'F';
+      return '';
+    };
 
     let skipped = 0;
     const records = [];
@@ -70,7 +80,8 @@ const Importer = {
       if (!name) { skipped++; return; }
       const admissionNo = admIdx >= 0 ? (r[admIdx] || '').toString().trim() : '';
       const klass = (klassIdx >= 0 ? (r[klassIdx] || '').toString().trim() : '') || defaultKlass || '';
-      records.push({ name, admissionNo, klass });
+      const gender = genderIdx >= 0 ? normGender(r[genderIdx]) : '';
+      records.push({ name, admissionNo, klass, gender });
     });
 
     return { records, skipped };
@@ -117,8 +128,9 @@ const Importer = {
       <h2>Import students</h2>
       <p class="field-hint" style="margin-bottom:14px;">
         Upload a .csv or .xlsx file. If it has header columns like <strong>Name</strong>,
-        <strong>Admission No.</strong> and <strong>Class</strong> they'll be detected automatically —
-        otherwise the first three columns are read as Name, Admission No., Class in that order.
+        <strong>Admission No.</strong>, <strong>Class</strong> and <strong>Gender</strong> they'll be detected
+        automatically — otherwise the first four columns are read as Name, Admission No., Class, Gender in that
+        order. Gender is optional (M/F, or leave it blank).
       </p>
       <div class="field full">
         <label>File</label>
@@ -159,9 +171,9 @@ const Importer = {
           <div class="ledger" style="max-height:240px; overflow-y:auto;">
             <div class="ledger-scroll">
               <table class="ledger-table">
-                <thead><tr><th>Name</th><th>Admission No.</th><th>Class</th></tr></thead>
+                <thead><tr><th>Name</th><th>Admission No.</th><th>Class</th><th>Gender</th></tr></thead>
                 <tbody>
-                  ${parsedRecords.slice(0, 200).map(r => `<tr><td>${UI.esc(r.name)}</td><td class="num">${UI.esc(r.admissionNo) || '—'}</td><td>${UI.esc(r.klass) || '<span class="row-index">missing</span>'}</td></tr>`).join('')}
+                  ${parsedRecords.slice(0, 200).map(r => `<tr><td>${UI.esc(r.name)}</td><td class="num">${UI.esc(r.admissionNo) || '—'}</td><td>${UI.esc(r.klass) || '<span class="row-index">missing</span>'}</td><td>${r.gender === 'M' ? 'Male' : r.gender === 'F' ? 'Female' : '<span class="row-index">—</span>'}</td></tr>`).join('')}
                 </tbody>
               </table>
             </div>

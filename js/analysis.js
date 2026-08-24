@@ -48,17 +48,21 @@ Views.analysis = async function () {
       });
       const pcts = cells.map(c => c.pct).filter(v => v !== null);
       const avg = Grading.average(pcts);
-      const band = avg === null ? null : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
+      const band = avg === null ? Grading.MISSING_BAND : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
       return { student: stu, cells, avg, band };
     });
 
     // Tie-aware rank by class average, same convention as the Broadsheet.
+    // A student with no marks entered at all sorts below everyone with
+    // a real average (avg ?? -1 already puts them last) and gets 'M'
+    // instead of a number, so the sheet flags them as still pending
+    // rather than quietly leaving them un-ranked.
     const rankOrder = [...studentRows].sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
     let rnk = 0, lastAvg = null, seenR = 0;
     const rankMap = new Map();
     rankOrder.forEach(r => {
       seenR++;
-      if (r.avg === null) { rankMap.set(r.student.id, null); return; }
+      if (r.avg === null) { rankMap.set(r.student.id, 'M'); return; }
       if (r.avg !== lastAvg) { rnk = seenR; lastAvg = r.avg; }
       rankMap.set(r.student.id, rnk);
     });
@@ -98,7 +102,7 @@ Views.analysis = async function () {
       klass, type, term, year, students, subjectCols,
       classMean, classHigh, classLow, passRate, completion, expectedEntries, enteredEntries,
       subjectStats, bandCounts, topStudents, supportStudents,
-      studentRows: [...studentRows].sort((a, b) => (a.rank ?? 9999) - (b.rank ?? 9999))
+      studentRows: [...studentRows].sort((a, b) => Grading.rankSortValue(a.rank) - Grading.rankSortValue(b.rank))
     };
   }
 
@@ -234,7 +238,7 @@ Views.analysis = async function () {
               <select id="anLevelFilter">
                 <option value="all">All achievement levels</option>
                 ${(st.settings.gradingBands || []).map(b => `<option value="${UI.esc(b.code)}">${UI.esc(b.code)} — ${UI.esc(b.label)}</option>`).join('')}
-                <option value="none">Not yet assessed</option>
+                <option value="M">M — Marks missing</option>
               </select>
               <button class="btn" id="anTableCsvBtn"><i class="fa-solid fa-download"></i> CSV</button>
               <button class="btn" id="anTableExcelBtn"><i class="fa-solid fa-file-excel"></i> Excel</button>
@@ -279,7 +283,7 @@ Views.analysis = async function () {
 
     function visible() {
       let list = data.studentRows;
-      if (state.level !== 'all') list = list.filter(r => (r.band ? r.band.code : 'none') === state.level);
+      if (state.level !== 'all') list = list.filter(r => r.band && r.band.code === state.level);
       if (state.search.trim()) {
         const q = state.search.trim().toLowerCase();
         list = list.filter(r => r.student.name.toLowerCase().includes(q) || (r.student.admissionNo || '').toLowerCase().includes(q));
@@ -290,11 +294,11 @@ Views.analysis = async function () {
     function rowsHtml(list) {
       if (list.length === 0) return `<tr><td colspan="${5 + data.subjectCols.length}" style="text-align:center; color:var(--ink-soft); padding:24px;">No students match the current search / filter.</td></tr>`;
       return list.map(r => `<tr>
-        <td class="num freeze-1">${r.rank === null ? '—' : r.rank}</td>
+        <td class="num freeze-1">${r.rank === 'M' ? UI.badge(Grading.MISSING_BAND) : r.rank}</td>
         <td class="freeze-2">${UI.esc(r.student.name)}</td>
         <td class="num">${UI.esc(r.student.admissionNo) || '—'}</td>
         ${r.cells.map(c => `<td class="num" ${c.marks !== null ? `title="${c.marks}/${c.totalMarks} raw"` : ''}>${c.pct === null ? '<span class="row-index">—</span>' : c.pct.toFixed(1) + '%'}</td>`).join('')}
-        <td class="num">${r.avg === null ? '—' : r.avg.toFixed(1) + '%'}</td>
+        <td class="num">${r.avg === null ? UI.badge(Grading.MISSING_BAND) : r.avg.toFixed(1) + '%'}</td>
         <td>${UI.badge(r.band)}</td>
       </tr>`).join('');
     }
@@ -312,9 +316,9 @@ Views.analysis = async function () {
     const excelBtn = document.getElementById('anTableExcelBtn');
     const header = ['Rank', 'Name', 'Adm. No.', ...data.subjectCols.map(c => c.subject.name), 'Average %', 'Level'];
     const buildRows = () => data.studentRows.map(r => [
-      r.rank === null ? '' : r.rank, r.student.name, r.student.admissionNo || '',
+      r.rank, r.student.name, r.student.admissionNo || '',
       ...r.cells.map(c => c.pct === null ? '' : c.pct.toFixed(1)),
-      r.avg === null ? '' : r.avg.toFixed(1),
+      r.avg === null ? 'M' : r.avg.toFixed(1),
       r.band ? r.band.code : ''
     ]);
     const filename = `all-students-${data.klass}-${data.type}-${data.term}-${data.year}`.replace(/\s+/g, '_');

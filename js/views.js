@@ -124,8 +124,8 @@ function buildReportCardHTML(st, student, term, year, examType) {
   const overallAvg = isSingle
     ? Grading.average(grid.map(r => (r.cells[examType] ? r.cells[examType].pct : null)).filter(v => v !== null))
     : Grading.average(grid.map(r => r.average).filter(v => v !== null));
-  const overallBand = overallAvg === null ? null : Grading.levelForMarks(overallAvg, 100, st.settings.gradingBands);
-  const overallPoints = Grading.pointsForBand(overallBand, st.settings.gradingBands);
+  const overallBand = overallAvg === null ? Grading.MISSING_BAND : Grading.levelForMarks(overallAvg, 100, st.settings.gradingBands);
+  const overallPoints = overallAvg === null ? null : Grading.pointsForBand(overallBand, st.settings.gradingBands);
 
   const rowsHtml = grid.map(row => {
     const cellHtml = (type) => {
@@ -184,10 +184,10 @@ function buildReportCardHTML(st, student, term, year, examType) {
         <div><span class="k">Name:</span>${UI.esc(student.name)}</div>
         <div><span class="k">Admission No.:</span>${UI.esc(student.admissionNo) || '—'}</div>
         <div><span class="k">Class:</span>${UI.esc(student.klass)}</div>
-        <div><span class="k">Average performance:</span>${overallAvg === null ? '—' : overallAvg.toFixed(1) + '%'}</div>
+        <div><span class="k">Average performance:</span>${overallAvg === null ? UI.badge(Grading.MISSING_BAND) : overallAvg.toFixed(1) + '%'}</div>
         <div><span class="k">Points:</span>${overallPoints === null ? '—' : overallPoints}</div>
-        <div><span class="k">Position in class:</span>${classPos.position === null ? '—' : `${ordinal(classPos.position)} out of ${classPos.outOf}`}</div>
-        ${showStreamRow ? `<div><span class="k">Position in stream:</span>${streamPos.position === null ? '—' : `${ordinal(streamPos.position)} out of ${streamPos.outOf}`}</div>` : ''}
+        <div><span class="k">Position in class:</span>${classPos.position === 'M' ? `${UI.badge(Grading.MISSING_BAND)} — marks pending, ranked last of ${showStreamRow ? gradeMates.length : streamMates.length}` : classPos.position === null ? '—' : `${ordinal(classPos.position)} out of ${classPos.outOf}`}</div>
+        ${showStreamRow ? `<div><span class="k">Position in stream:</span>${streamPos.position === 'M' ? `${UI.badge(Grading.MISSING_BAND)} — marks pending, ranked last of ${streamMates.length}` : streamPos.position === null ? '—' : `${ordinal(streamPos.position)} out of ${streamPos.outOf}`}</div>` : ''}
       </div>
       <table class="ledger-table" style="width:100%;">
         <thead><tr><th>Subject</th>${typesToShow.map(t => `<th>${UI.esc(t)}</th>`).join('')}${isSingle ? '' : '<th>Average</th>'}</tr></thead>
@@ -199,7 +199,7 @@ function buildReportCardHTML(st, student, term, year, examType) {
           <p class="stat-sub" style="margin:0 0 6px 0;"><strong>Average performance:</strong> ${overallAvg === null ? 'Not enough data' : `${overallAvg.toFixed(1)}%`}</p>
           <p class="stat-sub" style="margin:0;"><strong>Points:</strong> ${overallPoints === null ? '—' : overallPoints}</p>
         </div>
-        <div class="stamp badge-${overallBand ? overallBand.code : 'none'}" style="color:inherit;">${overallBand ? overallBand.code : '—'}</div>
+        <div class="stamp badge-${overallBand.code}" style="color:inherit;">${overallBand.code}</div>
       </div>
       <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--paper-line); font-size:13.5px; color:var(--ink); line-height:1.6;">
         <p style="margin:0 0 8px 0;"><strong>Class Teacher's comment:</strong> ${UI.esc(teacherComment)}</p>
@@ -229,11 +229,16 @@ function overallAvgFor(st, studentId, term, year, examType, isSingle) {
 function positionOf(st, studentId, students, term, year, examType, isSingle) {
   const scored = students.map(s => ({ id: s.id, avg: overallAvgFor(st, s.id, term, year, examType, isSingle) }));
   const outOf = scored.filter(s => s.avg !== null).length;
+  // Students with no marks entered at all sort below everyone with a
+  // real average (avg ?? -1 already does this) and get position 'M'
+  // instead of being left blank — same convention as the Broadsheet
+  // and Analysis sheet: still "on the list", just flagged as pending
+  // rather than ranked.
   const ranked = [...scored].sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
   let rank = 0, lastAvg = null, seen = 0, position = null;
   ranked.forEach(r => {
     seen++;
-    if (r.avg === null) { if (r.id === studentId) position = null; return; }
+    if (r.avg === null) { if (r.id === studentId) position = 'M'; return; }
     if (r.avg !== lastAvg) { rank = seen; lastAvg = r.avg; }
     if (r.id === studentId) position = rank;
   });
@@ -2216,13 +2221,13 @@ function renderStudentReportCard(st, scope) {
       const avg = isSingle
         ? Grading.average(grid.map(r => (r.cells[examType] ? r.cells[examType].pct : null)).filter(v => v !== null))
         : Grading.average(grid.map(r => r.average).filter(v => v !== null));
-      const band = avg === null ? null : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
+      const band = avg === null ? Grading.MISSING_BAND : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
       const typeCols = typesToShow.map(t => {
         const vals = grid.map(r => (r.cells[t] ? r.cells[t].pct : null)).filter(v => v !== null);
         const a = Grading.average(vals);
         return a === null ? '' : a.toFixed(1);
       });
-      return [s.name, s.admissionNo || '', s.klass, ...typeCols, avg === null ? '' : avg.toFixed(1), band ? band.code : ''];
+      return [s.name, s.admissionNo || '', s.klass, ...typeCols, avg === null ? 'M' : avg.toFixed(1), band.code];
     });
     UI.downloadCSV(`report-cards-${klass}-${term}-${year}`.replace(/\s+/g, '_'), header, rows);
   };
@@ -2823,7 +2828,11 @@ Views.settings = async function () {
     const a = document.createElement('a');
     a.href = url;
     a.download = `cbe-exam-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    a.remove();
+    // Same fix as UI.downloadCSV: don't revoke the object URL until
+    // the click-triggered download has had a chance to actually start.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 };

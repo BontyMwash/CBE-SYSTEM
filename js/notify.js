@@ -109,10 +109,13 @@ Views.notify = async function () {
         }
       });
       const avg = Grading.average(pcts);
-      const band = avg === null ? null : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
+      const band = avg === null ? Grading.MISSING_BAND : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
       return { student: stu, avg, band, subjectPcts };
     });
 
+    // Ranking only ever runs over students who have marks — a student
+    // with none isn't part of the competitive field, but they're still
+    // flagged (not blank) below: position 'M' rather than '—'.
     const ranked = [...rows].filter(r => r.avg !== null).sort((a, b) => b.avg - a.avg);
     const outOf = ranked.length;
     let rank = 0, lastAvg = null, seen = 0;
@@ -123,7 +126,7 @@ Views.notify = async function () {
       rankMap.set(r.student.id, rank);
     });
 
-    return rows.map(r => ({ ...r, position: rankMap.get(r.student.id) ?? null, outOf }));
+    return rows.map(r => ({ ...r, position: r.avg === null ? 'M' : (rankMap.get(r.student.id) ?? null), outOf }));
   }
 
   // Picks out a student's strongest / weakest subjects from their
@@ -205,9 +208,12 @@ Views.notify = async function () {
       const si = strengthsAndImprovements(r.subjectPcts);
       return {
         name: stu.name, class: stu.klass, sitting: chosen.type, term: chosen.term, academic_year: chosen.year,
-        average: r.avg === null ? '—' : r.avg.toFixed(1),
-        level: r.band ? r.band.label : 'not yet graded',
-        position: r.position === null ? '—' : r.position,
+        // Parent-facing text stays in plain words rather than the 'M'
+        // flag used in the admin table/CSV below — a parent reading
+        // "Level: Marks missing" shouldn't have to decode a code.
+        average: r.avg === null ? 'not yet available' : r.avg.toFixed(1),
+        level: r.avg === null ? 'not yet graded' : r.band.label,
+        position: r.position === null || r.position === 'M' ? '—' : r.position,
         class_size: r.outOf,
         subjects: subjectBreakdown(r.subjectPcts),
         strengths: si.strengths,
@@ -279,9 +285,9 @@ Views.notify = async function () {
                   <td class="no-print"><input type="checkbox" data-select="${stu.id}" ${selected.has(stu.id) ? 'checked' : ''} ${canBulk ? '' : 'disabled'}></td>
                   <td>${UI.esc(stu.name)}</td>
                   <td class="num">${UI.esc(stu.admissionNo) || '—'}</td>
-                  <td class="num">${r.avg === null ? '—' : r.avg.toFixed(1) + '%'}</td>
+                  <td class="num">${r.avg === null ? UI.badge(Grading.MISSING_BAND) : r.avg.toFixed(1) + '%'}</td>
                   <td>${UI.badge(r.band)}</td>
-                  <td class="num">${r.position === null ? '—' : ordinal(r.position)}</td>
+                  <td class="num">${r.position === 'M' ? UI.badge(Grading.MISSING_BAND) : r.position === null ? '—' : ordinal(r.position)}</td>
                   <td>${contactHtml}</td>
                   <td>${statusHtml}</td>
                   <td>
@@ -331,7 +337,7 @@ Views.notify = async function () {
         const notif = sentMap.get(stu.id);
         const si = strengthsAndImprovements(r.subjectPcts);
         return [
-          stu.name, stu.admissionNo || '', r.avg === null ? '' : r.avg.toFixed(1), r.band ? r.band.code : '',
+          stu.name, stu.admissionNo || '', r.avg === null ? 'M' : r.avg.toFixed(1), r.band.code,
           r.position === null ? '' : r.position, r.outOf,
           si.strengths, si.improvement_areas,
           stu.parentName || '', stu.parentPhone || '', stu.parentEmail || '',

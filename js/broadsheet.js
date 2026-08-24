@@ -148,21 +148,26 @@ Views.broadsheet = async function () {
       return { student: stu, cells, totalObtained, totalPossible, meanPct };
     });
 
-    // Rank by mean % (descending), ties share a rank
+    // Rank by mean % (descending), ties share a rank. A student with
+    // NO marks entered at all for this sitting isn't left un-ranked —
+    // they sort below everyone who has a real mean (already true here
+    // since meanPct ?? -1 puts them last) and get 'M' instead of a
+    // number, a visible flag that they still need marks entered
+    // rather than a blank dash that reads as "not applicable".
     const ranked = [...rows].sort((a, b) => (b.meanPct ?? -1) - (a.meanPct ?? -1));
     let rank = 0, lastMean = null, seen = 0;
     const rankMap = new Map();
     ranked.forEach(r => {
       seen++;
-      if (r.meanPct === null) { rankMap.set(r.student.id, null); return; }
+      if (r.meanPct === null) { rankMap.set(r.student.id, 'M'); return; }
       if (r.meanPct !== lastMean) { rank = seen; lastMean = r.meanPct; }
       rankMap.set(r.student.id, rank);
     });
 
     // Attach rank/band/points once so filtering/sorting never recomputes them
     const rowsExtra = ranked.map(r => {
-      const band = r.meanPct === null ? null : Grading.levelForMarks(r.meanPct, 100, st.settings.gradingBands);
-      const points = Grading.pointsForBand(band, st.settings.gradingBands);
+      const band = r.meanPct === null ? Grading.MISSING_BAND : Grading.levelForMarks(r.meanPct, 100, st.settings.gradingBands);
+      const points = r.meanPct === null ? null : Grading.pointsForBand(band, st.settings.gradingBands);
       return { ...r, rank: rankMap.get(r.student.id), band, points };
     });
 
@@ -170,10 +175,10 @@ Views.broadsheet = async function () {
       filename: `broadsheet-${klass}-${type}-${term}-${year}`.replace(/\s+/g, '_'),
       header: ['Pos.', 'Name', 'Adm. No.', ...subjectCols.map(c => c.subject.name), 'Total Marks', 'Mean %', 'Points', 'Level'],
       rows: rowsExtra.map(r => [
-        r.rank === null ? '' : r.rank, r.student.name, r.student.admissionNo || '',
+        r.rank, r.student.name, r.student.admissionNo || '',
         ...r.cells.map(c => c.pct === null ? '' : c.pct.toFixed(1)),
         r.totalObtained === null ? '' : `${r.totalObtained}/${r.totalPossible}`,
-        r.meanPct === null ? '' : r.meanPct.toFixed(1),
+        r.meanPct === null ? 'M' : r.meanPct.toFixed(1),
         r.points === null ? '' : r.points,
         r.band ? r.band.code : ''
       ])
@@ -247,7 +252,7 @@ Views.broadsheet = async function () {
     function visibleRows() {
       let list = rowsExtra;
       if (tableState.level !== 'all') {
-        list = list.filter(r => (r.band ? r.band.code : 'none') === tableState.level);
+        list = list.filter(r => r.band && r.band.code === tableState.level);
       }
       if (tableState.search.trim()) {
         const q = tableState.search.trim().toLowerCase();
@@ -256,8 +261,19 @@ Views.broadsheet = async function () {
       const dir = tableState.sortDir === 'asc' ? 1 : -1;
       list = [...list].sort((a, b) => {
         if (tableState.sortKey === 'name') return dir * a.student.name.localeCompare(b.student.name);
-        if (tableState.sortKey === 'mean') return dir * ((a.meanPct ?? -1) - (b.meanPct ?? -1));
-        return dir * ((a.rank ?? 9999) - (b.rank ?? 9999));
+        // Missing-marks rows ('M') always sort to the bottom, in
+        // either sort direction — reversing the direction shouldn't
+        // put "no marks yet" ahead of a real, if low, score.
+        if (tableState.sortKey === 'mean') {
+          if (a.meanPct === null && b.meanPct === null) return 0;
+          if (a.meanPct === null) return 1;
+          if (b.meanPct === null) return -1;
+          return dir * (a.meanPct - b.meanPct);
+        }
+        if (a.rank === 'M' && b.rank === 'M') return 0;
+        if (a.rank === 'M') return 1;
+        if (b.rank === 'M') return -1;
+        return dir * (a.rank - b.rank);
       });
       return list;
     }
@@ -285,12 +301,12 @@ Views.broadsheet = async function () {
         return `<tr><td colspan="${5 + subjectCols.length}" style="text-align:center; color:var(--ink-soft); padding:24px;">No students match the current search / filter.</td></tr>`;
       }
       return list.map(r => `<tr>
-        <td class="num freeze-1">${r.rank === null ? '—' : r.rank}</td>
+        <td class="num freeze-1">${r.rank === 'M' ? UI.badge(Grading.MISSING_BAND) : r.rank}</td>
         <td class="freeze-2">${UI.esc(r.student.name)}</td>
         <td class="num">${UI.esc(r.student.admissionNo) || '—'}</td>
         ${subjectCols.map(col => subjectCellHtml(r, col)).join('')}
         <td class="num" data-total-cell>${r.totalObtained === null ? '—' : `${r.totalObtained}/${r.totalPossible}`}</td>
-        <td class="num" data-mean-cell>${r.meanPct === null ? '—' : r.meanPct.toFixed(1) + '%'}</td>
+        <td class="num" data-mean-cell>${r.meanPct === null ? UI.badge(Grading.MISSING_BAND) : r.meanPct.toFixed(1) + '%'}</td>
         <td class="num" data-points-cell>${r.points === null ? '—' : r.points}</td>
         <td data-level-cell>${UI.badge(r.band)}</td>
       </tr>`).join('');
@@ -307,7 +323,7 @@ Views.broadsheet = async function () {
         <select id="bsLevel">
           <option value="all">All achievement levels</option>
           ${(st.settings.gradingBands || []).map(b => `<option value="${UI.esc(b.code)}">${UI.esc(b.code)} — ${UI.esc(b.label)}</option>`).join('')}
-          <option value="none">Not yet assessed</option>
+          <option value="M">M — Marks missing</option>
         </select>
         <button class="btn" id="bsResetBtn"><i class="fa-solid fa-rotate-left"></i> Reset filters</button>
         ${canEditAny ? `
@@ -473,10 +489,10 @@ Views.broadsheet = async function () {
         }
       });
       const meanPct = Grading.average(pcts);
-      const band = meanPct === null ? null : Grading.levelForMarks(meanPct, 100, st.settings.gradingBands);
-      const points = Grading.pointsForBand(band, st.settings.gradingBands);
+      const band = meanPct === null ? Grading.MISSING_BAND : Grading.levelForMarks(meanPct, 100, st.settings.gradingBands);
+      const points = meanPct === null ? null : Grading.pointsForBand(band, st.settings.gradingBands);
       tr.querySelector('[data-total-cell]').textContent = pcts.length ? `${obtained}/${possible}` : '—';
-      tr.querySelector('[data-mean-cell]').textContent = meanPct === null ? '—' : meanPct.toFixed(1) + '%';
+      tr.querySelector('[data-mean-cell]').innerHTML = meanPct === null ? UI.badge(Grading.MISSING_BAND) : `${meanPct.toFixed(1)}%`;
       tr.querySelector('[data-points-cell]').textContent = points === null ? '—' : points;
       tr.querySelector('[data-level-cell]').innerHTML = UI.badge(band);
     }

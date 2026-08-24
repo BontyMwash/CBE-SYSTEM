@@ -6,6 +6,16 @@
    ============================================================ */
 
 const Grading = {
+  // Stand-in "band" for a student who has NO marks entered at all for
+  // a sitting (as opposed to one who sat some subjects but not
+  // others — that's a real, partial average, not this). Used
+  // everywhere a real grading band would normally go — the badge/
+  // stamp renders it as a plain amber "M" pill (see .badge-M in
+  // style.css) so it reads as "still pending", distinct from both a
+  // real grade and the grey "—" used for genuinely not-applicable
+  // cells (e.g. a subject that isn't offered).
+  MISSING_BAND: { code: 'M', label: 'Marks missing' },
+
   levelForMarks(marks, totalMarks, bands) {
     if (marks === null || marks === undefined || marks === '') return null;
     const pct = (Number(marks) / Number(totalMarks || 100)) * 100;
@@ -36,6 +46,13 @@ const Grading = {
     const sorted = [...(bands || [])].sort((a, b) => a.min - b.min);
     const idx = sorted.findIndex(b => b.code === band.code);
     return idx === -1 ? null : idx + 1;
+  },
+
+  // Sort-friendly numeric stand-in for a rank that may be the literal
+  // string 'M' (missing marks) instead of a number — always sorts
+  // after every real rank, in either sort direction.
+  rankSortValue(rank) {
+    return rank === 'M' ? Infinity : (rank ?? Infinity);
   },
 
   average(values) {
