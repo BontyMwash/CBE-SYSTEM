@@ -195,12 +195,25 @@ const UI = {
   _buildPdfWrap(els, orientation) {
     const vw = orientation === 'landscape' ? 1500 : 1050;
     const wrap = document.createElement('div');
-    wrap.style.position = 'fixed';
-    wrap.style.top = '0';
-    wrap.style.left = '0';
-    wrap.style.zIndex = '-9999';
+    // IMPORTANT: keep this element in normal document flow (no
+    // position:fixed / position:absolute). html2canvas's internal
+    // clone-and-measure pass cannot reliably compute the height of an
+    // out-of-flow element — it comes back as 0, which is what was
+    // producing completely blank PDFs. To hide it from view without
+    // taking it out of flow, we nest it inside a 1x1px, overflow:hidden
+    // "peephole" container instead — clipping is a paint-time effect
+    // and doesn't affect the child's own measured layout geometry.
     wrap.style.background = '#fff';
     wrap.style.width = vw + 'px';
+
+    const hideBox = document.createElement('div');
+    hideBox.style.position = 'fixed';
+    hideBox.style.top = '0';
+    hideBox.style.left = '0';
+    hideBox.style.width = '1px';
+    hideBox.style.height = '1px';
+    hideBox.style.overflow = 'hidden';
+    hideBox.style.zIndex = '-9999';
 
     els.forEach((el, i) => {
       const clone = el.cloneNode(true);
@@ -234,8 +247,17 @@ const UI = {
       clone.style.width = '100%';
       wrap.appendChild(clone);
     });
-    document.body.appendChild(wrap);
+    hideBox.appendChild(wrap);
+    document.body.appendChild(hideBox);
+    wrap._pdfHideBox = hideBox;
     return wrap;
+  },
+
+  // Removes a wrap element created by _buildPdfWrap, including its
+  // hidden positioning container.
+  _removePdfWrap(wrap) {
+    if (wrap && wrap._pdfHideBox) { wrap._pdfHideBox.remove(); }
+    else if (wrap) { wrap.remove(); }
   },
 
   // One-click "Download PDF": renders a printable element (or several,
@@ -270,7 +292,7 @@ const UI = {
     } catch (e) {
       UI.toast('Could not generate PDF: ' + e.message);
     } finally {
-      wrap.remove();
+      UI._removePdfWrap(wrap);
       if (btn) { btn.disabled = false; btn.innerHTML = originalLabel; }
     }
   },
@@ -292,7 +314,7 @@ const UI = {
         pagebreak: { mode: ['css', 'legacy'] }
       }).from(wrap).outputPdf('blob');
     } finally {
-      wrap.remove();
+      UI._removePdfWrap(wrap);
     }
   },
 
