@@ -25,8 +25,15 @@ href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css"
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <!-- html2pdf.js (html2canvas + jsPDF bundled): powers every one-click
      "Download PDF" button — renders a report element straight to a
-     downloadable PDF file, entirely client-side, no server involved. -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+     downloadable PDF file, entirely client-side, no server involved.
+     Pinned to 0.9.3, NOT the newer 0.10.x line — html2pdf.js's own
+     maintainers flag 0.10 with widespread blank-PDF regressions and
+     say to stay on 0.9.3 until those are sorted out. Every "Download
+     PDF" button in this app (report cards, broadsheet, analysis,
+     attendance, exam summary, class performance) funnels through
+     this one script, so upgrading past 0.9.3 should be re-tested
+     against all of them first, not just the one that flagged it. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js"></script>
 <script>
   // Apply saved theme before paint, so there's no light-mode flash.
   (function () {

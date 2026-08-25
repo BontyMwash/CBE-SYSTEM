@@ -10,7 +10,7 @@
 // have the app installed — without it, the cache-first fetch strategy below
 // keeps serving the OLD file indefinitely (this is why a shipped fix can
 // look like it "didn't take" until this number changes).
-const CACHE_VERSION = 'v9';
+const CACHE_VERSION = 'v10';
 const CACHE_NAME = `cbe-shell-${CACHE_VERSION}`;
 
 const APP_SHELL = [
@@ -62,7 +62,7 @@ const APP_SHELL = [
 const LIBRARY_URLS = [
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css',
   'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
 ];
 

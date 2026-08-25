@@ -145,7 +145,13 @@ Views.broadsheet = async function () {
       const totalObtained = enteredCells.length ? enteredCells.reduce((a, c) => a + Number(c.marks), 0) : null;
       const totalPossible = enteredCells.length ? enteredCells.reduce((a, c) => a + Number(c.totalMarks), 0) : null;
       const meanPct = Grading.average(validPcts);
-      return { student: stu, cells, totalObtained, totalPossible, meanPct };
+      // Complete = a mark entered for every subject on this sitting. A
+      // student missing even one subject still gets a real (partial)
+      // Mean/Total above — those are left alone — but the Level badge
+      // below is awarded Z rather than a grade band computed off an
+      // incomplete record.
+      const complete = subjectCols.length > 0 && enteredCells.length === subjectCols.length;
+      return { student: stu, cells, totalObtained, totalPossible, meanPct, complete };
     });
 
     // Rank by mean % (descending), ties share a rank. A student with
@@ -164,10 +170,13 @@ Views.broadsheet = async function () {
       rankMap.set(r.student.id, rank);
     });
 
-    // Attach rank/band/points once so filtering/sorting never recomputes them
+    // Attach rank/band/points once so filtering/sorting never recomputes them.
+    // Level is Z for anyone missing at least one subject's mark — not
+    // just students with zero marks at all — since a band computed
+    // off a partial record isn't a real grade yet.
     const rowsExtra = ranked.map(r => {
-      const band = r.meanPct === null ? Grading.MISSING_BAND : Grading.levelForMarks(r.meanPct, 100, st.settings.gradingBands);
-      const points = r.meanPct === null ? null : Grading.pointsForBand(band, st.settings.gradingBands);
+      const band = !r.complete ? Grading.MISSING_BAND : Grading.levelForMarks(r.meanPct, 100, st.settings.gradingBands);
+      const points = !r.complete ? null : Grading.pointsForBand(band, st.settings.gradingBands);
       return { ...r, rank: rankMap.get(r.student.id), band, points };
     });
 
@@ -620,7 +629,7 @@ Views.broadsheet = async function () {
           ${summaryTableHtml('Gender', genderSummary)}
           <div class="section-title">Subject</div>
           ${summaryTableHtml('Subject', [...subjectSummary, overallSummary])}
-          <p class="field-hint no-print" style="margin:0;">Z is this system's "no marks entered" count for the sitting — counted at 0 points in each group's Mean, the same as any other bottom score would be.</p>
+          <p class="field-hint no-print" style="margin:0;">Z is this system's "no marks entered" count for the sitting — counted in Entry, but excluded from each group's points-based Mean.</p>
         `}
       </div>
     `;
@@ -634,6 +643,7 @@ Views.broadsheet = async function () {
       const cells = [...tr.querySelectorAll('td.subj-cell')];
       let obtained = 0, possible = 0;
       const pcts = [];
+      let entered = 0;
       cells.forEach(td => {
         const max = Number(td.dataset.max);
         const raw = td.dataset.marks;
@@ -641,11 +651,16 @@ Views.broadsheet = async function () {
           const marksVal = Number(raw);
           obtained += marksVal; possible += max;
           pcts.push(Grading.percent(marksVal, max));
+          entered++;
         }
       });
       const meanPct = Grading.average(pcts);
-      const band = meanPct === null ? Grading.MISSING_BAND : Grading.levelForMarks(meanPct, 100, st.settings.gradingBands);
-      const points = meanPct === null ? null : Grading.pointsForBand(band, st.settings.gradingBands);
+      // Same rule as the initial render: Level is Z unless every
+      // subject cell has a mark, even if a partial Mean/Total is
+      // already showing above it.
+      const complete = cells.length > 0 && entered === cells.length;
+      const band = !complete ? Grading.MISSING_BAND : Grading.levelForMarks(meanPct, 100, st.settings.gradingBands);
+      const points = !complete ? null : Grading.pointsForBand(band, st.settings.gradingBands);
       tr.querySelector('[data-total-cell]').textContent = pcts.length ? `${obtained}/${possible}` : '—';
       tr.querySelector('[data-mean-cell]').innerHTML = meanPct === null ? UI.badge(Grading.MISSING_BAND) : `${meanPct.toFixed(1)}%`;
       tr.querySelector('[data-points-cell]').textContent = points === null ? '—' : points;
