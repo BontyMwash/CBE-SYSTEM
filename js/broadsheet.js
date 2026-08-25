@@ -256,11 +256,11 @@ Views.broadsheet = async function () {
 
        Z is this system's stand-in for "no marks entered at all"
        (Grading.MISSING_BAND — same badge used everywhere else in the
-       app, just renamed from 'M' to 'Z'). It's wired straight into
-       the group's points average: MISSING_BAND carries its own
-       explicit 0 points, so a learner with no marks pulls the group
-       Mean down like a genuine bottom score would, rather than being
-       silently excluded from it. ---- */
+       app). It's counted in each row's Entry and shown as its own Z
+       column, but deliberately left OUT of the group's points-based
+       Mean — a learner with nothing recorded yet isn't a genuine
+       bottom score, so including them would understate the group's
+       real performance rather than reflect it. ---- */
     const gradeBands = st.settings.gradingBands || [];
     const orderedBandCodes = [...gradeBands].sort((a, b) => b.min - a.min).map(b => b.code);
     const pointsOf = (band) => Grading.pointsForBand(band, gradeBands);
@@ -289,9 +289,13 @@ Views.broadsheet = async function () {
       studentIds.forEach(id => {
         const band = studentBand.get(id);
         if (!band || band.code === Grading.MISSING_BAND.code) {
+          // No marks entered at all — flagged with Z and counted in
+          // Entry, but left OUT of the points list entirely: a
+          // learner with nothing recorded isn't a genuine bottom
+          // score, and folding them in at 0 would drag the group's
+          // Mean down for a reason that has nothing to do with
+          // performance.
           missing++;
-          const zPts = pointsOf(Grading.MISSING_BAND);
-          if (zPts !== null && zPts !== undefined) pointsList.push(zPts);
           return;
         }
         bandCounts[band.code] = (bandCounts[band.code] || 0) + 1;
@@ -369,7 +373,7 @@ Views.broadsheet = async function () {
                 <th>${UI.esc(groupHeader)}</th>
                 <th>Entry</th>
                 ${orderedBandCodes.map(code => `<th>${UI.esc(code)}</th>`).join('')}
-                <th title="Learners with no marks entered at all for this sitting — folded into Mean at 0 points">Z</th>
+                <th title="Learners with no marks entered at all for this sitting — counted in Entry and Z, excluded from Mean">Z</th>
                 <th>Mean</th>
                 <th>Grade</th>
                 ${showTeacher ? '<th>Class Teacher</th>' : ''}

@@ -13,12 +13,11 @@ const Grading = {
   // stamp renders it as a plain amber "Z" pill (see .badge-Z in
   // style.css) so it reads as "still pending", distinct from both a
   // real grade and the grey "—" used for genuinely not-applicable
-  // cells (e.g. a subject that isn't offered). Carries its own
-  // explicit points value (0) so group-level points averages (e.g.
-  // Performance Summary's Mean column) can fold missing-marks
-  // students straight in via pointsForBand, instead of needing to be
-  // special-cased at every call site.
-  MISSING_BAND: { code: 'Z', label: 'Marks missing', points: 0 },
+  // cells (e.g. a subject that isn't offered). Deliberately has no
+  // `points` value — a learner with nothing recorded isn't a real
+  // bottom score, so every average (individual or group) explicitly
+  // excludes them rather than folding them in at some number.
+  MISSING_BAND: { code: 'Z', label: 'Marks missing' },
 
   levelForMarks(marks, totalMarks, bands) {
     if (marks === null || marks === undefined || marks === '') return null;
