@@ -154,18 +154,24 @@ Views.broadsheet = async function () {
       return { student: stu, cells, totalObtained, totalPossible, meanPct, complete };
     });
 
-    // Rank by mean % (descending), ties share a rank. A student with
-    // NO marks entered at all for this sitting isn't left un-ranked —
-    // they sort below everyone who has a real mean (already true here
-    // since meanPct ?? -1 puts them last) and get 'Z' instead of a
-    // number, a visible flag that they still need marks entered
-    // rather than a blank dash that reads as "not applicable".
-    const ranked = [...rows].sort((a, b) => (b.meanPct ?? -1) - (a.meanPct ?? -1));
+    // Rank by mean % (descending), ties share a rank. A student
+    // missing ANY subject's mark for this sitting — not just one with
+    // zero marks entered at all — isn't ranked off a partial average:
+    // they sort below every student with a complete record and get
+    // 'Z' instead of a number, so an incomplete sitting can't outrank
+    // a classmate who actually finished, no matter how high the
+    // partial score looks.
+    const ranked = [...rows].sort((a, b) => {
+      if (!a.complete && !b.complete) return 0;
+      if (!a.complete) return 1;
+      if (!b.complete) return -1;
+      return (b.meanPct ?? -1) - (a.meanPct ?? -1);
+    });
     let rank = 0, lastMean = null, seen = 0;
     const rankMap = new Map();
     ranked.forEach(r => {
       seen++;
-      if (r.meanPct === null) { rankMap.set(r.student.id, 'Z'); return; }
+      if (!r.complete) { rankMap.set(r.student.id, 'Z'); return; }
       if (r.meanPct !== lastMean) { rank = seen; lastMean = r.meanPct; }
       rankMap.set(r.student.id, rank);
     });
@@ -409,13 +415,14 @@ Views.broadsheet = async function () {
       const dir = tableState.sortDir === 'asc' ? 1 : -1;
       list = [...list].sort((a, b) => {
         if (tableState.sortKey === 'name') return dir * a.student.name.localeCompare(b.student.name);
-        // Missing-marks rows ('Z') always sort to the bottom, in
-        // either sort direction — reversing the direction shouldn't
-        // put "no marks yet" ahead of a real, if low, score.
+        // Rows missing at least one subject's mark ('Z') always sort
+        // to the bottom, in either column and either sort direction —
+        // reversing direction shouldn't put an incomplete record
+        // ahead of a real, if low, complete score.
         if (tableState.sortKey === 'mean') {
-          if (a.meanPct === null && b.meanPct === null) return 0;
-          if (a.meanPct === null) return 1;
-          if (b.meanPct === null) return -1;
+          if (!a.complete && !b.complete) return 0;
+          if (!a.complete) return 1;
+          if (!b.complete) return -1;
           return dir * (a.meanPct - b.meanPct);
         }
         if (a.rank === 'Z' && b.rank === 'Z') return 0;

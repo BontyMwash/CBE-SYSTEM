@@ -171,10 +171,18 @@ const UI = {
   },
 
   // Shared builder behind downloadPDF/pdfBlob. Clones the source
-  // element(s) into an OFF-SCREEN container that is actually attached
-  // to the document (position:fixed, far off-screen) — html2canvas
-  // needs real layout to measure against, so a detached clone can
-  // collapse to the wrong width and silently crop wide tables.
+  // element(s) into an off-screen container that is actually attached
+  // to the document (html2canvas needs real layout to measure
+  // against, so a detached clone can collapse to the wrong width and
+  // silently crop wide tables) — but "off-screen" means positioned at
+  // valid (0,0) coordinates and hidden BEHIND the real page with a
+  // very low z-index, not pushed out to a large negative left offset.
+  // html2canvas measures/crops by the element's actual on-page
+  // position, and elements sitting at large negative coordinates are
+  // a well-documented cause of it silently capturing a blank canvas —
+  // which is exactly the "every Download PDF button produces an
+  // empty file" bug this replaced. Sitting at (0,0) behind the app's
+  // own (opaque) content means it's still invisible to the user.
   //
   // It also mirrors the same un-clip/flatten treatment the @media
   // print stylesheet applies (see style.css), since html2canvas does
@@ -189,8 +197,8 @@ const UI = {
     const wrap = document.createElement('div');
     wrap.style.position = 'fixed';
     wrap.style.top = '0';
-    wrap.style.left = '-10000px';
-    wrap.style.zIndex = '-1';
+    wrap.style.left = '0';
+    wrap.style.zIndex = '-9999';
     wrap.style.background = '#fff';
     wrap.style.width = vw + 'px';
 
@@ -255,7 +263,7 @@ const UI = {
       await html2pdf().set({
         margin: 8,
         filename: filename.endsWith('.pdf') ? filename : `${filename}.pdf`,
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', windowWidth: wrap.scrollWidth, width: wrap.scrollWidth },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', windowWidth: wrap.scrollWidth, width: wrap.scrollWidth, x: 0, y: 0, scrollX: 0, scrollY: 0 },
         jsPDF: { unit: 'mm', format: 'a4', orientation },
         pagebreak: { mode: ['css', 'legacy'] }
       }).from(wrap).save();
@@ -279,7 +287,7 @@ const UI = {
     try {
       return await html2pdf().set({
         margin: 8,
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', windowWidth: wrap.scrollWidth, width: wrap.scrollWidth },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', windowWidth: wrap.scrollWidth, width: wrap.scrollWidth, x: 0, y: 0, scrollX: 0, scrollY: 0 },
         jsPDF: { unit: 'mm', format: 'a4', orientation },
         pagebreak: { mode: ['css', 'legacy'] }
       }).from(wrap).outputPdf('blob');

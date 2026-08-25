@@ -124,8 +124,15 @@ function buildReportCardHTML(st, student, term, year, examType) {
   const overallAvg = isSingle
     ? Grading.average(grid.map(r => (r.cells[examType] ? r.cells[examType].pct : null)).filter(v => v !== null))
     : Grading.average(grid.map(r => r.average).filter(v => v !== null));
-  const overallBand = overallAvg === null ? Grading.MISSING_BAND : Grading.levelForMarks(overallAvg, 100, st.settings.gradingBands);
-  const overallPoints = overallAvg === null ? null : Grading.pointsForBand(overallBand, st.settings.gradingBands);
+  // Complete = a mark recorded for every subject exam that actually
+  // exists for this student's own class/stream in this sitting. A
+  // student missing even one subject didn't finish the exam, so the
+  // "Average performance" line below shows Z rather than a percentage
+  // computed off a partial record.
+  const relevantExams = st.exams.filter(e => e.klass === student.klass && e.term === term && String(e.year) === String(year) && (!isSingle || e.type === examType));
+  const overallComplete = relevantExams.length > 0 && relevantExams.every(e => st.results.some(r => r.examId === e.id && r.studentId === student.id));
+  const overallBand = !overallComplete ? Grading.MISSING_BAND : Grading.levelForMarks(overallAvg, 100, st.settings.gradingBands);
+  const overallPoints = !overallComplete ? null : Grading.pointsForBand(overallBand, st.settings.gradingBands);
 
   const rowsHtml = grid.map(row => {
     const cellHtml = (type) => {
@@ -144,8 +151,8 @@ function buildReportCardHTML(st, student, term, year, examType) {
 
   const reportLabel = isSingle ? `${examType} Report` : 'Report Card';
   const colCount = typesToShow.length + (isSingle ? 1 : 2);
-  const teacherComment = Grading.autoComment(overallAvg, 'teacher');
-  const headComment = Grading.autoComment(overallAvg, 'head');
+  const teacherComment = Grading.autoComment(overallComplete ? overallAvg : null, 'teacher');
+  const headComment = Grading.autoComment(overallComplete ? overallAvg : null, 'head');
 
   // Position in stream (this exact class/stream label) and in class
   // (the whole grade, all streams combined) — the two collapse to the
@@ -184,7 +191,7 @@ function buildReportCardHTML(st, student, term, year, examType) {
         <div><span class="k">Name:</span>${UI.esc(student.name)}</div>
         <div><span class="k">Admission No.:</span>${UI.esc(student.admissionNo) || '—'}</div>
         <div><span class="k">Class:</span>${UI.esc(student.klass)}</div>
-        <div><span class="k">Average performance:</span>${overallAvg === null ? UI.badge(Grading.MISSING_BAND) : overallAvg.toFixed(1) + '%'}</div>
+        <div><span class="k">Average performance:</span>${!overallComplete ? UI.badge(Grading.MISSING_BAND) : overallAvg.toFixed(1) + '%'}</div>
         <div><span class="k">Points:</span>${overallPoints === null ? '—' : overallPoints}</div>
         <div><span class="k">Position in class:</span>${classPos.position === 'Z' ? `${UI.badge(Grading.MISSING_BAND)} — marks pending, ranked last of ${showStreamRow ? gradeMates.length : streamMates.length}` : classPos.position === null ? '—' : `${ordinal(classPos.position)} out of ${classPos.outOf}`}</div>
         ${showStreamRow ? `<div><span class="k">Position in stream:</span>${streamPos.position === 'Z' ? `${UI.badge(Grading.MISSING_BAND)} — marks pending, ranked last of ${streamMates.length}` : streamPos.position === null ? '—' : `${ordinal(streamPos.position)} out of ${streamPos.outOf}`}</div>` : ''}
@@ -196,7 +203,7 @@ function buildReportCardHTML(st, student, term, year, examType) {
       ${buildTrendChartSVG(trendPoints)}
       <div class="report-footer">
         <div>
-          <p class="stat-sub" style="margin:0 0 6px 0;"><strong>Average performance:</strong> ${overallAvg === null ? 'Not enough data' : `${overallAvg.toFixed(1)}%`}</p>
+          <p class="stat-sub" style="margin:0 0 6px 0;"><strong>Average performance:</strong> ${!overallComplete ? "Didn't finish exam (Z)" : `${overallAvg.toFixed(1)}%`}</p>
           <p class="stat-sub" style="margin:0;"><strong>Points:</strong> ${overallPoints === null ? '—' : overallPoints}</p>
         </div>
         <div class="stamp badge-${overallBand.code}" style="color:inherit;">${overallBand.code}</div>
@@ -217,28 +224,41 @@ function buildReportCardHTML(st, student, term, year, examType) {
 // A student's own overall percentage for a given sitting/term, using the
 // exact same formula as the report card itself — used both for that
 // student's headline average and for ranking everyone else for position.
-function overallAvgFor(st, studentId, term, year, examType, isSingle) {
+function overallAvgFor(st, studentId, klass, term, year, examType, isSingle) {
   const g = Grading.buildStudentTermGrid(st, studentId, term, year);
-  return isSingle
+  const avg = isSingle
     ? Grading.average(g.map(r => (r.cells[examType] ? r.cells[examType].pct : null)).filter(v => v !== null))
     : Grading.average(g.map(r => r.average).filter(v => v !== null));
+  // Complete = a mark recorded for every subject exam that actually
+  // exists for THIS student's own class/stream in this sitting — not
+  // just some of them. Missing even one means the student didn't
+  // finish the exam, so they're treated the same as "no marks at
+  // all" for ranking/averaging purposes below, rather than being
+  // scored (and possibly outranking a classmate) off a partial record.
+  const relevantExams = st.exams.filter(e => e.klass === klass && e.term === term && String(e.year) === String(year) && (!isSingle || e.type === examType));
+  const complete = relevantExams.length > 0 && relevantExams.every(e => st.results.some(r => r.examId === e.id && r.studentId === studentId));
+  return { avg, complete };
 }
 
 // Ranks `students` by overall average (highest first, ties share a
-// position) and returns { position, outOf } for `studentId`.
+// position) and returns { position, outOf } for `studentId`. A
+// student who didn't finish the exam (missing at least one subject)
+// is never ranked ahead of a student who did, no matter how high
+// their partial average looks — they sort below everyone complete
+// and get position 'Z', same convention as the Broadsheet.
 function positionOf(st, studentId, students, term, year, examType, isSingle) {
-  const scored = students.map(s => ({ id: s.id, avg: overallAvgFor(st, s.id, term, year, examType, isSingle) }));
-  const outOf = scored.filter(s => s.avg !== null).length;
-  // Students with no marks entered at all sort below everyone with a
-  // real average (avg ?? -1 already does this) and get position 'Z'
-  // instead of being left blank — same convention as the Broadsheet
-  // and Analysis sheet: still "on the list", just flagged as pending
-  // rather than ranked.
-  const ranked = [...scored].sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
+  const scored = students.map(s => ({ id: s.id, ...overallAvgFor(st, s.id, s.klass, term, year, examType, isSingle) }));
+  const outOf = scored.filter(s => s.complete).length;
+  const ranked = [...scored].sort((a, b) => {
+    if (!a.complete && !b.complete) return 0;
+    if (!a.complete) return 1;
+    if (!b.complete) return -1;
+    return (b.avg ?? -1) - (a.avg ?? -1);
+  });
   let rank = 0, lastAvg = null, seen = 0, position = null;
   ranked.forEach(r => {
     seen++;
-    if (r.avg === null) { if (r.id === studentId) position = 'Z'; return; }
+    if (!r.complete) { if (r.id === studentId) position = 'Z'; return; }
     if (r.avg !== lastAvg) { rank = seen; lastAvg = r.avg; }
     if (r.id === studentId) position = rank;
   });
