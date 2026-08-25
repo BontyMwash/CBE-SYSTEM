@@ -138,13 +138,15 @@ const UI = {
     a.download = filename.endsWith('.csv') ? filename : `${filename}.csv`;
     document.body.appendChild(a);
     a.click();
-    a.remove();
-    // Revoking the object URL immediately races the browser's own
-    // (async) handling of the click-triggered download — on several
-    // browsers/webviews this was winning the race and producing a
-    // download with the right filename but 0 bytes of content.
-    // Deferring the revoke lets the download actually start first.
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    // Removing the anchor AND revoking the object URL immediately both
+    // race the browser's own (async) handling of the click-triggered
+    // download — on several browsers/webviews (notably Safari/iOS and
+    // installed-PWA webviews) this was winning the race, cancelling the
+    // in-flight download or detaching its data source, and producing a
+    // download with the right filename but 0 bytes of content. Deferring
+    // BOTH the removal and the revoke lets the download actually start
+    // and finish reading the blob first.
+    setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 1000);
   },
 
   // Same header + array-of-arrays shape as downloadCSV, but produces a

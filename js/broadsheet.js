@@ -151,7 +151,7 @@ Views.broadsheet = async function () {
     // Rank by mean % (descending), ties share a rank. A student with
     // NO marks entered at all for this sitting isn't left un-ranked —
     // they sort below everyone who has a real mean (already true here
-    // since meanPct ?? -1 puts them last) and get 'M' instead of a
+    // since meanPct ?? -1 puts them last) and get 'Z' instead of a
     // number, a visible flag that they still need marks entered
     // rather than a blank dash that reads as "not applicable".
     const ranked = [...rows].sort((a, b) => (b.meanPct ?? -1) - (a.meanPct ?? -1));
@@ -159,7 +159,7 @@ Views.broadsheet = async function () {
     const rankMap = new Map();
     ranked.forEach(r => {
       seen++;
-      if (r.meanPct === null) { rankMap.set(r.student.id, 'M'); return; }
+      if (r.meanPct === null) { rankMap.set(r.student.id, 'Z'); return; }
       if (r.meanPct !== lastMean) { rank = seen; lastMean = r.meanPct; }
       rankMap.set(r.student.id, rank);
     });
@@ -178,7 +178,7 @@ Views.broadsheet = async function () {
         r.rank, r.student.name, r.student.admissionNo || '',
         ...r.cells.map(c => c.pct === null ? '' : c.pct.toFixed(1)),
         r.totalObtained === null ? '' : `${r.totalObtained}/${r.totalPossible}`,
-        r.meanPct === null ? 'M' : r.meanPct.toFixed(1),
+        r.meanPct === null ? 'Z' : r.meanPct.toFixed(1),
         r.points === null ? '' : r.points,
         r.band ? r.band.code : ''
       ])
@@ -254,20 +254,21 @@ Views.broadsheet = async function () {
        group. Spans the whole grade rather than just the selected
        stream since that's what the paper version compares.
 
-       X / Y / Z are reserved columns for categories the source
-       broadsheets track that this system doesn't (e.g. Absent /
-       Exempted sittings) — X and Y always read 0 here since there's
-       no such data to show; Z carries this system's own "no marks
-       entered at all" count so the row still foots to Entry, the way
-       X/Y/Z would on the paper version. ---- */
+       Z is this system's stand-in for "no marks entered at all"
+       (Grading.MISSING_BAND — same badge used everywhere else in the
+       app, just renamed from 'M' to 'Z'). It's wired straight into
+       the group's points average: MISSING_BAND carries its own
+       explicit 0 points, so a learner with no marks pulls the group
+       Mean down like a genuine bottom score would, rather than being
+       silently excluded from it. ---- */
     const gradeBands = st.settings.gradingBands || [];
     const orderedBandCodes = [...gradeBands].sort((a, b) => b.min - a.min).map(b => b.code);
     const pointsOf = (band) => Grading.pointsForBand(band, gradeBands);
 
     // Every learner across the whole grade, each with their own overall
     // band for this sitting (computed from THEIR OWN class's matching
-    // exams, since streams can carry different subjects) — null means
-    // no marks entered at all for the sitting.
+    // exams, since streams can carry different subjects) — MISSING_BAND
+    // (Z) stands in for no marks entered at all for the sitting.
     const gradeStudents = st.students.filter(s => streamLabels.includes(s.klass));
     const studentBand = new Map();
     gradeStudents.forEach(stu => {
@@ -277,7 +278,7 @@ Views.broadsheet = async function () {
         return res ? Grading.percent(res.marks, e.totalMarks) : null;
       }).filter(v => v !== null);
       const avg = Grading.average(pcts);
-      studentBand.set(stu.id, avg === null ? null : Grading.levelForMarks(avg, 100, gradeBands));
+      studentBand.set(stu.id, avg === null ? Grading.MISSING_BAND : Grading.levelForMarks(avg, 100, gradeBands));
     });
 
     function summarizeStudents(studentIds) {
@@ -287,13 +288,18 @@ Views.broadsheet = async function () {
       const pointsList = [];
       studentIds.forEach(id => {
         const band = studentBand.get(id);
-        if (!band) { missing++; return; }
+        if (!band || band.code === Grading.MISSING_BAND.code) {
+          missing++;
+          const zPts = pointsOf(Grading.MISSING_BAND);
+          if (zPts !== null && zPts !== undefined) pointsList.push(zPts);
+          return;
+        }
         bandCounts[band.code] = (bandCounts[band.code] || 0) + 1;
         const pts = pointsOf(band);
         if (pts !== null && pts !== undefined) pointsList.push(pts);
       });
       const mean = Grading.average(pointsList);
-      return { entry: studentIds.length, bandCounts, x: 0, y: 0, z: missing, mean, grade: mean === null ? null : Grading.bandForPoints(mean, gradeBands) };
+      return { entry: studentIds.length, bandCounts, z: missing, mean, grade: mean === null ? null : Grading.bandForPoints(mean, gradeBands) };
     }
 
     const streamSummary = streamLabels.map(label => {
@@ -335,7 +341,7 @@ Views.broadsheet = async function () {
         });
       });
       const mean = Grading.average(pointsList);
-      return { label: subject.name, teacherName: '', entry, bandCounts, x: 0, y: 0, z: 0, mean, grade: mean === null ? null : Grading.bandForPoints(mean, gradeBands) };
+      return { label: subject.name, teacherName: '', entry, bandCounts, z: 0, mean, grade: mean === null ? null : Grading.bandForPoints(mean, gradeBands) };
     }).filter(Boolean).sort((a, b) => a.label.localeCompare(b.label));
 
     const overallSummary = { label: 'OVERALL', teacherName: '', ...summarizeStudents(gradeStudents.map(s => s.id)) };
@@ -346,8 +352,6 @@ Views.broadsheet = async function () {
         <td>${UI.esc(r.label)}</td>
         <td class="num">${r.entry}</td>
         ${orderedBandCodes.map(code => `<td class="num">${r.bandCounts[code] || 0}</td>`).join('')}
-        <td class="num">${r.x}</td>
-        <td class="num">${r.y}</td>
         <td class="num">${r.z}</td>
         <td class="num">${r.mean === null ? '—' : r.mean.toFixed(4)}</td>
         <td>${UI.badge(r.grade)}</td>
@@ -365,9 +369,7 @@ Views.broadsheet = async function () {
                 <th>${UI.esc(groupHeader)}</th>
                 <th>Entry</th>
                 ${orderedBandCodes.map(code => `<th>${UI.esc(code)}</th>`).join('')}
-                <th title="Not tracked by this system yet (e.g. Absent) — always 0">X</th>
-                <th title="Not tracked by this system yet (e.g. Exempted) — always 0">Y</th>
-                <th title="Learners with no marks entered at all for this sitting">Z</th>
+                <th title="Learners with no marks entered at all for this sitting — folded into Mean at 0 points">Z</th>
                 <th>Mean</th>
                 <th>Grade</th>
                 ${showTeacher ? '<th>Class Teacher</th>' : ''}
@@ -394,7 +396,7 @@ Views.broadsheet = async function () {
       const dir = tableState.sortDir === 'asc' ? 1 : -1;
       list = [...list].sort((a, b) => {
         if (tableState.sortKey === 'name') return dir * a.student.name.localeCompare(b.student.name);
-        // Missing-marks rows ('M') always sort to the bottom, in
+        // Missing-marks rows ('Z') always sort to the bottom, in
         // either sort direction — reversing the direction shouldn't
         // put "no marks yet" ahead of a real, if low, score.
         if (tableState.sortKey === 'mean') {
@@ -403,9 +405,9 @@ Views.broadsheet = async function () {
           if (b.meanPct === null) return -1;
           return dir * (a.meanPct - b.meanPct);
         }
-        if (a.rank === 'M' && b.rank === 'M') return 0;
-        if (a.rank === 'M') return 1;
-        if (b.rank === 'M') return -1;
+        if (a.rank === 'Z' && b.rank === 'Z') return 0;
+        if (a.rank === 'Z') return 1;
+        if (b.rank === 'Z') return -1;
         return dir * (a.rank - b.rank);
       });
       return list;
@@ -434,7 +436,7 @@ Views.broadsheet = async function () {
         return `<tr><td colspan="${5 + subjectCols.length}" style="text-align:center; color:var(--ink-soft); padding:24px;">No students match the current search / filter.</td></tr>`;
       }
       return list.map(r => `<tr>
-        <td class="num freeze-1">${r.rank === 'M' ? UI.badge(Grading.MISSING_BAND) : r.rank}</td>
+        <td class="num freeze-1">${r.rank === 'Z' ? UI.badge(Grading.MISSING_BAND) : r.rank}</td>
         <td class="freeze-2">${UI.esc(r.student.name)}</td>
         <td class="num">${UI.esc(r.student.admissionNo) || '—'}</td>
         ${subjectCols.map(col => subjectCellHtml(r, col)).join('')}
@@ -456,7 +458,7 @@ Views.broadsheet = async function () {
         <select id="bsLevel">
           <option value="all">All achievement levels</option>
           ${(st.settings.gradingBands || []).map(b => `<option value="${UI.esc(b.code)}">${UI.esc(b.code)} — ${UI.esc(b.label)}</option>`).join('')}
-          <option value="M">M — Marks missing</option>
+          <option value="Z">Z — Marks missing</option>
         </select>
         <button class="btn" id="bsResetBtn"><i class="fa-solid fa-rotate-left"></i> Reset filters</button>
         ${canEditAny ? `
@@ -489,7 +491,10 @@ Views.broadsheet = async function () {
             <tfoot>
               <tr>
                 <td colspan="3" style="font-weight:600;">Subject mean</td>
-                ${subjectAverages.map(a => `<td class="num" style="font-weight:600;">${a === null ? '—' : a.toFixed(1)}</td>`).join('')}
+                ${subjectAverages.map(a => {
+                  const band = a === null ? null : Grading.levelForMarks(a, 100, st.settings.gradingBands);
+                  return `<td class="num" style="font-weight:600;">${a === null ? '—' : a.toFixed(1)}${a === null ? '' : `<br>${UI.badge(band)}`}</td>`;
+                }).join('')}
                 <td></td>
                 <td class="num" style="font-weight:600;">${classMean === null ? '—' : classMean.toFixed(1)}</td>
                 <td class="num" style="font-weight:600;">${classMeanPoints === null ? '—' : classMeanPoints.toFixed(1)}</td>
@@ -611,7 +616,7 @@ Views.broadsheet = async function () {
           ${summaryTableHtml('Gender', genderSummary)}
           <div class="section-title">Subject</div>
           ${summaryTableHtml('Subject', [...subjectSummary, overallSummary])}
-          <p class="field-hint no-print" style="margin:0;">X and Y are reserved for categories this system doesn't track yet (e.g. Absent / Exempted) and always read 0; Z is this system's own "no marks entered" count.</p>
+          <p class="field-hint no-print" style="margin:0;">Z is this system's "no marks entered" count for the sitting — counted at 0 points in each group's Mean, the same as any other bottom score would be.</p>
         `}
       </div>
     `;

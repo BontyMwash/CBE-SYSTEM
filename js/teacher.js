@@ -237,7 +237,7 @@ Views.learners = async function () {
       const csvRows = rows.map(s => {
         const avg = overallAverage(s.id);
         const band = avg === null ? Grading.MISSING_BAND : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
-        return [s.name, s.admissionNo || '', s.klass, avg === null ? 'M' : avg.toFixed(1), band.code, s.parentName || '', s.parentPhone || ''];
+        return [s.name, s.admissionNo || '', s.klass, avg === null ? 'Z' : avg.toFixed(1), band.code, s.parentName || '', s.parentPhone || ''];
       });
       UI.downloadCSV(`class-list-${klassFilter || 'all-my-classes'}`.replace(/\s+/g, '_'), header, csvRows);
     };

@@ -186,8 +186,8 @@ function buildReportCardHTML(st, student, term, year, examType) {
         <div><span class="k">Class:</span>${UI.esc(student.klass)}</div>
         <div><span class="k">Average performance:</span>${overallAvg === null ? UI.badge(Grading.MISSING_BAND) : overallAvg.toFixed(1) + '%'}</div>
         <div><span class="k">Points:</span>${overallPoints === null ? '—' : overallPoints}</div>
-        <div><span class="k">Position in class:</span>${classPos.position === 'M' ? `${UI.badge(Grading.MISSING_BAND)} — marks pending, ranked last of ${showStreamRow ? gradeMates.length : streamMates.length}` : classPos.position === null ? '—' : `${ordinal(classPos.position)} out of ${classPos.outOf}`}</div>
-        ${showStreamRow ? `<div><span class="k">Position in stream:</span>${streamPos.position === 'M' ? `${UI.badge(Grading.MISSING_BAND)} — marks pending, ranked last of ${streamMates.length}` : streamPos.position === null ? '—' : `${ordinal(streamPos.position)} out of ${streamPos.outOf}`}</div>` : ''}
+        <div><span class="k">Position in class:</span>${classPos.position === 'Z' ? `${UI.badge(Grading.MISSING_BAND)} — marks pending, ranked last of ${showStreamRow ? gradeMates.length : streamMates.length}` : classPos.position === null ? '—' : `${ordinal(classPos.position)} out of ${classPos.outOf}`}</div>
+        ${showStreamRow ? `<div><span class="k">Position in stream:</span>${streamPos.position === 'Z' ? `${UI.badge(Grading.MISSING_BAND)} — marks pending, ranked last of ${streamMates.length}` : streamPos.position === null ? '—' : `${ordinal(streamPos.position)} out of ${streamPos.outOf}`}</div>` : ''}
       </div>
       <table class="ledger-table" style="width:100%;">
         <thead><tr><th>Subject</th>${typesToShow.map(t => `<th>${UI.esc(t)}</th>`).join('')}${isSingle ? '' : '<th>Average</th>'}</tr></thead>
@@ -230,7 +230,7 @@ function positionOf(st, studentId, students, term, year, examType, isSingle) {
   const scored = students.map(s => ({ id: s.id, avg: overallAvgFor(st, s.id, term, year, examType, isSingle) }));
   const outOf = scored.filter(s => s.avg !== null).length;
   // Students with no marks entered at all sort below everyone with a
-  // real average (avg ?? -1 already does this) and get position 'M'
+  // real average (avg ?? -1 already does this) and get position 'Z'
   // instead of being left blank — same convention as the Broadsheet
   // and Analysis sheet: still "on the list", just flagged as pending
   // rather than ranked.
@@ -238,7 +238,7 @@ function positionOf(st, studentId, students, term, year, examType, isSingle) {
   let rank = 0, lastAvg = null, seen = 0, position = null;
   ranked.forEach(r => {
     seen++;
-    if (r.avg === null) { if (r.id === studentId) position = 'M'; return; }
+    if (r.avg === null) { if (r.id === studentId) position = 'Z'; return; }
     if (r.avg !== lastAvg) { rank = seen; lastAvg = r.avg; }
     if (r.id === studentId) position = rank;
   });
@@ -2227,7 +2227,7 @@ function renderStudentReportCard(st, scope) {
         const a = Grading.average(vals);
         return a === null ? '' : a.toFixed(1);
       });
-      return [s.name, s.admissionNo || '', s.klass, ...typeCols, avg === null ? 'M' : avg.toFixed(1), band.code];
+      return [s.name, s.admissionNo || '', s.klass, ...typeCols, avg === null ? 'Z' : avg.toFixed(1), band.code];
     });
     UI.downloadCSV(`report-cards-${klass}-${term}-${year}`.replace(/\s+/g, '_'), header, rows);
   };

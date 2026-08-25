@@ -10,11 +10,15 @@ const Grading = {
   // a sitting (as opposed to one who sat some subjects but not
   // others — that's a real, partial average, not this). Used
   // everywhere a real grading band would normally go — the badge/
-  // stamp renders it as a plain amber "M" pill (see .badge-M in
+  // stamp renders it as a plain amber "Z" pill (see .badge-Z in
   // style.css) so it reads as "still pending", distinct from both a
   // real grade and the grey "—" used for genuinely not-applicable
-  // cells (e.g. a subject that isn't offered).
-  MISSING_BAND: { code: 'M', label: 'Marks missing' },
+  // cells (e.g. a subject that isn't offered). Carries its own
+  // explicit points value (0) so group-level points averages (e.g.
+  // Performance Summary's Mean column) can fold missing-marks
+  // students straight in via pointsForBand, instead of needing to be
+  // special-cased at every call site.
+  MISSING_BAND: { code: 'Z', label: 'Marks missing', points: 0 },
 
   levelForMarks(marks, totalMarks, bands) {
     if (marks === null || marks === undefined || marks === '') return null;
@@ -67,10 +71,10 @@ const Grading = {
   },
 
   // Sort-friendly numeric stand-in for a rank that may be the literal
-  // string 'M' (missing marks) instead of a number — always sorts
+  // string 'Z' (missing marks) instead of a number — always sorts
   // after every real rank, in either sort direction.
   rankSortValue(rank) {
-    return rank === 'M' ? Infinity : (rank ?? Infinity);
+    return rank === 'Z' ? Infinity : (rank ?? Infinity);
   },
 
   average(values) {
