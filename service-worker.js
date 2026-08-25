@@ -4,7 +4,13 @@
 // loads instantly, and opens offline. All Supabase/API calls always go to
 // the network — this app's data is never cached, only the code that renders it.
 
-const CACHE_VERSION = 'v8';
+// Bump this on every deploy that changes any cached file. The 'activate'
+// handler below deletes every cache whose name doesn't match CACHE_NAME, so
+// a bump is what actually gets a code change in front of users who already
+// have the app installed — without it, the cache-first fetch strategy below
+// keeps serving the OLD file indefinitely (this is why a shipped fix can
+// look like it "didn't take" until this number changes).
+const CACHE_VERSION = 'v9';
 const CACHE_NAME = `cbe-shell-${CACHE_VERSION}`;
 
 const APP_SHELL = [
@@ -41,10 +47,29 @@ const APP_SHELL = [
   './icons/apple-touch-icon.png',
 ];
 
+// Third-party library scripts the app depends on for one-click exports.
+// These are pinned to an exact version in their URL (so they never change
+// under us) and are safe — and worth — caching like the rest of the shell.
+// Previously these were lumped in with Supabase under "always hit the
+// network", which meant "Download PDF" / "Download Excel" had a hard
+// dependency on cdnjs/jsdelivr being reachable at the exact moment the
+// button was clicked, with no fallback: any flaky connection, corporate/
+// school network filter, or ad-/tracker-blocking extension that flags
+// those CDN hosts left the button silently failing ("PDF library did not
+// load"). Pre-caching them at install time, and serving them cache-first
+// afterwards, makes the export buttons work offline and immune to that
+// class of failure, the same way the rest of the app shell already does.
+const LIBRARY_URLS = [
+  'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css',
+  'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
+];
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(APP_SHELL))
+      .then((cache) => cache.addAll([...APP_SHELL, ...LIBRARY_URLS]))
       .then(() => self.skipWaiting())
   );
 });
@@ -59,14 +84,13 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Requests that must never be served from cache — live data and third-party
-// services that manage their own freshness/auth.
+// Requests that must never be served from cache — live data and auth that
+// manages its own freshness. (The export-library CDN hosts used to be
+// listed here too — see LIBRARY_URLS above for why that changed.)
 function isNetworkOnly(url) {
   return (
     url.hostname.endsWith('supabase.co') ||
     url.hostname.includes('supabase.in') ||
-    url.hostname === 'cdn.jsdelivr.net' ||
-    url.hostname === 'cdnjs.cloudflare.com' ||
     url.hostname === 'fonts.googleapis.com' ||
     url.hostname === 'fonts.gstatic.com'
   );
@@ -99,8 +123,9 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Same-origin static assets: cache-first, refresh in the background.
-  if (url.origin === self.location.origin) {
+  // Same-origin static assets, and the pinned library CDN files above:
+  // cache-first, refresh in the background.
+  if (url.origin === self.location.origin || LIBRARY_URLS.includes(request.url)) {
     event.respondWith(
       caches.match(request).then((cached) => {
         const fetchPromise = fetch(request)
@@ -115,3 +140,4 @@ self.addEventListener('fetch', (event) => {
     );
   }
 });
+
