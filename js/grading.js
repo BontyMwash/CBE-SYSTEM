@@ -48,6 +48,24 @@ const Grading = {
     return idx === -1 ? null : idx + 1;
   },
 
+  // Reverse of pointsForBand: given a mean POINTS value (e.g. the
+  // average of several students'/entries' points — 4.7451, not a raw
+  // %), find whichever configured band sits closest to it. Used for
+  // the group-level "Grade" column on Performance Summary tables,
+  // where the figure being graded is already an averaged points score
+  // rather than one student's own percentage.
+  bandForPoints(points, bands) {
+    if (points === null || points === undefined || !bands || !bands.length) return null;
+    let best = null, bestDiff = Infinity;
+    bands.forEach(b => {
+      const p = this.pointsForBand(b, bands);
+      if (p === null || p === undefined) return;
+      const diff = Math.abs(p - points);
+      if (diff < bestDiff) { bestDiff = diff; best = b; }
+    });
+    return best;
+  },
+
   // Sort-friendly numeric stand-in for a rank that may be the literal
   // string 'M' (missing marks) instead of a number — always sorts
   // after every real rank, in either sort direction.

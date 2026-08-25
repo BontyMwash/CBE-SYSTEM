@@ -246,6 +246,139 @@ Views.broadsheet = async function () {
     }).sort((a, b) => (b.mean ?? -1) - (a.mean ?? -1));
     const showStreamSection = streamStats.length > 1;
 
+    /* ---- Performance Summary: the classic paper-broadsheet view —
+       Stream / Gender / Subject breakdowns of achievement-band counts
+       across the WHOLE grade (every stream sharing this class's grade
+       name, same sitting), each with an Entry count, a count per
+       achievement band, a points-based Mean, and a Grade for the
+       group. Spans the whole grade rather than just the selected
+       stream since that's what the paper version compares.
+
+       X / Y / Z are reserved columns for categories the source
+       broadsheets track that this system doesn't (e.g. Absent /
+       Exempted sittings) — X and Y always read 0 here since there's
+       no such data to show; Z carries this system's own "no marks
+       entered at all" count so the row still foots to Entry, the way
+       X/Y/Z would on the paper version. ---- */
+    const gradeBands = st.settings.gradingBands || [];
+    const orderedBandCodes = [...gradeBands].sort((a, b) => b.min - a.min).map(b => b.code);
+    const pointsOf = (band) => Grading.pointsForBand(band, gradeBands);
+
+    // Every learner across the whole grade, each with their own overall
+    // band for this sitting (computed from THEIR OWN class's matching
+    // exams, since streams can carry different subjects) — null means
+    // no marks entered at all for the sitting.
+    const gradeStudents = st.students.filter(s => streamLabels.includes(s.klass));
+    const studentBand = new Map();
+    gradeStudents.forEach(stu => {
+      const classExams = st.exams.filter(e => e.klass === stu.klass && e.type === type && e.term === term && String(e.year) === String(year));
+      const pcts = classExams.map(e => {
+        const res = st.results.find(r => r.examId === e.id && r.studentId === stu.id);
+        return res ? Grading.percent(res.marks, e.totalMarks) : null;
+      }).filter(v => v !== null);
+      const avg = Grading.average(pcts);
+      studentBand.set(stu.id, avg === null ? null : Grading.levelForMarks(avg, 100, gradeBands));
+    });
+
+    function summarizeStudents(studentIds) {
+      const bandCounts = {};
+      gradeBands.forEach(b => { bandCounts[b.code] = 0; });
+      let missing = 0;
+      const pointsList = [];
+      studentIds.forEach(id => {
+        const band = studentBand.get(id);
+        if (!band) { missing++; return; }
+        bandCounts[band.code] = (bandCounts[band.code] || 0) + 1;
+        const pts = pointsOf(band);
+        if (pts !== null && pts !== undefined) pointsList.push(pts);
+      });
+      const mean = Grading.average(pointsList);
+      return { entry: studentIds.length, bandCounts, x: 0, y: 0, z: missing, mean, grade: mean === null ? null : Grading.bandForPoints(mean, gradeBands) };
+    }
+
+    const streamSummary = streamLabels.map(label => {
+      const cls = st.classes.find(c => c.label === label);
+      const ids = gradeStudents.filter(s => s.klass === label).map(s => s.id);
+      return { label, teacherName: cls ? cls.teacherName : '', ...summarizeStudents(ids) };
+    });
+
+    const genderBuckets = [
+      { label: 'BOYS', ids: gradeStudents.filter(s => s.gender === 'M').map(s => s.id) },
+      { label: 'GIRLS', ids: gradeStudents.filter(s => s.gender === 'F').map(s => s.id) },
+    ];
+    const unspecified = gradeStudents.filter(s => s.gender !== 'M' && s.gender !== 'F').map(s => s.id);
+    if (unspecified.length) genderBuckets.push({ label: 'NOT SPECIFIED', ids: unspecified });
+    const genderSummary = genderBuckets.map(g => ({ label: g.label, teacherName: '', ...summarizeStudents(g.ids) }));
+
+    // Subject rows: union of every subject sat anywhere in the grade for
+    // this sitting — counted from actual entered marks (not headcount),
+    // so Entry here is "how many sat/were marked", same as the paper
+    // version's subject table.
+    const gradeExams = st.exams.filter(e => streamLabels.includes(e.klass) && e.type === type && e.term === term && String(e.year) === String(year));
+    const subjectIds = [...new Set(gradeExams.map(e => e.subjectId))];
+    const subjectSummary = subjectIds.map(sid => {
+      const subject = st.subjects.find(s => s.id === sid);
+      if (!subject) return null;
+      const bandCounts = {};
+      gradeBands.forEach(b => { bandCounts[b.code] = 0; });
+      const pointsList = [];
+      let entry = 0;
+      gradeExams.filter(e => e.subjectId === sid).forEach(e => {
+        st.results.filter(r => r.examId === e.id).forEach(r => {
+          entry++;
+          const pct = Grading.percent(r.marks, e.totalMarks);
+          const band = Grading.levelForMarks(pct, 100, gradeBands);
+          if (!band) return;
+          bandCounts[band.code] = (bandCounts[band.code] || 0) + 1;
+          const pts = pointsOf(band);
+          if (pts !== null && pts !== undefined) pointsList.push(pts);
+        });
+      });
+      const mean = Grading.average(pointsList);
+      return { label: subject.name, teacherName: '', entry, bandCounts, x: 0, y: 0, z: 0, mean, grade: mean === null ? null : Grading.bandForPoints(mean, gradeBands) };
+    }).filter(Boolean).sort((a, b) => a.label.localeCompare(b.label));
+
+    const overallSummary = { label: 'OVERALL', teacherName: '', ...summarizeStudents(gradeStudents.map(s => s.id)) };
+    const showSummary = gradeBands.length > 0 && gradeStudents.length > 0;
+
+    function summaryRowHtml(r, showTeacher) {
+      return `<tr ${r.label === 'OVERALL' ? 'style="font-weight:600;"' : ''}>
+        <td>${UI.esc(r.label)}</td>
+        <td class="num">${r.entry}</td>
+        ${orderedBandCodes.map(code => `<td class="num">${r.bandCounts[code] || 0}</td>`).join('')}
+        <td class="num">${r.x}</td>
+        <td class="num">${r.y}</td>
+        <td class="num">${r.z}</td>
+        <td class="num">${r.mean === null ? '—' : r.mean.toFixed(4)}</td>
+        <td>${UI.badge(r.grade)}</td>
+        ${showTeacher ? `<td>${UI.esc(r.teacherName) || '—'}</td>` : ''}
+      </tr>`;
+    }
+
+    function summaryTableHtml(groupHeader, rows, opts = {}) {
+      const showTeacher = !!opts.showTeacher;
+      return `
+        <div class="ledger" style="margin-bottom:18px;">
+          <div class="ledger-scroll">
+            <table class="ledger-table">
+              <thead><tr>
+                <th>${UI.esc(groupHeader)}</th>
+                <th>Entry</th>
+                ${orderedBandCodes.map(code => `<th>${UI.esc(code)}</th>`).join('')}
+                <th title="Not tracked by this system yet (e.g. Absent) — always 0">X</th>
+                <th title="Not tracked by this system yet (e.g. Exempted) — always 0">Y</th>
+                <th title="Learners with no marks entered at all for this sitting">Z</th>
+                <th>Mean</th>
+                <th>Grade</th>
+                ${showTeacher ? '<th>Class Teacher</th>' : ''}
+              </tr></thead>
+              <tbody>${rows.map(r => summaryRowHtml(r, showTeacher)).join('')}</tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
     // ---- filter + sort the display rows (search box / level select /
     // sortable column headers) without touching the underlying stats
     // above, which always reflect the whole class regardless of filter ----
@@ -468,6 +601,19 @@ Views.broadsheet = async function () {
             </div>`}
         </div>
       </div>
+
+      <div id="bsSummaryArea" style="margin-top:28px;">
+        ${!showSummary ? '' : `
+          <div style="padding:0 0 12px 0;">${buildReportMastheadHTML(st, `${gradeName} Performance Summary`, `${type} Results`, term, year)}</div>
+          <div class="section-title">Stream</div>
+          ${summaryTableHtml('Stream', streamSummary, { showTeacher: true })}
+          <div class="section-title">Gender</div>
+          ${summaryTableHtml('Gender', genderSummary)}
+          <div class="section-title">Subject</div>
+          ${summaryTableHtml('Subject', [...subjectSummary, overallSummary])}
+          <p class="field-hint no-print" style="margin:0;">X and Y are reserved for categories this system doesn't track yet (e.g. Absent / Exempted) and always read 0; Z is this system's own "no marks entered" count.</p>
+        `}
+      </div>
     `;
 
     // Recomputes ONE row's Total Marks / Mean % / Points / Level from
@@ -666,7 +812,8 @@ Views.broadsheet = async function () {
     // same two "pages" the Print button already shows, now included
     // in the direct PDF download too.
     const analysisEl = document.getElementById('bsAnalysisArea');
-    const targets = analysisEl ? [el, analysisEl] : el;
+    const summaryEl = document.getElementById('bsSummaryArea');
+    const targets = [el, analysisEl, summaryEl].filter(Boolean);
     UI.downloadPDF(targets, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, { orientation: 'landscape' });
   };
   document.getElementById('bsCsvBtn').onclick = () => {

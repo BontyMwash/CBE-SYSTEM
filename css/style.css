@@ -1747,6 +1747,23 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
   #bsAnalysisArea {
     page-break-before: always;
   }
+
+  /* Performance Summary (Stream / Gender / Subject achievement-band
+     breakdown) — its own printed page, same shrink-to-fit treatment
+     as the other broadsheet tables above. */
+  #bsSummaryArea table.ledger-table {
+    font-size: 10px;
+  }
+  #bsSummaryArea table.ledger-table th,
+  #bsSummaryArea table.ledger-table td {
+    padding: 4px 6px;
+  }
+  #bsSummaryArea table.ledger-table tr {
+    page-break-inside: avoid;
+  }
+  #bsSummaryArea {
+    page-break-before: always;
+  }
 }
 
 /* ============================================================
