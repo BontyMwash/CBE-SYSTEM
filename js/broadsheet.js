@@ -460,7 +460,7 @@ Views.broadsheet = async function () {
         <td class="freeze-2">${UI.esc(r.student.name)}</td>
         <td class="num">${UI.esc(r.student.admissionNo) || '—'}</td>
         ${subjectCols.map(col => subjectCellHtml(r, col)).join('')}
-        <td class="num" data-total-cell>${r.totalObtained === null ? '—' : `${r.totalObtained}/${r.totalPossible}`}</td>
+        <td class="num" data-total-cell>${r.totalObtained === null ? '—' : `${r.totalObtained} / ${r.totalPossible}`}</td>
         <td class="num" data-mean-cell>${r.meanPct === null ? UI.badge(Grading.MISSING_BAND) : r.meanPct.toFixed(1) + '%'}</td>
         <td class="num" data-points-cell>${r.points === null ? '—' : r.points}</td>
         <td data-level-cell>${UI.badge(r.band)}</td>
@@ -575,7 +575,7 @@ Views.broadsheet = async function () {
                       <td class="num">${s.mean === null ? '—' : s.mean.toFixed(1) + '%'}</td>
                       <td class="num">${s.high === null ? '—' : s.high.toFixed(1) + '%'}</td>
                       <td class="num">${s.low === null ? '—' : s.low.toFixed(1) + '%'}</td>
-                      <td class="num">${s.entered}/${s.expected}</td>
+                      <td class="num">${s.entered} / ${s.expected}</td>
                     </tr>`).join('')}
                   </tbody>
                 </table>
@@ -668,7 +668,7 @@ Views.broadsheet = async function () {
       const complete = cells.length > 0 && entered === cells.length;
       const band = !complete ? Grading.MISSING_BAND : Grading.levelForMarks(meanPct, 100, st.settings.gradingBands);
       const points = !complete ? null : Grading.pointsForBand(band, st.settings.gradingBands);
-      tr.querySelector('[data-total-cell]').textContent = pcts.length ? `${obtained}/${possible}` : '—';
+      tr.querySelector('[data-total-cell]').textContent = pcts.length ? `${obtained} / ${possible}` : '—';
       tr.querySelector('[data-mean-cell]').innerHTML = meanPct === null ? UI.badge(Grading.MISSING_BAND) : `${meanPct.toFixed(1)}%`;
       tr.querySelector('[data-points-cell]').textContent = points === null ? '—' : points;
       tr.querySelector('[data-level-cell]').innerHTML = UI.badge(band);
