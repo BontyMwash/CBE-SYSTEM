@@ -266,6 +266,16 @@ const UI = {
         c.style.padding = '5px 12px';
         c.style.fontSize = '10px';
         c.style.overflowWrap = 'break-word';
+        // table-layout:fixed (above) forces every column into a narrow,
+        // content-independent width. The base stylesheet still says
+        // `white-space: nowrap` on these cells, so numbers like
+        // "30/150" or "19.2%" that no longer fit their column can't
+        // wrap — they just spill sideways and overlap the next
+        // column's text, which is what made the exported PDF's ranks/
+        // percentages/fractions look garbled and unreadable. Allow
+        // wrapping here, same as the @media print stylesheet already
+        // does for the browser's own Print/Save-as-PDF path.
+        c.style.whiteSpace = 'normal';
       });
       // Decorative absolutely-positioned stat-card icons/corners can
       // land in the wrong place once flattened out of their on-screen
