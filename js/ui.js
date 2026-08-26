@@ -303,6 +303,36 @@ const UI = {
     else if (wrap) { wrap.remove(); }
   },
 
+  // html2canvas rasterizes text straight onto a <canvas> the moment
+  // it's called — it does NOT wait for web fonts to finish loading
+  // first. IBM Plex Mono (used for every mark/percentage/total in
+  // the ledger tables) is loaded from Google Fonts with
+  // `display=swap`, so if capture fires before it's actually
+  // downloaded and rasterized, html2canvas draws that text using a
+  // fallback font's metrics while the real font is still swapping
+  // in — the result is exactly the "digits/slashes overlapping or
+  // garbled" look, and because it depends on network timing it's
+  // intermittent rather than something a layout fix alone can cure.
+  // document.fonts.load() explicitly requests + awaits the specific
+  // faces/sizes actually used in the tables (rather than relying on
+  // document.fonts.ready, which only resolves for faces some element
+  // has already triggered a request for) before we let html2canvas
+  // anywhere near the DOM.
+  async _waitForPdfFonts() {
+    try {
+      if (!(document.fonts && document.fonts.load)) return;
+      await Promise.all([
+        document.fonts.load('400 10px "IBM Plex Mono"'),
+        document.fonts.load('500 10px "IBM Plex Mono"'),
+        document.fonts.load('600 10px "IBM Plex Mono"'),
+        document.fonts.load('400 10px "Inter"'),
+        document.fonts.load('600 10px "Inter"'),
+        document.fonts.load('700 10px "Inter"'),
+      ]);
+      if (document.fonts.ready) await document.fonts.ready;
+    } catch (e) { /* best-effort — proceed with capture regardless */ }
+  },
+
   // One-click "Download PDF": renders a printable element (or several,
   // e.g. a whole class of report cards) straight to a downloadable PDF
   // file client-side, using html2pdf.js (loaded in index.html). This is
@@ -326,6 +356,7 @@ const UI = {
     if (btn) { btn.disabled = true; btn.innerHTML = 'Preparing PDF…'; }
     const wrap = UI._buildPdfWrap(els, orientation, format);
     try {
+      await UI._waitForPdfFonts();
       await html2pdf().set({
         margin: UI._PDF_MARGIN_MM,
         filename: filename.endsWith('.pdf') ? filename : `${filename}.pdf`,
@@ -352,6 +383,7 @@ const UI = {
     const format = (opts && opts.format) || 'a4';
     const wrap = UI._buildPdfWrap(els, orientation, format);
     try {
+      await UI._waitForPdfFonts();
       return await html2pdf().set({
         margin: UI._PDF_MARGIN_MM,
         html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
