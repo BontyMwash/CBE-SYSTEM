@@ -556,7 +556,23 @@ Views.broadsheet = async function () {
                 <td colspan="3" style="font-weight:600;">Subject mean</td>
                 ${subjectAverages.map(a => {
                   const band = a === null ? null : Grading.levelForMarks(a, 100, st.settings.gradingBands);
-                  return `<td class="num" style="font-weight:600;">${a === null ? '—' : a.toFixed(1)}${a === null ? '' : `<br>${UI.badge(band)}`}</td>`;
+                  if (a === null) return `<td class="num" style="font-weight:600;">—</td>`;
+                  // Two lines (mean % + grade badge) stacked in one cell.
+                  // A plain `value<br>badge` string relies on html2canvas
+                  // correctly measuring an explicit <br> inside a table
+                  // cell to push the second line down — it doesn't
+                  // reliably do that, and instead draws both lines at
+                  // the same vertical position, which is exactly the
+                  // "number fused with badge" look this row kept
+                  // showing. A flex column with a real gap gives both
+                  // lines their own box, which html2canvas lays out
+                  // like any other block content.
+                  return `<td class="num" style="font-weight:600;">
+                    <div style="display:flex; flex-direction:column; align-items:center; gap:3px; line-height:1.3;">
+                      <span>${a.toFixed(1)}%</span>
+                      ${UI.badge(band)}
+                    </div>
+                  </td>`;
                 }).join('')}
                 <td></td>
                 <td class="num" style="font-weight:600;">${classMean === null ? '—' : classMean.toFixed(1)}</td>
