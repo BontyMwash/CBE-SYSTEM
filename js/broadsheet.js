@@ -372,7 +372,7 @@ Views.broadsheet = async function () {
         <td class="num">${r.entry}</td>
         ${orderedBandCodes.map(code => `<td class="num">${r.bandCounts[code] || 0}</td>`).join('')}
         <td class="num">${r.z}</td>
-        <td class="num">${r.mean === null ? '—' : r.mean.toFixed(4)}</td>
+        <td class="num">${r.mean === null ? '—' : r.mean.toFixed(1) + '%'}</td>
         <td>${UI.badge(r.grade)}</td>
         ${showTeacher ? `<td>${UI.esc(r.teacherName) || '—'}</td>` : ''}
       </tr>`;
