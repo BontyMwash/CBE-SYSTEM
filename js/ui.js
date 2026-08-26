@@ -263,7 +263,7 @@ const UI = {
       // with by trimming the on-screen padding/font-size, matching
       // what the print stylesheet already does for @media print.
       clone.querySelectorAll('table.ledger-table th, table.ledger-table td').forEach(c => {
-        c.style.padding = '4px 6px';
+        c.style.padding = '5px 12px';
         c.style.fontSize = '10px';
         c.style.overflowWrap = 'break-word';
       });

@@ -19,7 +19,7 @@ const Auth = {
     superadmin: ['schools'],
     admin: [
       'dashboard', 'classes', 'students', 'subjects', 'exams', 'results', 'gradebook',
-      'reports', 'attendance', 'competency', 'broadsheet', 'analysis',
+      'reports', 'attendance', 'competency', 'broadsheet', 'meritList', 'analysis',
       'notify', 'users', 'settings'
     ],
     // Teacher section — kept in this order because it's the order the
@@ -27,23 +27,24 @@ const Auth = {
     // Dashboard -> My Classes -> Learners -> Assessments -> Marks Entry
     // -> Marks Analysis -> Gradebook -> Report Cards -> Attendance ->
     // Competency Assessment -> Reports. Broadsheet (whole-class, every
-    // subject) and Send to Parents are deliberately NOT in this base
-    // list — those are whole-class-scope actions, only appropriate for
-    // a teacher who actually holds a class (a "class teacher"), and are
-    // added back in allowedRoutes() below for exactly those teachers.
+    // subject) and Merit List (whole-grade, across streams) and Send
+    // to Parents are deliberately NOT in this base list — those are
+    // whole-class-scope actions, only appropriate for a teacher who
+    // actually holds a class (a "class teacher"), and are added back
+    // in allowedRoutes() below for exactly those teachers.
     user: [
       'dashboard', 'myClasses', 'learners', 'assessments', 'results', 'analysis',
       'gradebook', 'reports', 'attendance', 'competency'
     ],
     // Routes added on top of `user` only for teachers who are a class
     // teacher for at least one class (see _loadProfile / isClassTeacher).
-    userClassTeacherExtra: ['broadsheet', 'notify']
+    userClassTeacherExtra: ['broadsheet', 'meritList', 'notify']
   },
 
   ROUTE_TITLES: {
     dashboard: 'Dashboard', classes: 'Classes', students: 'Students', subjects: 'Subjects', exams: 'Exams',
     myClasses: 'My Classes', learners: 'Learners', assessments: 'Assessments',
-    results: 'Marks Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', analysis: 'Marks Analysis',
+    results: 'Marks Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', meritList: 'Merit List', analysis: 'Marks Analysis',
     gradebook: 'Gradebook', attendance: 'Attendance', competency: 'Competency Assessment',
     notify: 'Send Results to Parents',
     users: 'Users', settings: 'Settings', schools: 'Schools'
@@ -51,7 +52,7 @@ const Auth = {
   ROUTE_LABELS: {
     dashboard: 'Dashboard', classes: 'Classes', students: 'Students', subjects: 'Subjects', exams: 'Exams',
     myClasses: 'My Classes', learners: 'Learners', assessments: 'Assessments',
-    results: 'Marks Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', analysis: 'Marks Analysis',
+    results: 'Marks Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', meritList: 'Merit List', analysis: 'Marks Analysis',
     gradebook: 'Gradebook', attendance: 'Attendance', competency: 'Competency',
     notify: 'Send to Parents',
     users: 'Users', settings: 'Settings', schools: 'Schools'

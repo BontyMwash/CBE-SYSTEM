@@ -22,7 +22,7 @@ const App = {
     subjects: 'fa-book', exams: 'fa-file-pen', results: 'fa-list-check',
     myClasses: 'fa-chalkboard-user', learners: 'fa-people-group', assessments: 'fa-clipboard-list',
     gradebook: 'fa-book-open', attendance: 'fa-calendar-check', competency: 'fa-star-half-stroke',
-    reports: 'fa-file-lines', broadsheet: 'fa-table-list', analysis: 'fa-chart-column', notify: 'fa-paper-plane', users: 'fa-users-gear',
+    reports: 'fa-file-lines', broadsheet: 'fa-table-list', meritList: 'fa-ranking-star', analysis: 'fa-chart-column', notify: 'fa-paper-plane', users: 'fa-users-gear',
     settings: 'fa-gear', schools: 'fa-school'
   },
 
