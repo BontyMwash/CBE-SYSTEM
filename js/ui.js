@@ -173,27 +173,41 @@ const UI = {
   // Shared builder behind downloadPDF/pdfBlob. Clones the source
   // element(s) into an off-screen container that is actually attached
   // to the document (html2canvas needs real layout to measure
-  // against, so a detached clone can collapse to the wrong width and
-  // silently crop wide tables) — but "off-screen" means positioned at
-  // valid (0,0) coordinates and hidden BEHIND the real page with a
-  // very low z-index, not pushed out to a large negative left offset.
-  // html2canvas measures/crops by the element's actual on-page
-  // position, and elements sitting at large negative coordinates are
-  // a well-documented cause of it silently capturing a blank canvas —
-  // which is exactly the "every Download PDF button produces an
-  // empty file" bug this replaced. Sitting at (0,0) behind the app's
-  // own (opaque) content means it's still invisible to the user.
-  //
-  // It also mirrors the same un-clip/flatten treatment the @media
-  // print stylesheet applies (see style.css), since html2canvas does
-  // NOT evaluate print media styles: horizontal-scroll ledger boxes
-  // are forced open so the FULL table is captured instead of just
-  // whatever fit in the on-screen scroll window, sticky/frozen
+  // against — a detached clone collapses to the wrong size), sized to
+  // match the PDF's actual printable width, then unclipped/flattened
+  // the same way @media print already does (html2canvas doesn't
+  // evaluate print media styles on its own).
+  // Shared PDF page settings — kept in one place so _buildPdfWrap can
+  // lay out content at exactly the pixel width html2pdf will actually
+  // capture (see below), instead of guessing.
+  _PDF_MARGIN_MM: 8,
+  _PDF_FORMAT_MM: { a4: { w: 210, h: 297 } },
+
+  // html2pdf.js renders/captures the source element at a CSS pixel
+  // width equal to the PDF page's content width (page width minus
+  // margins, converted at 96dpi) — it does this internally to slice
+  // one continuous capture into pages by height, and it does this
+  // REGARDLESS of any windowWidth/width override passed to
+  // html2canvas. If the element we hand it is laid out wider than
+  // that (which the old fixed 1500/1050px trick did), the capture
+  // simply crops off whatever falls outside that centered window —
+  // that's what was cutting off the right-hand columns of wide
+  // tables. Laying out at this exact width instead means what you
+  // see is what gets captured, edge to edge, with nothing clipped.
+  _pdfPageContentWidthPx(orientation, format) {
+    const mm = UI._PDF_FORMAT_MM[format] || UI._PDF_FORMAT_MM.a4;
+    const pageWidthMm = orientation === 'landscape' ? mm.h : mm.w;
+    const contentWidthMm = pageWidthMm - (UI._PDF_MARGIN_MM * 2);
+    return Math.round((contentWidthMm / 25.4) * 96);
+  },
+
+  // Builds the off-screen container itself: ledger scroll boxes are
+  // forced open so the FULL table is captured instead of just
+  // whatever fit in the on-screen scroll window, and sticky/frozen
   // columns are unstuck so they don't double up in the flattened
-  // image, and a fixed desktop-width viewport is used so a phone
-  // download doesn't accidentally get the narrow mobile layout.
-  _buildPdfWrap(els, orientation) {
-    const vw = orientation === 'landscape' ? 1500 : 1050;
+  // image.
+  _buildPdfWrap(els, orientation, format) {
+    const vw = UI._pdfPageContentWidthPx(orientation, format || 'a4');
     const wrap = document.createElement('div');
     // IMPORTANT: keep this element in normal document flow (no
     // position:fixed / position:absolute). html2canvas's internal
@@ -235,7 +249,23 @@ const UI = {
       });
       clone.querySelectorAll('table.ledger-table').forEach(t => {
         t.style.width = '100%';
-        t.style.tableLayout = 'auto';
+        // table-layout:auto (the default) lets a table grow WIDER
+        // than its 100% container if the content needs the room —
+        // it treats width:100% as a minimum, not a cap. With enough
+        // columns that overflow silently ran past the page edge and
+        // got cropped out of the capture entirely. table-layout:fixed
+        // makes 100% an actual cap: columns share the page width and
+        // long cell content wraps instead of pushing the table wider
+        // than the page can show.
+        t.style.tableLayout = 'fixed';
+      });
+      // Give a wide table (many subject columns) more room to work
+      // with by trimming the on-screen padding/font-size, matching
+      // what the print stylesheet already does for @media print.
+      clone.querySelectorAll('table.ledger-table th, table.ledger-table td').forEach(c => {
+        c.style.padding = '4px 6px';
+        c.style.fontSize = '10px';
+        c.style.overflowWrap = 'break-word';
       });
       // Decorative absolutely-positioned stat-card icons/corners can
       // land in the wrong place once flattened out of their on-screen
@@ -277,16 +307,17 @@ const UI = {
     const els = target instanceof Element ? [target] : Array.from(target || []);
     if (els.length === 0) { UI.toast('Nothing to download yet.'); return; }
     const orientation = (opts && opts.orientation) || 'portrait';
+    const format = (opts && opts.format) || 'a4';
 
     const originalLabel = btn ? btn.innerHTML : null;
     if (btn) { btn.disabled = true; btn.innerHTML = 'Preparing PDF…'; }
-    const wrap = UI._buildPdfWrap(els, orientation);
+    const wrap = UI._buildPdfWrap(els, orientation, format);
     try {
       await html2pdf().set({
-        margin: 8,
+        margin: UI._PDF_MARGIN_MM,
         filename: filename.endsWith('.pdf') ? filename : `${filename}.pdf`,
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', windowWidth: wrap.scrollWidth, width: wrap.scrollWidth, x: 0, y: 0, scrollX: 0, scrollY: 0 },
-        jsPDF: { unit: 'mm', format: 'a4', orientation },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+        jsPDF: { unit: 'mm', format, orientation },
         pagebreak: { mode: ['css', 'legacy'] }
       }).from(wrap).save();
     } catch (e) {
@@ -305,12 +336,13 @@ const UI = {
     const els = target instanceof Element ? [target] : Array.from(target || []);
     if (els.length === 0) return null;
     const orientation = (opts && opts.orientation) || 'portrait';
-    const wrap = UI._buildPdfWrap(els, orientation);
+    const format = (opts && opts.format) || 'a4';
+    const wrap = UI._buildPdfWrap(els, orientation, format);
     try {
       return await html2pdf().set({
-        margin: 8,
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', windowWidth: wrap.scrollWidth, width: wrap.scrollWidth, x: 0, y: 0, scrollX: 0, scrollY: 0 },
-        jsPDF: { unit: 'mm', format: 'a4', orientation },
+        margin: UI._PDF_MARGIN_MM,
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+        jsPDF: { unit: 'mm', format, orientation },
         pagebreak: { mode: ['css', 'legacy'] }
       }).from(wrap).outputPdf('blob');
     } finally {

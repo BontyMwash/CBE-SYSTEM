@@ -837,14 +837,14 @@ Views.broadsheet = async function () {
   document.getElementById('bsPdfBtn').onclick = (e) => {
     const el = document.getElementById('bsPrintArea');
     if (!el) { UI.toast('Choose a class and exam type first.'); return; }
-    // Bundle the ledger table together with the Performance analysis
-    // section (Subject performance, Class performance level
-    // distribution, Stream performance) that renders right below it —
-    // same two "pages" the Print button already shows, now included
-    // in the direct PDF download too.
-    const analysisEl = document.getElementById('bsAnalysisArea');
+    // The downloadable PDF is just the ranking table followed by the
+    // Grade Performance Summary (Stream / Gender / Subject
+    // breakdowns) — a clean broadsheet document. The on-screen
+    // "Performance analysis" dashboard (stat cards + charts) in
+    // between is left out; it's a screen-only view, not something
+    // meant to be printed as part of the broadsheet.
     const summaryEl = document.getElementById('bsSummaryArea');
-    const targets = [el, analysisEl, summaryEl].filter(Boolean);
+    const targets = [el, summaryEl].filter(Boolean);
     UI.downloadPDF(targets, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, { orientation: 'landscape' });
   };
   document.getElementById('bsCsvBtn').onclick = () => {
