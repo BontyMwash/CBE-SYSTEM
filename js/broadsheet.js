@@ -16,6 +16,48 @@
    single-subject Marks Entry screen.
    ============================================================ */
 
+// Explicit per-column width percentages for the main broadsheet table
+// (Pos. / Name / Adm. No. / one column per subject / Total Marks /
+// Mean % / Points / Level). Without this, a plain `table-layout:
+// fixed` table falls back to splitting its width EQUALLY across every
+// column — which starves "Total Marks" and "Mean %" of room the
+// moment there are more than a handful of subjects, forcing those
+// numbers to wrap or spill into their neighbour. Name gets the most
+// room since it's the one genuinely variable-length text column;
+// every subject column shares a fixed budget so adding subjects
+// shrinks them gracefully instead of starving the numeric summary
+// columns on the right. Returns an array of {cls, pct} for Pos, Name,
+// Adm. No., subjects (repeated), Total, Mean, Points, Level in that
+// order — pct values are rounded and don't need to sum to exactly
+// 100; the browser scales proportionally either way.
+function bsColWidths(subjectCount) {
+  const fixed = { pos: 5, name: 17, admno: 8, total: 10, mean: 8, points: 6, level: 6 };
+  const fixedSum = Object.values(fixed).reduce((a, b) => a + b, 0);
+  const subjectBudget = Math.max(0, 100 - fixedSum);
+  const subjectPct = subjectCount > 0 ? Math.max(5, subjectBudget / subjectCount) : 0;
+  return { ...fixed, subject: subjectPct };
+}
+
+// <colgroup> built from the widths above — inserted right after the
+// opening <table> tag so it applies identically whether the table is
+// rendered on screen, sent to the browser's own Print dialog, or
+// captured by the "Download PDF" button, all three of which share
+// this same table markup.
+function bsColgroupHTML(subjectCount) {
+  const w = bsColWidths(subjectCount);
+  const cols = [
+    `<col style="width:${w.pos}%">`,
+    `<col style="width:${w.name}%">`,
+    `<col style="width:${w.admno}%">`,
+    ...Array(subjectCount).fill(`<col style="width:${w.subject}%">`),
+    `<col style="width:${w.total}%">`,
+    `<col style="width:${w.mean}%">`,
+    `<col style="width:${w.points}%">`,
+    `<col style="width:${w.level}%">`,
+  ];
+  return `<colgroup>${cols.join('')}</colgroup>`;
+}
+
 Views.broadsheet = async function () {
   setTopbarActions('');
   showLoading();
@@ -493,6 +535,7 @@ Views.broadsheet = async function () {
         <div style="padding:16px 16px 0 16px;">${buildReportMastheadHTML(st, `Broadsheet — ${klass}`, `${type} Results`, term, year)}</div>
         <div class="ledger-scroll ledger-scroll-y">
           <table class="ledger-table">
+            ${bsColgroupHTML(subjectCols.length)}
             <thead>
               <tr>
                 <th class="sortable freeze-1" data-sort="rank" data-label="Pos.">Pos. ${sortArrow('rank')}</th>

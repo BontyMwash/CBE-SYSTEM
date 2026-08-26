@@ -262,20 +262,23 @@ const UI = {
       // Give a wide table (many subject columns) more room to work
       // with by trimming the on-screen padding/font-size, matching
       // what the print stylesheet already does for @media print.
-      clone.querySelectorAll('table.ledger-table th, table.ledger-table td').forEach(c => {
-        c.style.padding = '5px 12px';
-        c.style.fontSize = '10px';
-        c.style.overflowWrap = 'break-word';
-        // table-layout:fixed (above) forces every column into a narrow,
-        // content-independent width. The base stylesheet still says
-        // `white-space: nowrap` on these cells, so numbers like
-        // "30/150" or "19.2%" that no longer fit their column can't
-        // wrap — they just spill sideways and overlap the next
-        // column's text, which is what made the exported PDF's ranks/
-        // percentages/fractions look garbled and unreadable. Allow
-        // wrapping here, same as the @media print stylesheet already
-        // does for the browser's own Print/Save-as-PDF path.
-        c.style.whiteSpace = 'normal';
+      clone.querySelectorAll('table.ledger-table').forEach(t => {
+        // A table with an explicit <colgroup> (currently just the
+        // broadsheet — see bsColgroupHTML in broadsheet.js) has a
+        // real, guaranteed width reserved for every column, so its
+        // numeric cells can safely stay on one line. Tables without
+        // one fall back to fixed-layout's "split evenly" column
+        // widths, which can genuinely be too narrow for a numeric
+        // value — for those, keep allowing a wrap so content overflows
+        // onto a second line inside its own cell instead of spilling
+        // sideways into the next column and looking like overlap.
+        const hasColgroup = !!t.querySelector('colgroup');
+        t.querySelectorAll('th, td').forEach(c => {
+          c.style.padding = '5px 12px';
+          c.style.fontSize = '10px';
+          c.style.overflowWrap = 'break-word';
+          c.style.whiteSpace = (hasColgroup && c.classList.contains('num')) ? 'nowrap' : 'normal';
+        });
       });
       // Decorative absolutely-positioned stat-card icons/corners can
       // land in the wrong place once flattened out of their on-screen

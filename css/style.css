@@ -1246,6 +1246,8 @@ table.ledger-table .num {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-weight: 400;
+  white-space: nowrap;
+  letter-spacing: normal;
 }
 
 .row-index {
@@ -1623,7 +1625,7 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
    page above, which is why the on-screen "choose Landscape" tip stays. */
 @page broadsheet-page {
   size: landscape;
-  margin: 8mm;
+  margin: 10mm;
 }
 
 /* System-name footer stamped on every printable report/broadsheet —
@@ -1638,6 +1640,10 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
   .main { display: block; }
   .content { padding: 0 !important; }
   body { background: #fff; }
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .ledger-table thead { display: table-header-group; }
 
   /* Squeeze a single student's report card down so it reliably fits
      one printed page — smaller type, tighter spacing throughout —
@@ -1690,6 +1696,21 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
     table-layout: auto;
     font-size: 10px;
   }
+  /* The main broadsheet table gets an explicit <colgroup> (see
+     bsColgroupHTML in broadsheet.js) giving Name real room and every
+     numeric column a guaranteed, consistent share of the page —
+     table-layout:fixed can safely turn those into hard column widths
+     instead of the "split evenly" default it'd fall back to without
+     a colgroup, which is what used to starve Total Marks/Mean % on
+     wide sheets. The other print areas don't have a colgroup yet, so
+     they stay on the more forgiving `auto` layout above. */
+  #bsPrintArea table.ledger-table {
+    table-layout: fixed;
+  }
+  #bsPrintArea table.ledger-table tr {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
   #bsPrintArea table.ledger-table th,
   #bsPrintArea table.ledger-table td,
   #cpPrintArea table.ledger-table th,
@@ -1700,6 +1721,17 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
   #mlPrintArea table.ledger-table td {
     padding: 4px 6px;
     white-space: normal;
+  }
+  /* Numeric cells (ranks, marks, percentages, totals) must never
+     wrap onto a second line — on a printed/exported page that's
+     indistinguishable from overlap. Text cells (Name, Subject) can
+     still wrap if they run long. */
+  #bsPrintArea table.ledger-table .num,
+  #cpPrintArea table.ledger-table .num,
+  #arPrintArea table.ledger-table .num,
+  #mlPrintArea table.ledger-table .num {
+    white-space: nowrap;
+    letter-spacing: normal;
   }
   #bsPrintArea table.ledger-table th:first-child,
   #bsPrintArea table.ledger-table td:first-child,
