@@ -1245,6 +1245,7 @@ table.ledger-table tfoot td {
 table.ledger-table .num {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+  font-weight: 400;
 }
 
 .row-index {

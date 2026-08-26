@@ -2350,7 +2350,7 @@ function renderSingleExamReport(st, scope) {
               <td class="num">${rankMap.get(r.student.id)}</td>
               <td>${UI.esc(r.student.name)}</td>
               <td class="num">${UI.esc(r.student.admissionNo) || '—'}</td>
-              <td class="num">${r.marks === null ? '—' : `${r.marks} / ${exam.totalMarks}`}</td>
+              <td class="num">${r.marks === null ? '—' : `${r.marks}\u00A0/\u00A0${exam.totalMarks}`}</td>
               <td class="num">${r.pct === null ? '—' : r.pct.toFixed(1) + '%'}</td>
               <td>${UI.badge(r.band)}</td>
             </tr>`).join('') || `<tr><td colspan="6" class="row-index">No students in this class.</td></tr>`}

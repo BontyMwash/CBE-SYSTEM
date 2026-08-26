@@ -173,7 +173,7 @@ Views.analysis = async function () {
                       <td class="num">${s.mean === null ? '—' : s.mean.toFixed(1) + '%'}</td>
                       <td class="num">${s.high === null ? '—' : s.high.toFixed(1) + '%'}</td>
                       <td class="num">${s.low === null ? '—' : s.low.toFixed(1) + '%'}</td>
-                      <td class="num">${s.entered} / ${s.expected}</td>
+                      <td class="num">${s.entered}\u00A0/\u00A0${s.expected}</td>
                     </tr>`).join('')}
                   </tbody>
                 </table>
