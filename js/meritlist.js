@@ -49,9 +49,9 @@ Views.meritList = async function () {
       <input type="number" id="mlYear" value="${st.settings.year}" style="width:90px;">
       <select id="mlTopN">
         <option value="10">Top 10</option>
-        <option value="20" selected>Top 20</option>
+        <option value="20">Top 20</option>
         <option value="50">Top 50</option>
-        <option value="all">All ranked</option>
+        <option value="all" selected>All ranked</option>
       </select>
       <input type="text" id="mlSearch" placeholder="Search learner name or adm. no…" style="min-width:200px;">
       <button class="btn" id="mlCsvBtn"><i class="fa-solid fa-download"></i> CSV</button>
