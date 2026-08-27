@@ -555,22 +555,19 @@ Views.broadsheet = async function () {
               <tr>
                 <td colspan="3" style="font-weight:600;">Subject mean</td>
                 ${subjectAverages.map(a => {
-                  const band = a === null ? null : Grading.levelForMarks(a, 100, st.settings.gradingBands);
-                  // Deliberately plain text — no nested <div>/<span>,
-                  // no <br>. Every other cell in this table is plain
-                  // text and has rendered correctly ever since the
-                  // font/width fixes went in; this was the one cell
-                  // built from nested HTML (first a <br>, then a flex
-                  // column) trying to stack the mean and a badge pill,
-                  // and html2canvas has a known, long-standing problem
-                  // measuring nested block/flex layouts inside table
-                  // cells — it kept fusing the two regardless of which
-                  // CSS technique was used to stack them. Putting the
-                  // grade in parentheses on the same line trades the
-                  // little pill styling for a cell that behaves
-                  // exactly like every other (working) cell in the
-                  // table.
-                  return `<td class="num" style="font-weight:600;">${a === null ? '—' : `${a.toFixed(1)}% (${band.code})`}</td>`;
+                  // Just the percentage — no grade code appended.
+                  // Every attempt to combine two pieces of information
+                  // in THIS specific footer cell (badge+<br>, a flex
+                  // column, then parenthetical text) has come out
+                  // garbled in the exported PDF, while a bare number
+                  // in the very next cell (classMean) and a mean+grade
+                  // pair in a two-COLUMN layout elsewhere in this same
+                  // document (the Performance Summary tables) both
+                  // render perfectly. Matching that proven-reliable
+                  // "one simple value per cell" pattern here instead
+                  // of continuing to fight whatever's specific to this
+                  // cell.
+                  return `<td class="num" style="font-weight:600;">${a === null ? '—' : `${a.toFixed(1)}%`}</td>`;
                 }).join('')}
                 <td></td>
                 <td class="num" style="font-weight:600;">${classMean === null ? '—' : classMean.toFixed(1)}</td>
