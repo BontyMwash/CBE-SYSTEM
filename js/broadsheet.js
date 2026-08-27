@@ -890,16 +890,8 @@ Views.broadsheet = async function () {
   document.getElementById('bsPrintBtn').onclick = () => window.print();
   document.getElementById('bsPdfBtn').onclick = (e) => {
     const el = document.getElementById('bsPrintArea');
-    if (!el) { UI.toast('Choose a class and exam type first.'); return; }
-    // The downloadable PDF is just the ranking table followed by the
-    // Grade Performance Summary (Stream / Gender / Subject
-    // breakdowns) — a clean broadsheet document. The on-screen
-    // "Performance analysis" dashboard (stat cards + charts) in
-    // between is left out; it's a screen-only view, not something
-    // meant to be printed as part of the broadsheet.
-    const summaryEl = document.getElementById('bsSummaryArea');
-    const targets = [el, summaryEl].filter(Boolean);
-    UI.downloadPDF(targets, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, { orientation: 'landscape' });
+    if (!el) { UI.toast('Choose a class and exam type first'); return; }
+    UI.downloadPDF(el, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, { orientation: 'landscape' });
   };
   document.getElementById('bsCsvBtn').onclick = () => {
     if (!lastCsv) { UI.toast('Choose a class and exam type first'); return; }
