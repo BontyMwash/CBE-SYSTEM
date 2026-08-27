@@ -556,23 +556,21 @@ Views.broadsheet = async function () {
                 <td colspan="3" style="font-weight:600;">Subject mean</td>
                 ${subjectAverages.map(a => {
                   const band = a === null ? null : Grading.levelForMarks(a, 100, st.settings.gradingBands);
-                  if (a === null) return `<td class="num" style="font-weight:600;">—</td>`;
-                  // Two lines (mean % + grade badge) stacked in one cell.
-                  // A plain `value<br>badge` string relies on html2canvas
-                  // correctly measuring an explicit <br> inside a table
-                  // cell to push the second line down — it doesn't
-                  // reliably do that, and instead draws both lines at
-                  // the same vertical position, which is exactly the
-                  // "number fused with badge" look this row kept
-                  // showing. A flex column with a real gap gives both
-                  // lines their own box, which html2canvas lays out
-                  // like any other block content.
-                  return `<td class="num" style="font-weight:600;">
-                    <div style="display:flex; flex-direction:column; align-items:center; gap:3px; line-height:1.3;">
-                      <span>${a.toFixed(1)}%</span>
-                      ${UI.badge(band)}
-                    </div>
-                  </td>`;
+                  // Deliberately plain text — no nested <div>/<span>,
+                  // no <br>. Every other cell in this table is plain
+                  // text and has rendered correctly ever since the
+                  // font/width fixes went in; this was the one cell
+                  // built from nested HTML (first a <br>, then a flex
+                  // column) trying to stack the mean and a badge pill,
+                  // and html2canvas has a known, long-standing problem
+                  // measuring nested block/flex layouts inside table
+                  // cells — it kept fusing the two regardless of which
+                  // CSS technique was used to stack them. Putting the
+                  // grade in parentheses on the same line trades the
+                  // little pill styling for a cell that behaves
+                  // exactly like every other (working) cell in the
+                  // table.
+                  return `<td class="num" style="font-weight:600;">${a === null ? '—' : `${a.toFixed(1)}% (${band.code})`}</td>`;
                 }).join('')}
                 <td></td>
                 <td class="num" style="font-weight:600;">${classMean === null ? '—' : classMean.toFixed(1)}</td>
