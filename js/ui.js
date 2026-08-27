@@ -233,6 +233,38 @@ const UI = {
       const clone = el.cloneNode(true);
       clone.querySelectorAll('.no-print').forEach(n => n.remove());
 
+      // Give the export the SAME column proportions the browser
+      // already chose on screen (its normal, content-aware
+      // table-layout:auto pass) instead of guessing fresh widths for
+      // table-layout:fixed. We measure each header cell's rendered
+      // width on the live, still-on-screen table, then bake those
+      // proportions into an explicit <colgroup> on the clone before
+      // switching it to fixed layout below — so the exported columns
+      // end up exactly as wide, relative to each other, as what was
+      // on screen a moment ago. This is what actually keeps the PDF
+      // matching the browser view, rather than an independent (and
+      // sometimes too-narrow) guess at what each column needs.
+      const sourceTables = el.querySelectorAll('table.ledger-table');
+      const cloneTables = clone.querySelectorAll('table.ledger-table');
+      sourceTables.forEach((srcT, ti) => {
+        const cloneT = cloneTables[ti];
+        const headerRow = srcT.querySelector('thead tr');
+        if (!cloneT || !headerRow) return;
+        const ths = Array.from(headerRow.children);
+        const widths = ths.map(th => th.getBoundingClientRect().width);
+        const total = widths.reduce((a, b) => a + b, 0);
+        if (!ths.length || !total) return;
+        const oldColgroup = cloneT.querySelector('colgroup');
+        if (oldColgroup) oldColgroup.remove();
+        const colgroup = document.createElement('colgroup');
+        widths.forEach(w => {
+          const col = document.createElement('col');
+          col.style.width = (w / total * 100) + '%';
+          colgroup.appendChild(col);
+        });
+        cloneT.insertBefore(colgroup, cloneT.firstChild);
+      });
+
       // Un-clip any horizontally-scrolling ledger/table boxes so the
       // whole width is captured, not just the visible scroll window.
       clone.querySelectorAll('.ledger-scroll, .ledger-scroll-y').forEach(sc => {
@@ -263,21 +295,15 @@ const UI = {
       // with by trimming the on-screen padding/font-size, matching
       // what the print stylesheet already does for @media print.
       clone.querySelectorAll('table.ledger-table').forEach(t => {
-        // A table with an explicit <colgroup> (currently just the
-        // broadsheet — see bsColgroupHTML in broadsheet.js) has a
-        // real, guaranteed width reserved for every column, so its
-        // numeric cells can safely stay on one line. Tables without
-        // one fall back to fixed-layout's "split evenly" column
-        // widths, which can genuinely be too narrow for a numeric
-        // value — for those, keep allowing a wrap so content overflows
-        // onto a second line inside its own cell instead of spilling
-        // sideways into the next column and looking like overlap.
-        const hasColgroup = !!t.querySelector('colgroup');
+        // Every table now carries a measured <colgroup> (see above),
+        // so every column has a real, guaranteed share of the page
+        // width — numeric cells can safely stay on one line rather
+        // than wrapping, matching how they render on screen.
         t.querySelectorAll('th, td').forEach(c => {
           c.style.padding = '5px 12px';
           c.style.fontSize = '10px';
           c.style.overflowWrap = 'break-word';
-          c.style.whiteSpace = (hasColgroup && c.classList.contains('num')) ? 'nowrap' : 'normal';
+          c.style.whiteSpace = c.classList.contains('num') ? 'nowrap' : 'normal';
         });
       });
       // Decorative absolutely-positioned stat-card icons/corners can
