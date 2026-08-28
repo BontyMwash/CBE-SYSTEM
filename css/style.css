@@ -1387,6 +1387,94 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
   text-align: right;
 }
 
+/* ---------- Marks entry screen ---------- */
+
+.marks-entry .total-marks-bar {
+  margin-bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  border-left: 4px solid var(--brass, #b8863b);
+}
+
+.marks-entry .total-marks-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: rgba(184,134,59,0.12);
+  color: var(--brass, #b8863b);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  flex-shrink: 0;
+}
+
+.marks-entry .total-marks-bar .field label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-soft);
+  font-weight: 700;
+}
+
+.marks-entry .total-marks-bar .mark-input {
+  text-align: center;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.marks-entry table.ledger-table tbody tr:nth-child(even) {
+  background: var(--paper-line-soft, rgba(0,0,0,0.015));
+}
+
+.marks-entry table.ledger-table tbody tr:hover {
+  background: rgba(55,69,166,0.06);
+}
+
+.marks-entry table.ledger-table tbody tr:hover .mark-input[data-student] {
+  border-color: var(--primary, #3745a6);
+}
+
+.marks-entry table.ledger-table .mark-input[data-student] {
+  width: 90px;
+  padding: 8px 10px;
+  font-size: 15px;
+  font-weight: 600;
+  text-align: center;
+  border-radius: 8px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.marks-entry table.ledger-table .mark-input[data-student]:focus {
+  border-color: var(--primary, #3745a6);
+  box-shadow: 0 0 0 3px rgba(55,69,166,0.14);
+  background: #fff;
+}
+
+.marks-entry table.ledger-table .mark-input[data-student].filled:not(:focus) {
+  background: rgba(46,138,86,0.06);
+  border-color: rgba(46,138,86,0.35);
+}
+
+.marks-entry table.ledger-table .mark-input[data-student]:disabled {
+  background: var(--paper-line-soft, #f2f2f2);
+  color: var(--ink-faint);
+}
+
+.marks-entry table.ledger-table .levelCell {
+  text-align: center;
+}
+
+.marks-entry table.ledger-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+
 .mark-input-compact {
   width: 56px;
   font-family: var(--font-mono);

@@ -1976,7 +1976,8 @@ Views.results = async function () {
     const locked = isLocked(exam);
     return `
       ${locked ? `<div class="card" style="margin-bottom:16px; border-color:var(--warn, #c77b1a);"><strong><i class="fa-solid fa-lock"></i> This sitting is published and locked.</strong> <span class="field-hint" style="margin:0;">Marks can't be changed while results are published — unpublish this sitting from the Analysis page first if you need to correct something.</span></div>` : ''}
-      <div class="card" style="margin-bottom:16px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+      <div class="card total-marks-bar">
+        <div class="total-marks-icon"><i class="fa-solid fa-clipboard-check"></i></div>
         <div class="field" style="margin:0;">
           <label>Total marks for this subject (out of)</label>
           <input type="number" min="1" id="totalMarksInput" class="mark-input" style="width:100px;" value="${exam.totalMarks}" ${locked ? 'disabled' : ''}>
@@ -2006,7 +2007,7 @@ Views.results = async function () {
       <div class="ledger">
         <div class="ledger-scroll">
           <table class="ledger-table">
-            <thead><tr><th>#</th><th>Name</th><th>ADM NO.</th><th>Marks (/${exam.totalMarks})</th><th>Level</th></tr></thead>
+            <thead><tr><th>#</th><th>Name</th><th>ADM NO.</th><th style="text-align:center;">Marks (/${exam.totalMarks})</th><th style="text-align:center;">Level</th></tr></thead>
             <tbody>
               ${students.map((s, i) => {
                 const res = findResult(exam.id, s.id);
@@ -2016,7 +2017,7 @@ Views.results = async function () {
                   <td class="row-index">${i + 1}</td>
                   <td>${UI.esc(s.name)}</td>
                   <td class="num">${UI.esc(s.admissionNo) || '—'}</td>
-                  <td><input type="number" class="mark-input" min="0" max="${exam.totalMarks}" data-student="${s.id}" value="${marks}" ${locked ? 'disabled' : ''}></td>
+                  <td style="text-align:center;"><input type="number" class="mark-input${marks !== '' ? ' filled' : ''}" min="0" max="${exam.totalMarks}" data-student="${s.id}" value="${marks}" placeholder="—" ${locked ? 'disabled' : ''}></td>
                   <td class="levelCell" data-level-for="${s.id}">${UI.badge(band)}</td>
                 </tr>`;
               }).join('')}
@@ -2037,6 +2038,7 @@ Views.results = async function () {
           v = Math.max(0, Math.min(Number(exam.totalMarks), Number(v)));
           input.value = v;
         }
+        input.classList.toggle('filled', v !== '');
         const studentId = input.dataset.student;
 
         // Optimistic UI: show the new badge immediately from the value
@@ -2089,10 +2091,12 @@ Views.results = async function () {
 
   App.state.selectedExamId = selectedId;
   document.getElementById('content').innerHTML = `
-    ${renderPicker()}
-    <div id="totalMarksBarWrap">${renderTotalMarksBar(selectedId)}</div>
-    <p class="field-hint" style="margin-bottom:14px;">Marks save automatically as you type. Leave blank for a student who did not sit the exam.</p>
-    <div id="gridWrap">${renderGrid(selectedId)}</div>
+    <div class="marks-entry">
+      ${renderPicker()}
+      <div id="totalMarksBarWrap">${renderTotalMarksBar(selectedId)}</div>
+      <p class="field-hint" style="margin-bottom:14px;">Marks save automatically as you type. Leave blank for a student who did not sit the exam.</p>
+      <div id="gridWrap">${renderGrid(selectedId)}</div>
+    </div>
   `;
 
   wirePicker();
