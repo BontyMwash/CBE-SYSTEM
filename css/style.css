@@ -1689,6 +1689,7 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
     text-align: left;
     gap: 10px;
   }
+  .print-footer.print-footer-split .pf-left { text-align: left; white-space: nowrap; font-weight: 600; }
   .print-footer.print-footer-split .pf-center { flex: 1; text-align: center; font-style: italic; }
   .print-footer.print-footer-split .pf-right { text-align: right; white-space: nowrap; font-weight: 600; }
 

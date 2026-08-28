@@ -59,30 +59,31 @@ function bsColgroupHTML(subjectCount) {
 }
 
 // The broadsheet's own footer, deliberately different from every
-// other report's plain centred buildPrintFooterHTML(): the school's
-// motto centred, and the system name on the right — no copyright
-// line. Shared between the browser's own Print / Save as PDF (as
-// plain HTML, styled by .print-footer-split in @media print) and the
-// one-click Download PDF button (as the { footer } option handed to
-// UI.downloadPDF, which stamps the equivalent text directly via
-// jsPDF — see bsFooterOpts below).
+// other report's plain centred buildPrintFooterHTML(): just the
+// system name — no motto (already shown once in the masthead at the
+// top of the report, see buildReportMastheadHTML in views.js), no
+// copyright line. Shared between the browser's own Print / Save as
+// PDF (as plain HTML, styled by .print-footer-split in @media print)
+// and the one-click Download PDF button (as the { footer } option
+// handed to UI.downloadPDF, which stamps the equivalent text directly
+// via jsPDF — see bsFooterOpts below).
 function buildBroadsheetFooterHTML(st) {
-  const motto = (st.settings.motto || '').trim();
   return `
     <div class="print-footer print-footer-split">
-      <span class="pf-left"></span>
-      <span class="pf-center">${motto ? UI.esc(motto) : ''}</span>
-      <span class="pf-right">B~CBE Analytics</span>
+      <span class="pf-left">B~CBE Analytics</span>
+      <span class="pf-center"></span>
+      <span class="pf-right"></span>
     </div>
   `;
 }
 // bsFooterOpts feeds the one-click Download PDF button (via the jsPDF
-// stamp — see UI.downloadPDF/_stampPdfFooter in ui.js): the system
-// name on the left, the school's motto centred — no copyright line.
-// Kept separate from buildBroadsheetFooterHTML below (used by the
-// browser's own Print / Save as PDF instead).
+// stamp — see UI.downloadPDF/_stampPdfFooter in ui.js): just the
+// system name on the left — no copyright line. The school's motto
+// already appears once, up in the masthead at the top of the report
+// (see buildReportMastheadHTML in views.js), so it isn't repeated
+// down here in the footer too.
 function bsFooterOpts(st) {
-  return { left: 'B~CBE Analytics', center: (st.settings.motto || '').trim() };
+  return { left: 'B~CBE Analytics' };
 }
 
 Views.broadsheet = async function () {
