@@ -77,13 +77,12 @@ function buildBroadsheetFooterHTML(st) {
   `;
 }
 // bsFooterOpts feeds the one-click Download PDF button (via the jsPDF
-// stamp — see UI.downloadPDF/_stampPdfFooter in ui.js): just the
-// system name on the right, no motto, no copyright line. Kept
-// separate from buildBroadsheetFooterHTML below (used by the
-// browser's own Print / Save as PDF instead), which still shows the
-// motto centred.
+// stamp — see UI.downloadPDF/_stampPdfFooter in ui.js): the system
+// name on the left, the school's motto centred — no copyright line.
+// Kept separate from buildBroadsheetFooterHTML below (used by the
+// browser's own Print / Save as PDF instead).
 function bsFooterOpts(st) {
-  return { right: 'B~CBE Analytics' };
+  return { left: 'B~CBE Analytics', center: (st.settings.motto || '').trim() };
 }
 
 Views.broadsheet = async function () {
