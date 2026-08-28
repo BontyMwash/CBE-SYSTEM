@@ -181,13 +181,29 @@ const UI = {
   // lay out content at exactly the pixel width html2pdf will actually
   // capture (see below), instead of guessing.
   _PDF_MARGIN_MM: 8,
+  // Extra room reserved at the very bottom of every page, on top of
+  // _PDF_MARGIN_MM, so the repeating copyright footer (stamped in
+  // afterward via the raw jsPDF API — see downloadPDF below) always
+  // lands in clear space below the last row of content instead of
+  // overlapping it. html2pdf.js is told about this via an asymmetric
+  // margin array ([top, left, bottom, right]), which is what actually
+  // shrinks the per-page content height it paginates against.
+  _PDF_FOOTER_RESERVE_MM: 8,
   _PDF_FORMAT_MM: { a4: { w: 210, h: 297 } },
+
+  // [top, left, bottom, right] margin array handed to html2pdf.js —
+  // bottom gets the extra footer allowance, the other three stay at
+  // the base margin.
+  _pdfMarginArray() {
+    const m = UI._PDF_MARGIN_MM;
+    return [m, m, m + UI._PDF_FOOTER_RESERVE_MM, m];
+  },
 
   // html2pdf.js renders/captures the source element at a CSS pixel
   // width equal to the PDF page's content width (page width minus
-  // margins, converted at 96dpi) — it does this internally to slice
-  // one continuous capture into pages by height, and it does this
-  // REGARDLESS of any windowWidth/width override passed to
+  // left/right margins, converted at 96dpi) — it does this internally
+  // to slice one continuous capture into pages by height, and it does
+  // this REGARDLESS of any windowWidth/width override passed to
   // html2canvas. If the element we hand it is laid out wider than
   // that (which the old fixed 1500/1050px trick did), the capture
   // simply crops off whatever falls outside that centered window —
@@ -199,6 +215,23 @@ const UI = {
     const pageWidthMm = orientation === 'landscape' ? mm.h : mm.w;
     const contentWidthMm = pageWidthMm - (UI._PDF_MARGIN_MM * 2);
     return Math.round((contentWidthMm / 25.4) * 96);
+  },
+
+  // Page content HEIGHT in px at the same 96dpi convention as the
+  // width helper above, using the FULL bottom-margin allowance (base
+  // margin + footer reserve). html2pdf paginates a tall capture by
+  // slicing it into chunks this tall; if a table row's rendered
+  // height straddles one of those slice boundaries it gets sliced
+  // physically in half — the "cut content" artefact. We can't stop
+  // html2pdf slicing mid-row from px math alone, so _buildPdfWrap
+  // additionally marks every row page-break-avoid (see below); this
+  // height is used there just to warn/avoid pathological single rows
+  // taller than a whole page.
+  _pdfPageContentHeightPx(orientation, format) {
+    const mm = UI._PDF_FORMAT_MM[format] || UI._PDF_FORMAT_MM.a4;
+    const pageHeightMm = orientation === 'landscape' ? mm.w : mm.h;
+    const contentHeightMm = pageHeightMm - UI._PDF_MARGIN_MM - (UI._PDF_MARGIN_MM + UI._PDF_FOOTER_RESERVE_MM);
+    return Math.round((contentHeightMm / 25.4) * 96);
   },
 
   // Builds the off-screen container itself: ledger scroll boxes are
@@ -290,6 +323,24 @@ const UI = {
         // long cell content wraps instead of pushing the table wider
         // than the page can show.
         t.style.tableLayout = 'fixed';
+      });
+      // html2pdf's 'css' pagebreak mode looks for CSS break-inside
+      // rules directly on the DOM it's about to capture — it does NOT
+      // know about the app's @media print stylesheet (html2canvas
+      // renders using normal screen styles), so without this every
+      // row was a candidate to get physically sliced in half wherever
+      // it happened to straddle a page boundary. Setting it inline,
+      // here, on the actual offscreen clone is what makes html2pdf
+      // push a row that would be cut onto the next page whole instead.
+      clone.querySelectorAll('table.ledger-table tr').forEach(tr => {
+        tr.style.pageBreakInside = 'avoid';
+        tr.style.breakInside = 'avoid';
+      });
+      // Keep the header glued to whichever page its table starts on
+      // (harmless — it's already always at the top of its own table).
+      clone.querySelectorAll('table.ledger-table thead').forEach(th => {
+        th.style.pageBreakAfter = 'avoid';
+        th.style.breakAfter = 'avoid';
       });
       // Give a wide table (many subject columns) more room to work
       // with by trimming the on-screen padding/font-size, matching
@@ -384,18 +435,47 @@ const UI = {
     try {
       await UI._waitForPdfFonts();
       await html2pdf().set({
-        margin: UI._PDF_MARGIN_MM,
+        margin: UI._pdfMarginArray(),
         filename: filename.endsWith('.pdf') ? filename : `${filename}.pdf`,
         html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
         jsPDF: { unit: 'mm', format, orientation },
         pagebreak: { mode: ['css', 'legacy'] }
-      }).from(wrap).save();
+      }).from(wrap).toPdf().get('pdf').then(UI._stampPdfFooter).save();
     } catch (e) {
       UI.toast('Could not generate PDF: ' + e.message);
     } finally {
       UI._removePdfWrap(wrap);
       if (btn) { btn.disabled = false; btn.innerHTML = originalLabel; }
     }
+  },
+
+  // Stamps the same small "Generated by B~CBE Analytics…" copyright
+  // line already used on printed pages (see buildPrintFooterHTML in
+  // views.js) onto the BOTTOM of every page of a generated PDF, using
+  // jsPDF's own text/line API directly rather than anything captured
+  // by html2canvas — that's what makes it repeat correctly once per
+  // page instead of just once at the end of the last one. Runs as a
+  // .toPdf() hook, after pagination has already happened but before
+  // the file is saved, so UI._PDF_FOOTER_RESERVE_MM worth of clear
+  // space is guaranteed to be waiting for it at the bottom of each
+  // page already.
+  _stampPdfFooter(pdf) {
+    const pageCount = pdf.internal.getNumberOfPages();
+    const { width: pw, height: ph } = pdf.internal.pageSize;
+    const line = `Generated by B~CBE Analytics  \u00b7  ${new Date().toLocaleDateString()}  \u00b7  \u00a9 ${new Date().getFullYear()} B~CBE Analytics. All rights reserved.`;
+    for (let i = 1; i <= pageCount; i++) {
+      pdf.setPage(i);
+      const y = ph - (UI._PDF_MARGIN_MM + UI._PDF_FOOTER_RESERVE_MM / 2);
+      pdf.setDrawColor(200);
+      pdf.setLineWidth(0.2);
+      pdf.line(UI._PDF_MARGIN_MM, y - 2.5, pw - UI._PDF_MARGIN_MM, y - 2.5);
+      pdf.setFont(undefined, 'normal');
+      pdf.setFontSize(7.5);
+      pdf.setTextColor(120, 120, 120);
+      pdf.text(line, pw / 2, y + 1.5, { align: 'center' });
+      pdf.setTextColor(0, 0, 0);
+    }
+    return pdf;
   },
 
   // Same as downloadPDF, but returns the PDF as a Blob instead of
@@ -411,11 +491,11 @@ const UI = {
     try {
       await UI._waitForPdfFonts();
       return await html2pdf().set({
-        margin: UI._PDF_MARGIN_MM,
+        margin: UI._pdfMarginArray(),
         html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
         jsPDF: { unit: 'mm', format, orientation },
         pagebreak: { mode: ['css', 'legacy'] }
-      }).from(wrap).outputPdf('blob');
+      }).from(wrap).toPdf().get('pdf').then(UI._stampPdfFooter).outputPdf('blob');
     } finally {
       UI._removePdfWrap(wrap);
     }

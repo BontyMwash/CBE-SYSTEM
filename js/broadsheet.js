@@ -891,13 +891,7 @@ Views.broadsheet = async function () {
   document.getElementById('bsPdfBtn').onclick = (e) => {
     const main = document.getElementById('bsPrintArea');
     if (!main) { UI.toast('Choose a class and exam type first'); return; }
-    // Performance Summary (Stream / Gender / Subject breakdown) is only
-    // populated when there's a grade to summarize — tack it on as a
-    // second page below the broadsheet table itself when present,
-    // same as the browser's own Print / Save as PDF already shows it.
-    const summary = document.getElementById('bsSummaryArea');
-    const targets = summary && summary.children.length > 0 ? [main, summary] : main;
-    UI.downloadPDF(targets, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, { orientation: 'landscape' });
+    UI.downloadPDF(main, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, { orientation: 'landscape' });
   };
   document.getElementById('bsCsvBtn').onclick = () => {
     if (!lastCsv) { UI.toast('Choose a class and exam type first'); return; }
