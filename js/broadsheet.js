@@ -76,8 +76,14 @@ function buildBroadsheetFooterHTML(st) {
     </div>
   `;
 }
+// bsFooterOpts feeds the one-click Download PDF button (via the jsPDF
+// stamp — see UI.downloadPDF/_stampPdfFooter in ui.js): just the
+// system name on the right, no motto, no copyright line. Kept
+// separate from buildBroadsheetFooterHTML below (used by the
+// browser's own Print / Save as PDF instead), which still shows the
+// motto centred.
 function bsFooterOpts(st) {
-  return { center: (st.settings.motto || '').trim(), right: 'B~CBE Analytics' };
+  return { right: 'B~CBE Analytics' };
 }
 
 Views.broadsheet = async function () {
