@@ -249,12 +249,12 @@ Views.notify = async function () {
       </div>
       <div class="card no-print" id="ntBulkBar" style="margin-bottom:14px; display:${selectedCount ? 'flex' : 'none'}; gap:8px; flex-wrap:wrap; align-items:center;">
         <strong style="font-size:13.5px;">Bulk send to ${selectedCount} parent${selectedCount === 1 ? '' : 's'}:</strong>
+        <button class="btn btn-sm btn-brass" id="ntBulkSmsSystem"><i class="fa-solid fa-server"></i> SMS — send to all at once</button>
         <button class="btn btn-sm btn-primary" id="ntBulkWhatsApp"><i class="fa-brands fa-whatsapp"></i> WhatsApp</button>
-        <button class="btn btn-sm btn-primary" id="ntBulkSms"><i class="fa-solid fa-comment-sms"></i> SMS (my phone)</button>
-        <button class="btn btn-sm btn-primary" id="ntBulkSmsSystem"><i class="fa-solid fa-server"></i> SMS (system)</button>
+        <button class="btn btn-sm btn-primary" id="ntBulkSms"><i class="fa-solid fa-comment-sms"></i> SMS — one at a time (my phone)</button>
         <button class="btn btn-sm btn-primary" id="ntBulkEmail"><i class="fa-solid fa-envelope"></i> Email</button>
         <button class="btn btn-sm btn-ghost" id="ntBulkMarkSent">Mark all as sent (no message)</button>
-        <p class="field-hint" style="margin:4px 0 0 0; width:100%;">WhatsApp/SMS/Email open one at a time so your browser doesn't block the pop-ups — confirm each send and it moves to the next automatically. "SMS (system)" sends straight from the school's own SMS gateway, in one batch, without using your phone.</p>
+        <p class="field-hint" style="margin:4px 0 0 0; width:100%;"><strong>SMS — send to all at once</strong> fires straight from the school's own SMS gateway in a single batch — nothing to tap through. WhatsApp, Email, and the "one at a time" SMS option instead open your phone's own app once per parent (a browser/OS limit on outgoing messages, not something this app can batch) — confirm each and it moves to the next automatically.</p>
       </div>
       ${rows.length === 0 ? `<div class="empty"><div class="empty-title">No students match</div></div>` : `
       <div class="ledger">
@@ -522,10 +522,25 @@ Views.notify = async function () {
             return;
           } catch (e) { /* user cancelled the share sheet, or it's unsupported here — fall through to a plain download */ }
         }
-        const a = document.createElement('a');
-        a.href = report.url; a.download = filename;
-        document.body.appendChild(a); a.click(); document.body.removeChild(a);
-        paint(); // refresh so the row picks up the newly-cached PDF blob
+        // Mobile browsers — Safari on iOS especially, and most in-app
+        // browsers (WhatsApp/Messenger/Instagram webviews) — silently
+        // ignore the `download` attribute on a blob: URL for PDFs: the
+        // click does nothing visible at all, which combined with the
+        // list re-rendering right after used to make the whole button
+        // just "generate and disappear" with no result. Opening the
+        // blob URL in a new tab instead is what actually works
+        // everywhere: desktop browsers download or preview it as
+        // normal, and mobile browsers show the PDF with their own
+        // native Share/Save button for the person to attach it from.
+        const opened = window.open(report.url, '_blank');
+        if (!opened) {
+          // Pop-up blocked — fall back to the plain anchor download,
+          // which at least works on desktop browsers.
+          const a = document.createElement('a');
+          a.href = report.url; a.download = filename;
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        }
+        UI.toast('Report ready — use Share/Save from the PDF to attach it.');
       };
     });
 

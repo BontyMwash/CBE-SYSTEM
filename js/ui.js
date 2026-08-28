@@ -252,6 +252,32 @@ const UI = {
     // and doesn't affect the child's own measured layout geometry.
     wrap.style.background = '#fff';
     wrap.style.width = vw + 'px';
+    // Printed/downloaded reports must always render in the LIGHT
+    // palette, regardless of whether the app itself is currently in
+    // dark mode (html[data-theme="dark"] — see :root overrides at the
+    // top of this file). CSS custom properties are just inherited
+    // values, so without this, a clone captured while dark mode is on
+    // would still resolve --ink/--paper-raised/--chalkboard etc. to
+    // their light-on-dark values from that cascade, even though we
+    // separately force the OUTER canvas background to white above —
+    // producing exactly the "washed out, barely readable" mismatch
+    // (light text sized for a dark card, landing on a white page)
+    // reported when someone downloads a PDF while dark mode is on.
+    // Re-declaring the same tokens :root defines for light mode here,
+    // directly on the wrap, overrides that inherited cascade for
+    // everything inside it, independent of the live page's theme.
+    const LIGHT_THEME_VARS = {
+      '--paper': '#F8FAFC', '--paper-raised': '#FFFFFF',
+      '--ink': '#1E293B', '--ink-soft': '#5B6478', '--ink-faint': '#8A91A8',
+      '--chalkboard': '#171B3A', '--chalkboard-light': '#232963', '--chalkboard-lighter': '#4F46E5',
+      '--paper-line': '#E2E8F0', '--paper-line-soft': '#EEF2F8',
+      '--danger-bg': '#FDECEB', '--ok-bg': '#E9F7EF',
+      '--shadow-card': '0 1px 2px rgba(30,41,59,0.04), 0 8px 24px rgba(30,41,59,0.06)',
+      '--shadow-card-hover': '0 4px 10px rgba(30,41,59,0.06), 0 16px 40px rgba(79,70,229,0.14)',
+      '--shadow-pop': '0 24px 64px rgba(30,41,59,0.22)',
+      '--glass-bg': 'rgba(255,255,255,0.7)', '--glass-border': 'rgba(255,255,255,0.4)',
+    };
+    Object.entries(LIGHT_THEME_VARS).forEach(([k, v]) => wrap.style.setProperty(k, v));
 
     const hideBox = document.createElement('div');
     hideBox.style.position = 'fixed';
