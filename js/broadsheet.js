@@ -58,6 +58,28 @@ function bsColgroupHTML(subjectCount) {
   return `<colgroup>${cols.join('')}</colgroup>`;
 }
 
+// The broadsheet's own footer, deliberately different from every
+// other report's plain centred buildPrintFooterHTML(): the school's
+// motto centred, and the system name on the right — no copyright
+// line. Shared between the browser's own Print / Save as PDF (as
+// plain HTML, styled by .print-footer-split in @media print) and the
+// one-click Download PDF button (as the { footer } option handed to
+// UI.downloadPDF, which stamps the equivalent text directly via
+// jsPDF — see bsFooterOpts below).
+function buildBroadsheetFooterHTML(st) {
+  const motto = (st.settings.motto || '').trim();
+  return `
+    <div class="print-footer print-footer-split">
+      <span class="pf-left"></span>
+      <span class="pf-center">${motto ? UI.esc(motto) : ''}</span>
+      <span class="pf-right">B~CBE Analytics</span>
+    </div>
+  `;
+}
+function bsFooterOpts(st) {
+  return { center: (st.settings.motto || '').trim(), right: 'B~CBE Analytics' };
+}
+
 Views.broadsheet = async function () {
   setTopbarActions('');
   showLoading();
@@ -248,6 +270,7 @@ Views.broadsheet = async function () {
     });
     const classMean = Grading.average(rows.map(r => r.meanPct).filter(v => v !== null));
     const classMeanPoints = Grading.average(rowsExtra.map(r => r.points).filter(v => v !== null));
+    const classMeanBand = classMean === null ? null : Grading.levelForMarks(classMean, 100, st.settings.gradingBands);
 
     /* ---- Subject performance: mean/high/low/entries for each
        subject sat, so a teacher/admin can see which subjects are
@@ -414,7 +437,7 @@ Views.broadsheet = async function () {
         <td class="num">${r.entry}</td>
         ${orderedBandCodes.map(code => `<td class="num">${r.bandCounts[code] || 0}</td>`).join('')}
         <td class="num">${r.z}</td>
-        <td class="num">${r.mean === null ? '—' : r.mean.toFixed(1) + '%'}</td>
+        <td class="num">${r.mean === null ? '—' : r.mean.toFixed(1)}</td>
         <td>${UI.badge(r.grade)}</td>
         ${showTeacher ? `<td>${UI.esc(r.teacherName) || '—'}</td>` : ''}
       </tr>`;
@@ -431,7 +454,7 @@ Views.broadsheet = async function () {
                 <th>Entry</th>
                 ${orderedBandCodes.map(code => `<th>${UI.esc(code)}</th>`).join('')}
                 <th title="Learners with no marks entered at all for this sitting — counted in Entry and Z, excluded from Mean">Z</th>
-                <th>Mean</th>
+                <th>Mean Point</th>
                 <th>Grade</th>
                 ${showTeacher ? '<th>Class Teacher</th>' : ''}
               </tr></thead>
@@ -572,12 +595,12 @@ Views.broadsheet = async function () {
                 <td></td>
                 <td class="num" style="font-weight:600;">${classMean === null ? '—' : classMean.toFixed(1)}</td>
                 <td class="num" style="font-weight:600;">${classMeanPoints === null ? '—' : classMeanPoints.toFixed(1)}</td>
-                <td></td>
+                <td>${classMeanBand ? UI.badge(classMeanBand) : ''}</td>
               </tr>
             </tfoot>
           </table>
         </div>
-        ${buildPrintFooterHTML()}
+        ${buildBroadsheetFooterHTML(st)}
       </div>
       <p class="field-hint no-print" style="margin-top:10px;">
         ${UI.esc(klass)} &middot; ${UI.esc(type)} &middot; ${UI.esc(term)} ${UI.esc(year)} &middot;
@@ -690,7 +713,7 @@ Views.broadsheet = async function () {
           ${summaryTableHtml('Gender', genderSummary)}
           <div class="section-title">Subject</div>
           ${summaryTableHtml('Subject', [...subjectSummary, overallSummary])}
-          <p class="field-hint no-print" style="margin:0;">Z is this system's "no marks entered" count for the sitting — counted in Entry, but excluded from each group's points-based Mean.</p>
+          <p class="field-hint no-print" style="margin:0;">Z is this system's "no marks entered" count for the sitting — counted in Entry, but excluded from each group's Mean Point.</p>
         `}
       </div>
     `;
@@ -891,7 +914,7 @@ Views.broadsheet = async function () {
   document.getElementById('bsPdfBtn').onclick = (e) => {
     const main = document.getElementById('bsPrintArea');
     if (!main) { UI.toast('Choose a class and exam type first'); return; }
-    UI.downloadPDF(main, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, { orientation: 'landscape' });
+    UI.downloadPDF(main, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, { orientation: 'landscape', footer: bsFooterOpts(st) });
   };
   document.getElementById('bsCsvBtn').onclick = () => {
     if (!lastCsv) { UI.toast('Choose a class and exam type first'); return; }

@@ -38,7 +38,7 @@ const Store = {
   }),
   _mapPublished: (r) => ({ id: r.id, klass: r.klass, type: r.type, term: r.term, year: r.year, publishedAt: r.published_at, publishedBy: r.published_by }),
   _mapSchoolSettings: (r) => ({
-    schoolName: r.name, motto: r.motto || '', term: r.term, year: r.year, gradingBands: r.grading_bands,
+    schoolName: r.name, schoolCode: r.code || '', motto: r.motto || '', term: r.term, year: r.year, gradingBands: r.grading_bands,
     frozen: !!r.frozen, frozenAt: r.frozen_at || null, frozenReason: r.frozen_reason || '', headName: r.head_name || ''
   }),
 
@@ -51,7 +51,7 @@ const Store = {
     const schoolId = this.activeSchoolId;
     if (!schoolId) {
       return {
-        settings: { schoolName: '', motto: '', term: 'Term 1', year: new Date().getFullYear(), gradingBands: [], headName: '' },
+        settings: { schoolName: '', schoolCode: '', motto: '', term: 'Term 1', year: new Date().getFullYear(), gradingBands: [], headName: '' },
         classes: [], students: [], subjects: [], examTypes: [], exams: [], results: [], teacherSubjects: [], teacherClasses: [], published: []
       };
     }
@@ -152,7 +152,7 @@ const Store = {
   async listUsersForSchool(schoolId) {
     const { data, error } = await supabase.from('profiles').select('*').eq('school_id', schoolId).order('name');
     this._throwIfError('list users', error);
-    return data.map(u => ({ id: u.id, name: u.name, role: u.role, schoolId: u.school_id, sectionScope: u.section_scope || '' }));
+    return data.map(u => ({ id: u.id, name: u.name, role: u.role, schoolId: u.school_id, sectionScope: u.section_scope || '', createdAt: u.created_at || null }));
   },
   // Creating/deleting logins and resetting other people's passwords go
   // through Auth.manageUser(...) (calls the manage-user Edge Function)
@@ -390,6 +390,7 @@ const Store = {
   async updateSettings(patch) {
     const dbPatch = {};
     if (patch.schoolName !== undefined) dbPatch.name = patch.schoolName;
+    if (patch.schoolCode !== undefined) dbPatch.code = patch.schoolCode;
     if (patch.motto !== undefined) dbPatch.motto = patch.motto;
     if (patch.term !== undefined) dbPatch.term = patch.term;
     if (patch.year !== undefined) dbPatch.year = patch.year;

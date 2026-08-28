@@ -100,9 +100,10 @@ function buildPrintFooterHTML() {
 }
 
 function buildReportMastheadHTML(st, titleText, reportLabel, term, year) {
+  const schoolCode = (st.settings.schoolCode || '').trim();
   return `
     <div class="report-title-band">
-      <h2>${UI.esc(st.settings.schoolName)}</h2>
+      <h2>${UI.esc(st.settings.schoolName)}${schoolCode ? ` <span class="report-title-code">(${UI.esc(schoolCode)})</span>` : ''}</h2>
       ${st.settings.motto ? `<span class="report-title-motto">${UI.esc(st.settings.motto)}</span>` : ''}
       <span class="report-title-sub">${UI.esc(titleText)} &middot; ${UI.esc(reportLabel)} &middot; ${UI.esc(term)} ${UI.esc(year)}</span>
     </div>
@@ -2640,6 +2641,11 @@ Views.settings = async function () {
             <input type="text" id="s_name" value="${UI.esc(st.settings.schoolName)}">
           </div>
           <div class="field full">
+            <label>School code</label>
+            <input type="text" id="s_code" value="${UI.esc(st.settings.schoolCode || '')}" placeholder="e.g. NEMIS/Ministry code, or your own">
+            <p class="field-hint">Printed alongside the school name on every report card, broadsheet and other printable page.</p>
+          </div>
+          <div class="field full">
             <label>Motto (optional)</label>
             <input type="text" id="s_motto" value="${UI.esc(st.settings.motto)}">
           </div>
@@ -2696,6 +2702,35 @@ Views.settings = async function () {
       <div class="modal-actions" style="border-top:none; margin-top:16px; justify-content:flex-start; gap:10px;">
         <button class="btn" type="button" id="addBandBtn">+ Add band</button>
         <button class="btn btn-primary" id="saveBands">Save grading bands</button>
+      </div>
+    </div>
+
+    <div class="section-block">
+      <h2 class="section-title">My profile</h2>
+      <div class="card">
+        <div class="form-grid" style="row-gap:14px;">
+          <div class="field full">
+            <label>Name</label>
+            <p style="margin:0;">${UI.esc(user.name)}</p>
+          </div>
+          <div class="field full">
+            <label>Role</label>
+            <p style="margin:0;"><span class="badge badge-${user.role === 'admin' || user.role === 'superadmin' ? 'ME' : 'EE'}">${UI.esc(user.role)}</span></p>
+          </div>
+          <div class="field full">
+            <label>School</label>
+            <p style="margin:0;">${UI.esc(st.settings.schoolName || '—')}</p>
+          </div>
+          ${user.role === 'user' ? `
+          <div class="field full">
+            <label>Assigned subjects</label>
+            <p style="margin:0;">${(() => { const names = st.teacherSubjects.filter(ts => ts.teacherId === user.id).map(ts => st.subjects.find(s => s.id === ts.subjectId)?.name).filter(Boolean); return names.length ? UI.esc(names.join(', ')) : 'None assigned'; })()}</p>
+          </div>
+          <div class="field full">
+            <label>Assigned classes</label>
+            <p style="margin:0;">${(() => { const labels = st.teacherClasses.filter(tc => tc.teacherId === user.id).map(tc => st.classes.find(c => c.id === tc.classId)?.label).filter(Boolean); return labels.length ? UI.esc(labels.join(', ')) : 'None assigned'; })()}</p>
+          </div>` : ''}
+        </div>
       </div>
     </div>
 
@@ -2786,6 +2821,7 @@ Views.settings = async function () {
     try {
       await Store.updateSettings({
         schoolName: document.getElementById('s_name').value.trim() || 'Your School Name',
+        schoolCode: document.getElementById('s_code').value.trim(),
         motto: document.getElementById('s_motto').value.trim(),
         headName: document.getElementById('s_head').value.trim(),
         term: document.getElementById('s_term').value,

@@ -14,6 +14,7 @@ create extension if not exists pgcrypto;
 create table schools (
   id          uuid primary key default gen_random_uuid(),
   name        text not null,
+  code        text not null default '',
   motto       text default '',
   term        text not null default 'Term 1' check (term in ('Term 1','Term 2','Term 3')),
   year        int  not null default extract(year from now())::int,

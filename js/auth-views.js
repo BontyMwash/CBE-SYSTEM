@@ -74,6 +74,7 @@ Views.home = function (onLogin) {
           <a href="#modules">Modules</a>
           <a href="#analytics">Analytics</a>
           <a href="#about">About</a>
+          <a href="#contact">Contact</a>
         </nav>
 
         <div class="home-nav-actions">
@@ -92,6 +93,7 @@ Views.home = function (onLogin) {
         <a href="#modules">Modules</a>
         <a href="#analytics">Analytics</a>
         <a href="#about">About</a>
+        <a href="#contact">Contact</a>
         <div class="home-mobile-actions">
           <button class="btn btn-ghost" id="homeInstallBtnMobile" style="width:100%; justify-content:center; display:none;"><i class="fa-solid fa-download"></i> Install App</button>
           <button class="btn btn-ghost" id="homeLoginBtnMobile" style="width:100%; justify-content:center;">Log in</button>
@@ -288,6 +290,26 @@ Views.home = function (onLogin) {
         </div>
       </section>
 
+      <section class="home-section home-section-alt" id="contact">
+        <div class="home-section-inner">
+          <div class="home-section-head reveal">
+            <span class="home-badge">GET IN TOUCH</span>
+            <h2>Want This System For Your School?</h2>
+            <p class="home-lead">Reach the developer/admin directly on WhatsApp for a demo, pricing, or setup help — usually a same-day reply.</p>
+          </div>
+          <div class="home-contact-card reveal">
+            <div class="home-contact-icon"><i class="fa-brands fa-whatsapp"></i></div>
+            <div class="home-contact-text">
+              <strong>Chat on WhatsApp</strong>
+              <span>+254 768 526 724</span>
+            </div>
+            <a class="btn btn-primary btn-lg" href="https://wa.me/254768526724?text=${encodeURIComponent("Hi, I'd like to know more about the B~CBE Analytics system for my school.")}" target="_blank" rel="noopener">
+              <i class="fa-brands fa-whatsapp"></i> Message on WhatsApp
+            </a>
+          </div>
+        </div>
+      </section>
+
       <section class="home-cta reveal">
         <div class="home-cta-inner">
           <h2>Ready to Make Assessment Smarter?</h2>
@@ -324,6 +346,7 @@ Views.home = function (onLogin) {
           <a href="javascript:void(0)" id="homeSupportLink">Support</a>
           <a href="javascript:void(0)" id="homeDocsLink">Documentation</a>
           <a href="javascript:void(0)" id="homeTermsLink">Privacy</a>
+          <a href="https://wa.me/254768526724" target="_blank" rel="noopener">WhatsApp Us</a>
         </div>
         <div class="home-footer-col">
           <h4>Account</h4>
@@ -1022,6 +1045,7 @@ Views.users = async function () {
                       : '<span class="row-index">none assigned</span>')
                   : '<span class="row-index">—</span>'}</td>
                 <td>
+                  <button class="btn btn-sm btn-ghost" data-profile="${u.id}">Profile</button>
                   <button class="btn btn-sm btn-ghost" data-edit="${u.id}">Edit name/role</button>
                   ${u.role === 'user' ? `<button class="btn btn-sm btn-ghost" data-subjects="${u.id}">Manage subjects</button>` : ''}
                   ${u.role === 'user' ? `<button class="btn btn-sm btn-ghost" data-classes="${u.id}">Manage classes</button>` : ''}
@@ -1260,7 +1284,56 @@ Views.users = async function () {
     });
   }
 
+  function openProfileModal(existing) {
+    const subjNames = [...subjectsForTeacher(existing.id)].map(id => st.subjects.find(s => s.id === id)?.name || '?');
+    const classLabels = [...classesForTeacher(existing.id)].map(id => st.classes.find(c => c.id === id)?.label || '?');
+    const joined = existing.createdAt ? new Date(existing.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }) : '—';
+    const initials = existing.name.trim().split(/\s+/).slice(0, 2).map(p => p[0]?.toUpperCase() || '').join('') || '?';
+    UI.openModal(`
+      <div style="display:flex; align-items:center; gap:14px; margin-bottom:18px;">
+        <div style="width:52px; height:52px; border-radius:50%; background:var(--primary, #4F46E5); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:18px; flex-shrink:0;">${UI.esc(initials)}</div>
+        <div>
+          <h2 style="margin:0;">${UI.esc(existing.name)}</h2>
+          <span class="badge badge-${existing.role === 'admin' ? 'ME' : 'EE'}">${UI.esc(existing.role)}</span>
+        </div>
+      </div>
+      <div class="form-grid" style="row-gap:14px;">
+        <div class="field full">
+          <label>School</label>
+          <p style="margin:0;">${UI.esc(st.settings.schoolName || '—')}</p>
+        </div>
+        ${existing.role === 'admin' ? `
+        <div class="field full">
+          <label>Section access</label>
+          <p style="margin:0;">${existing.sectionScope ? UI.esc(SECTION_LABELS[existing.sectionScope] || existing.sectionScope) : 'All sections (unrestricted)'}</p>
+        </div>` : `
+        <div class="field full">
+          <label>Assigned subjects</label>
+          <p style="margin:0;">${subjNames.length ? UI.esc(subjNames.join(', ')) : 'None assigned'}</p>
+        </div>
+        <div class="field full">
+          <label>Assigned classes</label>
+          <p style="margin:0;">${classLabels.length ? UI.esc(classLabels.join(', ')) : 'None assigned'}</p>
+        </div>`}
+        <div class="field full">
+          <label>Member since</label>
+          <p style="margin:0;">${UI.esc(joined)}</p>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="closeBtn">Close</button>
+        <button class="btn btn-primary" id="editFromProfileBtn">Edit name/role</button>
+      </div>
+    `, (root) => {
+      root.querySelector('#closeBtn').onclick = () => UI.closeModal();
+      root.querySelector('#editFromProfileBtn').onclick = () => { UI.closeModal(); openEditForm(existing); };
+    });
+  }
+
   function wireRowActions() {
+    document.querySelectorAll('[data-profile]').forEach(btn => {
+      btn.onclick = () => openProfileModal(users.find(u => u.id === btn.dataset.profile));
+    });
     document.querySelectorAll('[data-edit]').forEach(btn => {
       btn.onclick = () => openEditForm(users.find(u => u.id === btn.dataset.edit));
     });
