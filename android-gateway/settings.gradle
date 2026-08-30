@@ -1,0 +1,18 @@
+// Copyright (c) 2026 B~CBE Analytics. All rights reserved.
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "CBE SMS Gateway"
+include(":app")

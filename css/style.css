@@ -2814,3 +2814,93 @@ table.ledger-table.sticky-head thead th {
   .toolbar-search { max-width: none; flex: 1 1 100%; }
   .pagination { flex-direction: column; align-items: flex-start; }
 }
+
+/* ---------- SMS module (Bulk SMS / Gateway Devices) ---------- */
+
+.sms-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--paper-line);
+  padding-bottom: 10px;
+}
+.sms-tab-btn {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-soft);
+  padding: 7px 14px;
+  border-radius: var(--radius-lg);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sms-tab-btn:hover { background: var(--paper-line-soft); }
+.sms-tab-btn.active { background: var(--primary); color: #fff; }
+
+.sms-dot {
+  display: inline-block;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  margin-right: 6px;
+  background: #9CA3AF;
+}
+.sms-dot.online { background: #10B981; box-shadow: 0 0 0 3px rgba(16,185,129,0.18); }
+.sms-dot.offline { background: #9CA3AF; }
+.sms-dot.pending { background: #F59E0B; }
+.sms-dot.disabled { background: #EF4444; }
+
+.sms-progress {
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--paper-line-soft);
+  overflow: hidden;
+}
+.sms-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary), #818CF8);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.sms-char-counter {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  margin-top: 4px;
+}
+.sms-char-counter.warn { color: #96690E; font-weight: 600; }
+
+.sms-placeholder-btn {
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--paper-line);
+  background: var(--paper-raised);
+  color: var(--ink-soft);
+  cursor: pointer;
+  margin: 2px 4px 2px 0;
+}
+.sms-placeholder-btn:hover { background: var(--paper-line-soft); color: var(--ink); }
+
+.sms-preview-box {
+  background: var(--paper-raised);
+  border: 1px dashed var(--paper-line);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  font-size: 13.5px;
+  white-space: pre-wrap;
+  margin-top: 8px;
+}
+
+.sms-recipient-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+@media (max-width: 768px) {
+  .sms-tabs { overflow-x: auto; flex-wrap: nowrap; }
+}

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copyright (c) 2026 B~CBE Analytics. All rights reserved. -->
+<resources>
+    <color name="cbe_primary">#4F46E5</color>
+    <color name="cbe_primary_dark">#3730A3</color>
+    <color name="cbe_accent">#818CF8</color>
+    <color name="cbe_background">#FFFFFF</color>
+    <color name="cbe_text">#1F2937</color>
+</resources>

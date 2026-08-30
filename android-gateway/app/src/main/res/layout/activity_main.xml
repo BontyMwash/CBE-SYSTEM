@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copyright (c) 2026 B~CBE Analytics. All rights reserved. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/app_name"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Sends SMS on this phone's SIM for your school's CBE system."
+            android:textColor="#666666"
+            android:layout_marginBottom="20dp" />
+
+        <!-- ---- Setup (Supabase URL) ---- -->
+        <LinearLayout
+            android:id="@+id/setupSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginBottom="20dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="1. Project setup"
+                android:textStyle="bold"
+                android:layout_marginBottom="6dp" />
+            <EditText
+                android:id="@+id/supabaseUrlInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="https://your-project.supabase.co"
+                android:inputType="textUri" />
+            <Button
+                android:id="@+id/saveUrlBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Save" />
+        </LinearLayout>
+
+        <!-- ---- Pairing ---- -->
+        <LinearLayout
+            android:id="@+id/pairingSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginBottom="20dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="2. Pair this phone"
+                android:textStyle="bold"
+                android:layout_marginBottom="6dp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Enter the pairing code shown on the school's SMS &gt; Gateway Devices screen."
+                android:textColor="#666666"
+                android:layout_marginBottom="8dp" />
+            <EditText
+                android:id="@+id/pairCodeInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Pairing code (e.g. 7K4XPMTN)"
+                android:inputType="textCapCharacters" />
+            <EditText
+                android:id="@+id/phoneNumberInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="This SIM's phone number (optional)"
+                android:inputType="phone" />
+            <Button
+                android:id="@+id/pairBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Pair device" />
+        </LinearLayout>
+
+        <!-- ---- Status / controls (shown once paired) ---- -->
+        <LinearLayout
+            android:id="@+id/statusSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Gateway"
+                android:textStyle="bold"
+                android:layout_marginBottom="6dp" />
+            <TextView
+                android:id="@+id/pairedDeviceText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="16sp"
+                android:layout_marginBottom="4dp" />
+            <TextView
+                android:id="@+id/statusText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Stopped"
+                android:textColor="#666666"
+                android:layout_marginBottom="12dp" />
+
+            <Button
+                android:id="@+id/toggleGatewayBtn"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Start Gateway" />
+
+            <Button
+                android:id="@+id/batteryOptBtn"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="Allow running in background (recommended)" />
+
+            <Button
+                android:id="@+id/unpairBtn"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:text="Unpair this device" />
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

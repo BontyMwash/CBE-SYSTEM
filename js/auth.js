@@ -20,7 +20,7 @@ const Auth = {
     admin: [
       'dashboard', 'classes', 'students', 'subjects', 'exams', 'results', 'gradebook',
       'reports', 'attendance', 'competency', 'broadsheet', 'meritList', 'analysis',
-      'notify', 'users', 'settings'
+      'notify', 'sms', 'users', 'settings'
     ],
     // Teacher section — kept in this order because it's the order the
     // sidebar is meant to walk a teacher through their day:
@@ -47,6 +47,7 @@ const Auth = {
     results: 'Marks Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', meritList: 'Merit List', analysis: 'Marks Analysis',
     gradebook: 'Gradebook', attendance: 'Attendance', competency: 'Competency Assessment',
     notify: 'Send Results to Parents',
+    sms: 'Bulk SMS',
     users: 'Users', settings: 'Settings', schools: 'Schools'
   },
   ROUTE_LABELS: {
@@ -55,6 +56,7 @@ const Auth = {
     results: 'Marks Entry', reports: 'Report Cards', broadsheet: 'Broadsheet', meritList: 'Merit List', analysis: 'Marks Analysis',
     gradebook: 'Gradebook', attendance: 'Attendance', competency: 'Competency',
     notify: 'Send to Parents',
+    sms: 'SMS',
     users: 'Users', settings: 'Settings', schools: 'Schools'
   },
 
