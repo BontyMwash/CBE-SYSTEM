@@ -267,6 +267,18 @@ const App = {
     // restoreSession() call resolves after that with an actual user,
     // it still hands off to the app normally.
     const hash = (location.hash || '').replace('#', '');
+
+    // A "forgot password" link lands here with type=recovery in the
+    // hash. Supabase's client auto-detects that access_token and
+    // treats it as a normal logged-in session, so a plain "if (user)
+    // showApp()" below would race the PASSWORD_RECOVERY event and
+    // often win — sending the person straight into the dashboard
+    // instead of the "set a new password" screen. Recognize it here
+    // so recovery always goes to showPasswordRecovery(), never showApp(),
+    // no matter which async call resolves first.
+    const isRecovery = hash.includes('type=recovery');
+    if (isRecovery) { this.showPasswordRecovery(); return; }
+
     let settled = false;
     const fallback = setTimeout(() => {
       if (settled) return;
