@@ -690,8 +690,12 @@ toggle.addEventListener('click', () => {
       }
       btn.disabled = true;
       btn.textContent = 'Sending…';
+      // Always send people to the real production URL — never
+      // whatever host happened to be open when they clicked "Forgot
+      // password" (e.g. a local dev server), since that link would
+      // be dead for anyone else who opens the email.
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: window.location.origin + window.location.pathname
+        redirectTo: 'https://bontymwash.github.io/CBE-SYSTEM/'
       });
       btn.disabled = false;
       btn.textContent = 'Send reset link';
