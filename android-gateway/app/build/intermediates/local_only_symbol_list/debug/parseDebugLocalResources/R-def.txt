@@ -1,0 +1,24 @@
+R_DEF: Internal format may change without notice
+local
+color cbe_accent
+color cbe_background
+color cbe_primary
+color cbe_primary_dark
+color cbe_text
+drawable ic_launcher
+id batteryOptBtn
+id pairBtn
+id pairCodeInput
+id pairedDeviceText
+id pairingSection
+id phoneNumberInput
+id saveUrlBtn
+id setupSection
+id statusSection
+id statusText
+id supabaseUrlInput
+id toggleGatewayBtn
+id unpairBtn
+layout activity_main
+string app_name
+style Theme.CbeSmsGateway

@@ -1,0 +1,42 @@
+com.bcbe.smsgateway.app-lifecycle-livedata-2.6.2-0 C:\Users\Administrator\.gradle\caches\transforms-4\063efd995a03558ffe965942a9377a43\transformed\lifecycle-livedata-2.6.2\res
+com.bcbe.smsgateway.app-activity-1.8.0-1 C:\Users\Administrator\.gradle\caches\transforms-4\18e029079b90bb4dad663e3ca57763b4\transformed\activity-1.8.0\res
+com.bcbe.smsgateway.app-constraintlayout-2.1.4-2 C:\Users\Administrator\.gradle\caches\transforms-4\1b12cd9bb222bda5324619013a1a1366\transformed\constraintlayout-2.1.4\res
+com.bcbe.smsgateway.app-lifecycle-livedata-core-2.6.2-3 C:\Users\Administrator\.gradle\caches\transforms-4\1c4471e41131baf8ebf1c82c3347f388\transformed\lifecycle-livedata-core-2.6.2\res
+com.bcbe.smsgateway.app-work-runtime-ktx-2.9.1-4 C:\Users\Administrator\.gradle\caches\transforms-4\26d69865fbdc2bf1017d8b006bf12812\transformed\work-runtime-ktx-2.9.1\res
+com.bcbe.smsgateway.app-transition-1.5.0-5 C:\Users\Administrator\.gradle\caches\transforms-4\32a0ea155ba25958d26b7297fad42f26\transformed\transition-1.5.0\res
+com.bcbe.smsgateway.app-lifecycle-viewmodel-savedstate-2.6.2-6 C:\Users\Administrator\.gradle\caches\transforms-4\37fc1356fd78b68fe5b199af68306352\transformed\lifecycle-viewmodel-savedstate-2.6.2\res
+com.bcbe.smsgateway.app-room-ktx-2.5.0-7 C:\Users\Administrator\.gradle\caches\transforms-4\41238a9f0bafe4d9a416a94c323b9999\transformed\room-ktx-2.5.0\res
+com.bcbe.smsgateway.app-drawerlayout-1.1.1-8 C:\Users\Administrator\.gradle\caches\transforms-4\414eee9b43721a94adc35d2c40f38619\transformed\drawerlayout-1.1.1\res
+com.bcbe.smsgateway.app-lifecycle-service-2.6.2-9 C:\Users\Administrator\.gradle\caches\transforms-4\4dd0693cf8d1216bd399f0264d91353b\transformed\lifecycle-service-2.6.2\res
+com.bcbe.smsgateway.app-appcompat-resources-1.7.0-10 C:\Users\Administrator\.gradle\caches\transforms-4\6313efb869a895d98a2ed211506d4172\transformed\appcompat-resources-1.7.0\res
+com.bcbe.smsgateway.app-annotation-experimental-1.4.0-11 C:\Users\Administrator\.gradle\caches\transforms-4\63a5a3ecffdfecf55f5e5155dc4491f6\transformed\annotation-experimental-1.4.0\res
+com.bcbe.smsgateway.app-coordinatorlayout-1.1.0-12 C:\Users\Administrator\.gradle\caches\transforms-4\687bda9f6d37b70123b534a7c6f4e90e\transformed\coordinatorlayout-1.1.0\res
+com.bcbe.smsgateway.app-viewpager2-1.0.0-13 C:\Users\Administrator\.gradle\caches\transforms-4\7431cb9ac0564c9a2a7047833e631f53\transformed\viewpager2-1.0.0\res
+com.bcbe.smsgateway.app-startup-runtime-1.1.1-14 C:\Users\Administrator\.gradle\caches\transforms-4\91fe17a68f27e350d3f7408d5be3c921\transformed\startup-runtime-1.1.1\res
+com.bcbe.smsgateway.app-material-1.12.0-15 C:\Users\Administrator\.gradle\caches\transforms-4\93bbb71e464d521b7ff18408a64ec2db\transformed\material-1.12.0\res
+com.bcbe.smsgateway.app-fragment-1.5.4-16 C:\Users\Administrator\.gradle\caches\transforms-4\95a37c94b3e1521017ca443c913ed65e\transformed\fragment-1.5.4\res
+com.bcbe.smsgateway.app-room-runtime-2.5.0-17 C:\Users\Administrator\.gradle\caches\transforms-4\969d01d30f8708b8aed029580dc41c2c\transformed\room-runtime-2.5.0\res
+com.bcbe.smsgateway.app-core-ktx-1.13.1-18 C:\Users\Administrator\.gradle\caches\transforms-4\99fee828d703295e9cc796bdc8e7be35\transformed\core-ktx-1.13.1\res
+com.bcbe.smsgateway.app-cardview-1.0.0-19 C:\Users\Administrator\.gradle\caches\transforms-4\9c8dab985631d4a52f84fe6b42666fb3\transformed\cardview-1.0.0\res
+com.bcbe.smsgateway.app-lifecycle-runtime-2.6.2-20 C:\Users\Administrator\.gradle\caches\transforms-4\9ca80dd2f663f2e507674ecea25e1663\transformed\lifecycle-runtime-2.6.2\res
+com.bcbe.smsgateway.app-emoji2-views-helper-1.3.0-21 C:\Users\Administrator\.gradle\caches\transforms-4\a25f613baae28354558994718743e613\transformed\emoji2-views-helper-1.3.0\res
+com.bcbe.smsgateway.app-core-runtime-2.2.0-22 C:\Users\Administrator\.gradle\caches\transforms-4\ad0f84cf71e65fbe49142ef5c0f89776\transformed\core-runtime-2.2.0\res
+com.bcbe.smsgateway.app-sqlite-2.3.0-23 C:\Users\Administrator\.gradle\caches\transforms-4\b3ab577ee6ee40761e1b5c0477943cf5\transformed\sqlite-2.3.0\res
+com.bcbe.smsgateway.app-core-1.13.1-24 C:\Users\Administrator\.gradle\caches\transforms-4\b5dccbc66fa8c8f0bc15818d8abe9534\transformed\core-1.13.1\res
+com.bcbe.smsgateway.app-recyclerview-1.1.0-25 C:\Users\Administrator\.gradle\caches\transforms-4\c5dccd297d4b16d78a85b60929c89300\transformed\recyclerview-1.1.0\res
+com.bcbe.smsgateway.app-sqlite-framework-2.3.0-26 C:\Users\Administrator\.gradle\caches\transforms-4\c5dd9091a0fff9743cd7df7edadea84d\transformed\sqlite-framework-2.3.0\res
+com.bcbe.smsgateway.app-security-crypto-1.1.0-alpha06-27 C:\Users\Administrator\.gradle\caches\transforms-4\cbf026de347103c0a997442b5c79fd8b\transformed\security-crypto-1.1.0-alpha06\res
+com.bcbe.smsgateway.app-appcompat-1.7.0-28 C:\Users\Administrator\.gradle\caches\transforms-4\d34fe903380fc377e59e17730a4b4752\transformed\appcompat-1.7.0\res
+com.bcbe.smsgateway.app-emoji2-1.3.0-29 C:\Users\Administrator\.gradle\caches\transforms-4\e13ce3ff42acae7a6b6e32b61572f81c\transformed\emoji2-1.3.0\res
+com.bcbe.smsgateway.app-work-runtime-2.9.1-30 C:\Users\Administrator\.gradle\caches\transforms-4\e8afceff4645ce766413ebcf0a8640e5\transformed\work-runtime-2.9.1\res
+com.bcbe.smsgateway.app-savedstate-1.2.1-31 C:\Users\Administrator\.gradle\caches\transforms-4\f1e09de38c1587087768edba55ee9f8b\transformed\savedstate-1.2.1\res
+com.bcbe.smsgateway.app-lifecycle-viewmodel-2.6.2-32 C:\Users\Administrator\.gradle\caches\transforms-4\f436c20d8a5c319590fe4c38b6e6992b\transformed\lifecycle-viewmodel-2.6.2\res
+com.bcbe.smsgateway.app-lifecycle-process-2.6.2-33 C:\Users\Administrator\.gradle\caches\transforms-4\f5f5238dae73784aa6b727581e2b133d\transformed\lifecycle-process-2.6.2\res
+com.bcbe.smsgateway.app-profileinstaller-1.3.1-34 C:\Users\Administrator\.gradle\caches\transforms-4\f9ddcfd4d5e8a1204e136aa968cfb20d\transformed\profileinstaller-1.3.1\res
+com.bcbe.smsgateway.app-pngs-35 C:\Users\Administrator\B-CBE SYSTEM\CBE-SYSTEM\android-gateway\app\build\generated\res\pngs\debug
+com.bcbe.smsgateway.app-resValues-36 C:\Users\Administrator\B-CBE SYSTEM\CBE-SYSTEM\android-gateway\app\build\generated\res\resValues\debug
+com.bcbe.smsgateway.app-packageDebugResources-37 C:\Users\Administrator\B-CBE SYSTEM\CBE-SYSTEM\android-gateway\app\build\intermediates\incremental\debug\packageDebugResources\merged.dir
+com.bcbe.smsgateway.app-packageDebugResources-38 C:\Users\Administrator\B-CBE SYSTEM\CBE-SYSTEM\android-gateway\app\build\intermediates\incremental\debug\packageDebugResources\stripped.dir
+com.bcbe.smsgateway.app-debug-39 C:\Users\Administrator\B-CBE SYSTEM\CBE-SYSTEM\android-gateway\app\build\intermediates\merged_res\debug\mergeDebugResources
+com.bcbe.smsgateway.app-debug-40 C:\Users\Administrator\B-CBE SYSTEM\CBE-SYSTEM\android-gateway\app\src\debug\res
+com.bcbe.smsgateway.app-main-41 C:\Users\Administrator\B-CBE SYSTEM\CBE-SYSTEM\android-gateway\app\src\main\res
