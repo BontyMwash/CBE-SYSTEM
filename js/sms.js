@@ -43,6 +43,13 @@ const SmsUtil = {
 
   PLACEHOLDERS: ['student_name', 'parent_name', 'class', 'school_name', 'average', 'position', 'level'],
 
+  // Same placeholders the "Send Results to Parents" screen (notify.js)
+  // supports, available here too once a results sitting is picked in
+  // the composer — see resultsCtxFor() below. {name}/{school} are
+  // aliases for {student_name}/{school_name} so a template copied
+  // from either screen works unmodified in both.
+  RESULT_PLACEHOLDERS: ['name', 'sitting', 'term', 'academic_year', 'class_size', 'subjects', 'strengths', 'improvement_areas', 'school'],
+
   render(template, ctx) {
     return (template || '').replace(/\{(\w+)\}/g, (m, key) => (ctx[key] !== undefined && ctx[key] !== null && ctx[key] !== '') ? String(ctx[key]) : m);
   },
@@ -355,6 +362,10 @@ Views.sms = async function () {
     const [templates, devices, settings] = await Promise.all([SmsStore.templates(schoolId), SmsStore.devices(schoolId), SmsStore.settings(schoolId)]);
     const classLabels = classOptionLabels(st);
     const onlineDevices = devices.filter(d => d.status !== 'disabled');
+    // Published sittings, newest first — same source "Send Results to
+    // Parents" (notify.js) uses, so a template built there drops in
+    // here unchanged once the matching sitting is selected below.
+    const publishedSorted = [...st.published].sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
 
     document.getElementById('smsBody').innerHTML = `
       <div class="card">
@@ -395,8 +406,16 @@ Views.sms = async function () {
             </select>
           </div>
           <div class="field full">
+            <label>Results sitting (optional — fills in result placeholders)</label>
+            <select id="smsSittingSel">
+              <option value="">— none — (only the placeholders below will work)</option>
+              ${publishedSorted.map(p => `<option value="${p.id}">${UI.esc(p.klass)} · ${UI.esc(p.type)} · ${UI.esc(p.term)} ${UI.esc(String(p.year))}</option>`).join('')}
+            </select>
+            <p class="field-hint" style="margin-top:2px;">Pick a published sitting to use {sitting}, {term}, {academic_year}, {position}, {class_size}, {subjects}, {strengths} and {improvement_areas} — a recipient outside that sitting's class will get those left blank in their message.</p>
+          </div>
+          <div class="field full">
             <label>Message</label>
-            <div style="margin-bottom:6px;">${SmsUtil.PLACEHOLDERS.map(p => `<button type="button" class="sms-placeholder-btn" data-ph="${p}">{${p}}</button>`).join('')}</div>
+            <div style="margin-bottom:6px;">${SmsUtil.PLACEHOLDERS.map(p => `<button type="button" class="sms-placeholder-btn" data-ph="${p}">{${p}}</button>`).join('')}${SmsUtil.RESULT_PLACEHOLDERS.map(p => `<button type="button" class="sms-placeholder-btn" data-ph="${p}">{${p}}</button>`).join('')}</div>
             <textarea id="smsMessage" rows="5" placeholder="Dear {parent_name}, ..."></textarea>
             <div class="sms-char-counter" id="smsCharCounter">0 characters · 0 SMS parts</div>
           </div>
@@ -483,15 +502,104 @@ Views.sms = async function () {
       return (marks.reduce((a, b) => a + b, 0) / marks.length).toFixed(1);
     }
 
-    function placeholderCtx(student) {
+    // ---- Results-sitting support: same computation "Send Results to
+    // Parents" (notify.js) uses, so {sitting} {term} {academic_year}
+    // {position} {class_size} {subjects} {strengths} {improvement_areas}
+    // resolve here too once a sitting is picked above. ----
+    function computeSittingResults(klass, type, term, year) {
+      const exams = st.exams.filter(e => e.klass === klass && e.type === type && e.term === term && String(e.year) === String(year));
+      const subjectCols = exams.map(e => ({ exam: e, subject: st.subjects.find(s => s.id === e.subjectId) })).filter(c => c.subject);
+      const students = st.students.filter(s => s.klass === klass);
+      const rows = students.map(stu => {
+        const pcts = [];
+        const subjectPcts = [];
+        subjectCols.forEach(col => {
+          const res = st.results.find(r => r.examId === col.exam.id && r.studentId === stu.id);
+          if (res) {
+            const pct = Grading.percent(res.marks, col.exam.totalMarks);
+            pcts.push(pct);
+            subjectPcts.push({ name: col.subject.name, pct });
+          }
+        });
+        const avg = Grading.average(pcts);
+        const band = avg === null ? Grading.MISSING_BAND : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
+        return { student: stu, avg, band, subjectPcts };
+      });
+      const ranked = [...rows].filter(r => r.avg !== null).sort((a, b) => b.avg - a.avg);
+      const outOf = ranked.length;
+      let rank = 0, lastAvg = null, seen = 0;
+      const rankMap = new Map();
+      ranked.forEach(r => {
+        seen++;
+        if (r.avg !== lastAvg) { rank = seen; lastAvg = r.avg; }
+        rankMap.set(r.student.id, rank);
+      });
+      return rows.map(r => ({ ...r, position: r.avg === null ? 'Z' : (rankMap.get(r.student.id) ?? null), outOf }));
+    }
+
+    function strengthsAndImprovements(subjectPcts) {
+      const sorted = [...subjectPcts].sort((a, b) => b.pct - a.pct);
+      const fmt = (s) => `${s.name} (${s.pct.toFixed(0)}%)`;
+      if (sorted.length === 0) return { strengths: 'not yet graded', improvement_areas: 'not yet graded' };
+      if (sorted.length === 1) return { strengths: fmt(sorted[0]), improvement_areas: 'not enough subjects to compare' };
+      const takeStrengths = sorted.length >= 4 ? 2 : 1;
       return {
+        strengths: sorted.slice(0, takeStrengths).map(fmt).join(', '),
+        improvement_areas: sorted.slice(-takeStrengths).reverse().map(fmt).join(', ')
+      };
+    }
+
+    function subjectBreakdown(subjectPcts) {
+      if (!subjectPcts.length) return 'not yet graded';
+      return subjectPcts.map(sp => {
+        const band = Grading.levelForMarks(sp.pct, 100, st.settings.gradingBands);
+        return `${sp.name}: ${sp.pct.toFixed(0)}%${band ? ` (${band.code})` : ''}`;
+      }).join('; ');
+    }
+
+    // studentId -> result placeholder values for the currently-picked
+    // sitting; empty when no sitting is selected (or a recipient isn't
+    // in that sitting's class), in which case those placeholders are
+    // simply left as literal {tags} in the preview so it's obvious
+    // they weren't filled in.
+    let resultsMap = new Map();
+    function recomputeResultsMap() {
+      resultsMap = new Map();
+      const sittingId = document.getElementById('smsSittingSel').value;
+      if (!sittingId) return;
+      const chosen = publishedSorted.find(p => p.id === sittingId);
+      if (!chosen) return;
+      const rows = computeSittingResults(chosen.klass, chosen.type, chosen.term, chosen.year);
+      rows.forEach(r => {
+        const si = strengthsAndImprovements(r.subjectPcts);
+        resultsMap.set(r.student.id, {
+          sitting: chosen.type, term: chosen.term, academic_year: chosen.year,
+          average: r.avg === null ? 'not yet available' : r.avg.toFixed(1),
+          level: r.avg === null ? 'not yet graded' : r.band.label,
+          position: r.position === null || r.position === 'Z' ? '—' : r.position,
+          class_size: r.outOf,
+          subjects: subjectBreakdown(r.subjectPcts),
+          strengths: si.strengths,
+          improvement_areas: si.improvement_areas
+        });
+      });
+    }
+    recomputeResultsMap();
+    document.getElementById('smsSittingSel').onchange = () => { recomputeResultsMap(); refreshPreview(); };
+
+    function placeholderCtx(student, studentId) {
+      const base = {
         student_name: student ? student.name : '',
+        name: student ? student.name : '',
         parent_name: student && student.parentName ? student.parentName : 'Parent',
         class: student ? student.klass : '',
         school_name: st.settings.schoolName || '',
+        school: st.settings.schoolName || '',
         average: student ? studentAverage(student.id) : '',
         position: '', level: ''
       };
+      const sittingVars = studentId ? resultsMap.get(studentId) : null;
+      return sittingVars ? { ...base, ...sittingVars } : base;
     }
 
     function currentRecipients() {
@@ -516,7 +624,7 @@ Views.sms = async function () {
       }
       return list.map(r => {
         const normalized = SmsUtil.normalizeKenyanPhone(r.phone);
-        return { ...r, normalizedPhone: normalized, message: SmsUtil.render(msgTemplate, placeholderCtx(r.student)) };
+        return { ...r, normalizedPhone: normalized, message: SmsUtil.render(msgTemplate, placeholderCtx(r.student, r.studentId)) };
       });
     }
 
@@ -635,7 +743,13 @@ Views.sms = async function () {
   async function renderTemplates() {
     const templates = await SmsStore.templates(schoolId);
     const DEFAULTS = [
-      { name: 'Results', body: "Dear {parent_name}, {student_name}'s results are available. Average: {average}%. Log in to the CBE portal for details." },
+      { name: 'Results (basic)', body: "Dear {parent_name}, {student_name}'s results are available. Average: {average}%. Log in to the CBE portal for details." },
+      {
+        name: 'Results (full breakdown)',
+        body: "Dear Parent/Guardian, {name}'s {sitting} results for {term}, {academic_year} are available. " +
+          "Average: {average}% ({level}). Position: {position}/{class_size}. " +
+          "Subject performance: {subjects}. Strengths: {strengths}. Improvement areas: {improvement_areas}. Thank you."
+      },
       { name: 'Attendance', body: 'Dear {parent_name}, {student_name} was marked absent today. Please contact the school if necessary.' },
       { name: 'Fee Reminder', body: 'Dear {parent_name}, this is a reminder concerning outstanding school fees for {student_name}. Please contact the school office.' },
       { name: 'Announcement', body: 'Dear Parent, {school_name} would like to inform you: ' }
@@ -645,6 +759,7 @@ Views.sms = async function () {
         <div class="modal-actions" style="justify-content:flex-start; margin-bottom:12px;">
           <button class="btn btn-primary" id="newTplBtn">+ New template</button>
         </div>
+        <p class="field-hint">Using {sitting} {term} {academic_year} {position} {class_size} {subjects} {strengths} or {improvement_areas} in a template? Pick a "Results sitting" on the Bulk SMS tab when you send it — those placeholders only fill in for students in that sitting.</p>
         ${templates.length === 0 ? `
           <p class="field-hint">No saved templates yet. Quick-start with one of these:</p>
           <div class="sms-recipient-grid">${DEFAULTS.map(d => `<button class="btn btn-sm btn-ghost" data-seed="${UI.esc(d.name)}">+ ${UI.esc(d.name)}</button>`).join('')}</div>
