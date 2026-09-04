@@ -6,4 +6,5 @@
     <color name="cbe_accent">#818CF8</color>
     <color name="cbe_background">#FFFFFF</color>
     <color name="cbe_text">#1F2937</color>
+    <color name="cbe_hint">#9CA3AF</color>
 </resources>

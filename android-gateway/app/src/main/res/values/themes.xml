@@ -1,10 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Copyright (c) 2026 B~CBE Analytics. All rights reserved. -->
 <resources>
-    <style name="Theme.CbeSmsGateway" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <!-- Light.NoActionBar (not DayNight): the window background is
+         hard-coded white above, so the theme must not switch to dark
+         mode's light-on-dark text/hint colors on the user's phone —
+         that combination made every text field render white-on-white
+         (typeable, but invisible) whenever system dark mode was on. -->
+    <style name="Theme.CbeSmsGateway" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="colorPrimary">@color/cbe_primary</item>
         <item name="colorPrimaryDark">@color/cbe_primary_dark</item>
         <item name="colorAccent">@color/cbe_accent</item>
         <item name="android:windowBackground">@color/cbe_background</item>
+        <item name="android:textColorPrimary">@color/cbe_text</item>
+        <item name="android:textColorHint">@color/cbe_hint</item>
+        <item name="android:editTextColor">@color/cbe_text</item>
+        <item name="colorControlNormal">@color/cbe_hint</item>
+        <item name="colorControlActivated">@color/cbe_primary</item>
     </style>
 </resources>
