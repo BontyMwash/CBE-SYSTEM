@@ -41,6 +41,14 @@ const SmsUtil = {
     return { length: len, parts, encoding: isGsm7 ? 'GSM-7' : 'Unicode', limit: len <= singleLimit ? singleLimit : multiLimit };
   },
 
+  // Direct download link for the "CBE SMS Gateway" Android APK, shown
+  // to admins on the Gateway Devices screen so they can install it on
+  // a phone themselves instead of you sending the file by hand.
+  // Point this at wherever you're hosting the built APK (Google Drive
+  // share link, GitHub Releases asset, your own server, Supabase
+  // Storage public bucket, etc.) — leave it blank to hide the button.
+  GATEWAY_APK_URL: 'https://drive.google.com/file/d/10sATtITPD05ysjOmBfpdj_AcgJ7612qc/view?usp=sharing',
+
   PLACEHOLDERS: ['student_name', 'parent_name', 'class', 'school_name', 'average', 'position', 'level'],
 
   // Same placeholders the "Send Results to Parents" screen (notify.js)
@@ -819,6 +827,7 @@ Views.sms = async function () {
       <div class="card">
         <div class="modal-actions" style="justify-content:flex-start; margin-bottom:12px;">
           <button class="btn btn-primary" id="addDeviceBtn">+ Pair a phone</button>
+          ${SmsUtil.GATEWAY_APK_URL ? `<a class="btn btn-ghost" href="${UI.esc(SmsUtil.GATEWAY_APK_URL)}" target="_blank" rel="noopener"><i class="fa-solid fa-download"></i> Download Gateway App (.apk)</a>` : ''}
         </div>
         ${devices.length === 0 ? `<div class="empty"><div class="empty-title">No gateway devices yet</div><p>Pair an Android phone with the "CBE SMS Gateway" app to start sending SMS.</p></div>` : `
           <div class="ledger"><div class="ledger-scroll"><table class="ledger-table">
@@ -873,6 +882,7 @@ Views.sms = async function () {
     function showPairCode(device) {
       UI.openModal(`
         <h2>Pair "${UI.esc(device.device_name)}"</h2>
+        ${SmsUtil.GATEWAY_APK_URL ? `<p class="field-hint">Don't have the app on that phone yet? <a href="${UI.esc(SmsUtil.GATEWAY_APK_URL)}" target="_blank" rel="noopener">Download the CBE SMS Gateway app</a> first.</p>` : ''}
         <p>On the Android phone, open the <strong>CBE SMS Gateway</strong> app and enter this code:</p>
         <p style="font-size:32px; font-weight:800; letter-spacing:4px; text-align:center; margin:18px 0;">${UI.esc(device.pair_code)}</p>
         <p class="field-hint">Expires in 15 minutes. The phone needs its own internet connection (Wi-Fi or mobile data) and a Kenyan SIM inserted for sending SMS.</p>
