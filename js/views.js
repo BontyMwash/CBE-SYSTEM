@@ -1999,7 +1999,7 @@ Views.results = async function () {
   function renderGrid(examId) {
     const exam = st.exams.find(e => e.id === examId);
     const locked = isLocked(exam);
-    const students = st.students.filter(s => s.klass === exam.klass).sort(UI.byAdmissionDesc);
+    const students = st.students.filter(s => s.klass === exam.klass).sort(UI.byAdmissionAsc);
     if (students.length === 0) {
       return `<div class="empty"><div class="empty-title">No students in ${UI.esc(exam.klass)}</div><p>Add students to this class first.</p></div>`;
     }
@@ -2085,7 +2085,7 @@ Views.results = async function () {
   function downloadClassList(examId) {
     const exam = st.exams.find(e => e.id === examId);
     if (!exam) return;
-    const students = st.students.filter(s => s.klass === exam.klass).sort(UI.byAdmissionDesc);
+    const students = st.students.filter(s => s.klass === exam.klass).sort(UI.byAdmissionAsc);
     if (students.length === 0) { UI.toast('No students to download'); return; }
     const header = ['Name', 'Admission No.', 'Class', 'Gender', 'Parent name', 'Parent phone', 'Parent email'];
     const rows = students.map(s => [s.name, s.admissionNo || '', s.klass, s.gender || '', s.parentName || '', s.parentPhone || '', s.parentEmail || '']);

@@ -432,7 +432,7 @@ Views.gradebook = async function () {
 
   function renderGrid() {
     const exams = examTypesFor(picked.subjectId, picked.klass, picked.term, picked.year);
-    const students = st.students.filter(s => s.klass === picked.klass).sort(UI.byAdmissionDesc);
+    const students = st.students.filter(s => s.klass === picked.klass).sort(UI.byAdmissionAsc);
     if (students.length === 0) {
       return `<div class="empty"><div class="empty-title">No learners in ${UI.esc(picked.klass)}</div></div>`;
     }
