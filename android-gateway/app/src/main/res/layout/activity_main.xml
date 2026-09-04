@@ -25,7 +25,7 @@
             android:textColor="#666666"
             android:layout_marginBottom="20dp" />
 
-        <!-- ---- Setup (Supabase URL) ---- -->
+        <!-- Setup (Supabase URL) -->
         <LinearLayout
             android:id="@+id/setupSection"
             android:layout_width="match_parent"
@@ -54,7 +54,7 @@
                 android:text="Save" />
         </LinearLayout>
 
-        <!-- ---- Pairing ---- -->
+        <!-- Pairing -->
         <LinearLayout
             android:id="@+id/pairingSection"
             android:layout_width="match_parent"
@@ -97,7 +97,7 @@
                 android:text="Pair device" />
         </LinearLayout>
 
-        <!-- ---- Status / controls (shown once paired) ---- -->
+        <!-- Status / controls (shown once paired) -->
         <LinearLayout
             android:id="@+id/statusSection"
             android:layout_width="match_parent"

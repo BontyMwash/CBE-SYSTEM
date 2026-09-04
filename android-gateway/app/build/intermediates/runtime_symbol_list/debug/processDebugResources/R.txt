@@ -1380,6 +1380,7 @@ int color cardview_shadow_end_color 0x7f05002d
 int color cardview_shadow_start_color 0x7f05002e
 int color cbe_accent 0x7f05002f
 int color cbe_background 0x7f050030
+int color cbe_hint 0x7f05030a
 int color cbe_primary 0x7f050031
 int color cbe_primary_dark 0x7f050032
 int color cbe_text 0x7f050033

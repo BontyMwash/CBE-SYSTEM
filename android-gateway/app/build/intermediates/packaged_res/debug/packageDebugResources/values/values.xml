@@ -2,14 +2,20 @@
 <resources>
     <color name="cbe_accent">#818CF8</color>
     <color name="cbe_background">#FFFFFF</color>
+    <color name="cbe_hint">#9CA3AF</color>
     <color name="cbe_primary">#4F46E5</color>
     <color name="cbe_primary_dark">#3730A3</color>
     <color name="cbe_text">#1F2937</color>
     <string name="app_name">CBE SMS Gateway</string>
-    <style name="Theme.CbeSmsGateway" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <style name="Theme.CbeSmsGateway" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="colorPrimary">@color/cbe_primary</item>
         <item name="colorPrimaryDark">@color/cbe_primary_dark</item>
         <item name="colorAccent">@color/cbe_accent</item>
         <item name="android:windowBackground">@color/cbe_background</item>
+        <item name="android:textColorPrimary">@color/cbe_text</item>
+        <item name="android:textColorHint">@color/cbe_hint</item>
+        <item name="android:editTextColor">@color/cbe_text</item>
+        <item name="colorControlNormal">@color/cbe_hint</item>
+        <item name="colorControlActivated">@color/cbe_primary</item>
     </style>
 </resources>

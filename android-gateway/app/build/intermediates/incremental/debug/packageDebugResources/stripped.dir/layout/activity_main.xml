@@ -44,6 +44,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:hint="https://your-project.supabase.co"
+                android:textColor="@color/cbe_text"
+                android:textColorHint="@color/cbe_hint"
                 android:inputType="textUri" />
             <Button
                 android:id="@+id/saveUrlBtn"
@@ -77,12 +79,16 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:hint="Pairing code (e.g. 7K4XPMTN)"
+                android:textColor="@color/cbe_text"
+                android:textColorHint="@color/cbe_hint"
                 android:inputType="textCapCharacters" />
             <EditText
                 android:id="@+id/phoneNumberInput"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:hint="This SIM's phone number (optional)"
+                android:textColor="@color/cbe_text"
+                android:textColorHint="@color/cbe_hint"
                 android:inputType="phone" />
             <Button
                 android:id="@+id/pairBtn"
