@@ -723,13 +723,14 @@ Views.sms = async function () {
     const pct = campaign.total_recipients ? Math.round(((campaign.sent_count + campaign.failed_count) / campaign.total_recipients) * 100) : 0;
     UI.openModal(`
       <h2>${UI.esc(campaign.campaign_name)}</h2>
-      <p class="field-hint">${UI.esc(campaign.message)}</p>
+      <p class="field-hint">Template used: ${UI.esc(campaign.message)}</p>
       <div class="sms-progress" style="margin:10px 0;"><div class="sms-progress-fill" style="width:${pct}%;"></div></div>
       <p class="field-hint">${pct}% processed · ${campaign.sent_count} sent · ${campaign.failed_count} failed · ${campaign.pending_count} pending</p>
       <div class="ledger" style="max-height:320px; overflow:auto;"><div class="ledger-scroll"><table class="ledger-table">
-        <thead><tr><th>Phone</th><th>Status</th><th>Attempts</th><th>Error</th></tr></thead>
+        <thead><tr><th>Phone</th><th>Message actually sent</th><th>Status</th><th>Attempts</th><th>Error</th></tr></thead>
         <tbody>${rows.map(r => `<tr>
           <td>${UI.esc(r.phone_number)}</td>
+          <td class="field-hint" style="max-width:320px; white-space:normal;">${UI.esc(r.message || '')}</td>
           <td><span class="status-pill ${r.status === 'sent' ? 'status-complete' : r.status === 'failed' ? 'status-none' : 'status-progress'}">${r.status}</span></td>
           <td>${r.attempts}</td>
           <td class="field-hint">${UI.esc(r.error_message || '')}</td>
