@@ -5,6 +5,19 @@
    ============================================================ */
 
 const UI = {
+  // Sorts admission numbers highest -> lowest. Admission numbers are
+  // free-text (e.g. "2025-014"), so this uses a "numeric" locale
+  // compare — it orders embedded numbers by value rather than
+  // character-by-character (2 before 10) — and falls back to name so
+  // students without an admission number still land in a stable spot.
+  byAdmissionDesc(a, b) {
+    const admA = a.admissionNo || '', admB = b.admissionNo || '';
+    if (!admA && !admB) return (a.name || '').localeCompare(b.name || '');
+    if (!admA) return 1;
+    if (!admB) return -1;
+    return admB.localeCompare(admA, undefined, { numeric: true, sensitivity: 'base' });
+  },
+
   esc(str) {
     if (str === null || str === undefined) return '';
     return String(str)
