@@ -432,7 +432,7 @@ Views.gradebook = async function () {
 
   function renderGrid() {
     const exams = examTypesFor(picked.subjectId, picked.klass, picked.term, picked.year);
-    const students = st.students.filter(s => s.klass === picked.klass).sort(UI.byAdmissionAsc);
+    const students = st.students.filter(s => s.klass === picked.klass).sort((a, b) => a.name.localeCompare(b.name));
     if (students.length === 0) {
       return `<div class="empty"><div class="empty-title">No learners in ${UI.esc(picked.klass)}</div></div>`;
     }
@@ -444,7 +444,7 @@ Views.gradebook = async function () {
         <div class="ledger-scroll">
           <table class="ledger-table">
             <thead><tr>
-              <th>#</th><th>Name</th><th>ADM NO.</th>
+              <th>#</th><th>Name</th>
               ${exams.map(e => `<th>${UI.esc(e.type)} (/${e.totalMarks})</th>`).join('')}
               <th>Average</th><th>Level</th>
             </tr></thead>
@@ -462,7 +462,6 @@ Views.gradebook = async function () {
                 return `<tr>
                   <td class="row-index">${i + 1}</td>
                   <td>${UI.esc(s.name)}</td>
-                  <td class="num">${UI.esc(s.admissionNo) || '—'}</td>
                   ${cells}
                   <td class="num">${avg === null ? UI.badge(Grading.MISSING_BAND) : avg.toFixed(1) + '%'}</td>
                   <td>${UI.badge(band)}</td>

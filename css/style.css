@@ -1754,7 +1754,7 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
   .report-card .report-title-band .report-title-motto { font-size: 10.5px; }
   .report-card .report-meta-grid { font-size: 11px; gap: 4px 18px; margin-bottom: 12px; }
   .report-card table.ledger-table th, .report-card table.ledger-table td { padding: 3px 6px; }
-  .report-card svg { max-height: 110px; }
+  .report-card svg { max-height: 110px; width: auto; }
   .report-card .report-footer { margin-top: 12px; }
   .report-card > div[style*="border-top"] { margin-top: 10px !important; padding-top: 8px !important; font-size: 11px !important; }
 

@@ -297,7 +297,7 @@ function buildTrendChartSVG(points) {
   return `
     <div style="margin:18px 0 4px 0;">
       <p class="stat-sub" style="margin:0 0 8px 0;"><strong>Performance trend this term</strong></p>
-      <svg viewBox="0 0 ${w} ${h}" style="width:100%; max-width:520px; height:auto; display:block;">
+      <svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="width:100%; max-width:520px; height:auto; display:block;">
         ${gridLines}
         <path d="${path}" fill="none" stroke="var(--primary)" stroke-width="2.5"/>
         ${dots}
@@ -1999,7 +1999,7 @@ Views.results = async function () {
   function renderGrid(examId) {
     const exam = st.exams.find(e => e.id === examId);
     const locked = isLocked(exam);
-    const students = st.students.filter(s => s.klass === exam.klass).sort(UI.byAdmissionAsc);
+    const students = st.students.filter(s => s.klass === exam.klass).sort((a, b) => a.name.localeCompare(b.name));
     if (students.length === 0) {
       return `<div class="empty"><div class="empty-title">No students in ${UI.esc(exam.klass)}</div><p>Add students to this class first.</p></div>`;
     }
@@ -2082,27 +2082,11 @@ Views.results = async function () {
     });
   }
 
-  function downloadClassList(examId) {
-    const exam = st.exams.find(e => e.id === examId);
-    if (!exam) return;
-    const students = st.students.filter(s => s.klass === exam.klass).sort(UI.byAdmissionAsc);
-    if (students.length === 0) { UI.toast('No students to download'); return; }
-    const header = ['Name', 'Admission No.', 'Class', 'Gender', 'Parent name', 'Parent phone', 'Parent email'];
-    const rows = students.map(s => [s.name, s.admissionNo || '', s.klass, s.gender || '', s.parentName || '', s.parentPhone || '', s.parentEmail || '']);
-    UI.downloadCSV(`class-list-${exam.klass}`.replace(/\s+/g, '_'), header, rows);
-  }
-
-  function wireDownloadBtn(examId) {
-    const btn = document.getElementById('downloadClassListBtn');
-    if (btn) btn.onclick = () => downloadClassList(examId);
-  }
-
   function paint(examId) {
     document.getElementById('totalMarksBarWrap').innerHTML = renderTotalMarksBar(examId);
     document.getElementById('gridWrap').innerHTML = renderGrid(examId);
     wireTotalMarksBar(examId);
     wireGrid(examId);
-    wireDownloadBtn(examId);
   }
 
   App.state.selectedExamId = selectedId;
@@ -2110,10 +2094,7 @@ Views.results = async function () {
     <div class="marks-entry">
       ${renderPicker()}
       <div id="totalMarksBarWrap">${renderTotalMarksBar(selectedId)}</div>
-      <div style="display:flex; justify-content:flex-end; margin-bottom:14px;">
-        <button class="btn" id="downloadClassListBtn"><i class="fa-solid fa-download"></i> Download Class List</button>
-      </div>
-      <p class="field-hint" style="margin-bottom:14px; margin-top:-8px;">Marks save automatically as you type. Leave blank for a student who did not sit the exam.</p>
+      <p class="field-hint" style="margin-bottom:14px;">Marks save automatically as you type. Leave blank for a student who did not sit the exam.</p>
       <div id="gridWrap">${renderGrid(selectedId)}</div>
     </div>
   `;
@@ -2121,7 +2102,6 @@ Views.results = async function () {
   wirePicker();
   wireTotalMarksBar(selectedId);
   wireGrid(selectedId);
-  wireDownloadBtn(selectedId);
 };
 
 /* ------------------------- REPORTS ------------------------- */
