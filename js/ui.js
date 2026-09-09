@@ -292,6 +292,36 @@ const UI = {
       const clone = el.cloneNode(true);
       clone.querySelectorAll('.no-print').forEach(n => n.remove());
 
+      // Bake resolved colors into any SVG presentation attribute that
+      // references a CSS custom property (stroke="var(--primary)",
+      // fill="var(--ink)", etc. — used by the report card's trend
+      // chart). These resolve fine for on-screen CSS, but html2canvas
+      // captures this clone by serializing each <svg> to a standalone
+      // data-URI image, which loads in an isolated context with no
+      // access to the live document's custom-property cascade — so
+      // var(--x) inside it silently resolves to nothing, painting an
+      // invisible chart. That was producing entirely blank downloaded
+      // PDFs for merged report cards specifically, since that's the
+      // only report variant that includes this chart. Resolving the
+      // ORIGINAL (still-attached, correctly-themed) element's computed
+      // style and writing the literal value onto the CLONE — before
+      // html2canvas ever serializes it — sidesteps that entirely.
+      // el/clone are structurally identical (cloneNode(true)), so a
+      // parallel querySelectorAll on both lines up element-for-element.
+      const srcSvgAttrEls = el.querySelectorAll('svg [stroke], svg [fill], svg[stroke], svg[fill]');
+      const cloneSvgAttrEls = clone.querySelectorAll('svg [stroke], svg [fill], svg[stroke], svg[fill]');
+      srcSvgAttrEls.forEach((srcNode, si) => {
+        const cloneNode = cloneSvgAttrEls[si];
+        if (!cloneNode) return;
+        ['stroke', 'fill'].forEach(attr => {
+          const raw = srcNode.getAttribute(attr);
+          if (raw && raw.includes('var(')) {
+            const resolved = getComputedStyle(srcNode)[attr];
+            if (resolved) cloneNode.setAttribute(attr, resolved);
+          }
+        });
+      });
+
       // Give the export the SAME column proportions the browser
       // already chose on screen (its normal, content-aware
       // table-layout:auto pass) instead of guessing fresh widths for

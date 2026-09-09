@@ -417,15 +417,16 @@ Views.sms = async function () {
             <label>Results sitting (optional — fills in result placeholders)</label>
             <select id="smsSittingSel">
               <option value="">— none — (only the placeholders below will work)</option>
-              ${publishedSorted.map(p => `<option value="${p.id}">${UI.esc(p.klass)} · ${UI.esc(p.type)} · ${UI.esc(p.term)} ${UI.esc(String(p.year))}</option>`).join('')}
+              ${publishedSorted.map((p, i) => `<option value="${p.id}" ${i === 0 ? 'selected' : ''}>${UI.esc(p.klass)} · ${UI.esc(p.type)} · ${UI.esc(p.term)} ${UI.esc(String(p.year))}</option>`).join('')}
             </select>
-            <p class="field-hint" style="margin-top:2px;">Pick a published sitting to use {sitting}, {term}, {academic_year}, {position}, {class_size}, {subjects}, {strengths} and {improvement_areas} — a recipient outside that sitting's class will get those left blank in their message.</p>
+            <p class="field-hint" style="margin-top:2px;">Pick a published sitting to use {sitting}, {term}, {academic_year}, {position}, {class_size}, {subjects}, {strengths} and {improvement_areas} — a recipient outside that sitting's class will get those left blank in their message.${publishedSorted.length ? ' Defaults to the most recently published sitting.' : ''}</p>
           </div>
           <div class="field full">
             <label>Message</label>
             <div style="margin-bottom:6px;">${SmsUtil.PLACEHOLDERS.map(p => `<button type="button" class="sms-placeholder-btn" data-ph="${p}">{${p}}</button>`).join('')}${SmsUtil.RESULT_PLACEHOLDERS.map(p => `<button type="button" class="sms-placeholder-btn" data-ph="${p}">{${p}}</button>`).join('')}</div>
             <textarea id="smsMessage" rows="5" placeholder="Dear {parent_name}, ..."></textarea>
             <div class="sms-char-counter" id="smsCharCounter">0 characters · 0 SMS parts</div>
+            <p class="field-hint" id="smsPlaceholderWarning" style="display:none; color:var(--ledger-red); margin-top:4px;"></p>
           </div>
 
           ${onlineDevices.length > 1 ? `
@@ -636,6 +637,32 @@ Views.sms = async function () {
       });
     }
 
+    // Scans already-rendered messages for any {token} left unresolved
+    // (SmsUtil.render only substitutes a placeholder it has a
+    // non-empty value for — see its return in the ternary — so a
+    // leftover literal {tag} means that value wasn't available for
+    // that recipient, most commonly because {sitting}/{level}/etc.
+    // need a "Results sitting" selected above and none is). Surfacing
+    // this in the composer, before sending, is what catches the
+    // otherwise-silent case where a message goes out to parents with
+    // literal unfilled {tags} still in it.
+    function unresolvedPlaceholders(recipients) {
+      const tokens = new Set();
+      let affected = 0;
+      recipients.forEach(r => {
+        const found = r.message.match(/\{(\w+)\}/g);
+        if (found && found.length) {
+          affected++;
+          found.forEach(f => tokens.add(f));
+        }
+      });
+      return { tokens: [...tokens], affected };
+    }
+
+    function highlightUnresolved(message) {
+      return UI.esc(message).replace(/\{(\w+)\}/g, '<mark style="background:var(--danger-bg); color:var(--ledger-red); padding:0 3px; border-radius:3px;">{$1}</mark>');
+    }
+
     function refreshPreview() {
       const recipients = currentRecipients();
       const valid = recipients.filter(r => r.normalizedPhone);
@@ -648,8 +675,18 @@ Views.sms = async function () {
       counter.textContent = `${seg.length} characters (${seg.encoding}) · SMS Parts: ${seg.parts || 0}`;
       counter.classList.toggle('warn', seg.parts > 1);
 
+      const warnEl = document.getElementById('smsPlaceholderWarning');
+      const { tokens, affected } = unresolvedPlaceholders(valid);
+      if (tokens.length) {
+        warnEl.style.display = '';
+        warnEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> ${tokens.map(t => UI.esc(t)).join(', ')} will go out as literal text (not filled in) for ${affected} of ${valid.length} recipient${valid.length === 1 ? '' : 's'} — pick a "Results sitting" above to fill result placeholders, or remove them from the message.`;
+      } else {
+        warnEl.style.display = 'none';
+        warnEl.innerHTML = '';
+      }
+
       const previewSample = valid[0];
-      document.getElementById('smsPreview').textContent = previewSample ? previewSample.message : (msgTemplate || 'Preview will appear here.');
+      document.getElementById('smsPreview').innerHTML = previewSample ? highlightUnresolved(previewSample.message) : UI.esc(msgTemplate || 'Preview will appear here.');
     }
     refreshPreview();
 
@@ -681,11 +718,30 @@ Views.sms = async function () {
         }
       };
 
-      if (settings.require_confirmation) {
-        UI.confirmAction(`Queue "${campaignName}" for ${valid.length} recipient${valid.length === 1 ? '' : 's'}?`, doSend, { confirmLabel: 'Send Bulk SMS', confirmClass: 'btn-primary' });
-      } else {
-        doSend();
+      const confirmThenSend = () => {
+        if (settings.require_confirmation) {
+          UI.confirmAction(`Queue "${campaignName}" for ${valid.length} recipient${valid.length === 1 ? '' : 's'}?`, doSend, { confirmLabel: 'Send Bulk SMS', confirmClass: 'btn-primary' });
+        } else {
+          doSend();
+        }
+      };
+
+      // Always stop for an explicit confirmation — even with "require
+      // confirmation" turned off — when some recipients would receive
+      // a message still containing a literal, unfilled {tag}. This is
+      // the last checkpoint before real texts go out to real parents,
+      // so it deliberately doesn't rely on the admin having noticed
+      // the on-screen preview warning.
+      const { tokens, affected } = unresolvedPlaceholders(valid);
+      if (tokens.length) {
+        UI.confirmAction(
+          `${tokens.join(', ')} ${tokens.length === 1 ? "isn't" : "aren't"} filled in and will be sent as literal text to ${affected} of ${valid.length} recipient${valid.length === 1 ? '' : 's'}. Pick a "Results sitting" above to fill result placeholders, or send anyway?`,
+          confirmThenSend,
+          { confirmLabel: 'Send anyway', confirmClass: 'btn-danger' }
+        );
+        return;
       }
+      confirmThenSend();
     };
   }
 
