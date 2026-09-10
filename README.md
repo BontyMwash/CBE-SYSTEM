@@ -108,7 +108,16 @@ results" button on the Analysis page, so a section-scoped admin
 could previously still publish or unpublish another section's
 results; 023 closes that gap so each section's admin really is
 independent for publishing, the same way they already are for
-classes, students, exams and results. If you previously ran
+classes, students, exams and results. On top of that SQL fix, several
+screens that read (not write) data — Analysis, Broadsheet, Report
+Cards, Marks Entry, the "Single exam report", "Send Results to
+Parents", and the Bulk SMS composer — previously showed every
+section's classes/exams/published sittings to a section-scoped admin
+even though they couldn't act on the ones outside their section; this
+is a front-end-only fix (already in `js/`, no SQL needed) that filters
+every one of those pickers down to the admin's own section, so
+Primary/Junior Secondary/Senior School logins now feel properly
+separate end-to-end, not just at the point of saving. If you previously ran
 `sql/015_lesson_plans_and_schemes.sql` and/or
 `sql/016_curriculum_documents.sql`, also run
 `sql/017_remove_lesson_plans_and_schemes.sql` — the Lesson Plans &

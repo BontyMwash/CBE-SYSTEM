@@ -373,7 +373,7 @@ Views.sms = async function () {
     // Published sittings, newest first — same source "Send Results to
     // Parents" (notify.js) uses, so a template built there drops in
     // here unchanged once the matching sitting is selected below.
-    const publishedSorted = [...st.published].sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+    const publishedSorted = [...st.published].filter(p => levelAllows(p.klass)).sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
 
     document.getElementById('smsBody').innerHTML = `
       <div class="card">
@@ -457,7 +457,7 @@ Views.sms = async function () {
     const studentListEl = document.getElementById('smsStudentList');
     const selectedStudentIds = new Set();
 
-    function studentsWithPhone() { return st.students.filter(s => s.parentPhone && s.parentPhone.trim()); }
+    function studentsWithPhone() { return st.students.filter(s => s.parentPhone && s.parentPhone.trim() && levelAllows(s.klass)); }
 
     function renderStudentList(filter) {
       const q = (filter || '').toLowerCase();

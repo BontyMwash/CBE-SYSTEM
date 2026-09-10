@@ -1853,10 +1853,14 @@ Views.results = async function () {
   const user = Auth.currentUser();
 
   // Teachers ("user" role) only see/edit exams for subjects assigned to
-  // them (see Users -> Manage subjects). Admins/superadmins see everything.
+  // them (see Users -> Manage subjects). Admins/superadmins see everything
+  // in their section — levelAllows applies the section-scope lock for a
+  // restricted admin (or whatever the level switcher is set to for
+  // everyone else), same as the Exams list page already does.
   const isRestrictedTeacher = user && user.role === 'user';
   const allowedSubjectIds = isRestrictedTeacher ? new Set(st.teacherSubjects.filter(ts => ts.teacherId === user.id).map(ts => ts.subjectId)) : null;
-  const visibleExams = isRestrictedTeacher ? st.exams.filter(e => allowedSubjectIds.has(e.subjectId)) : st.exams;
+  let visibleExams = isRestrictedTeacher ? st.exams.filter(e => allowedSubjectIds.has(e.subjectId)) : st.exams;
+  visibleExams = visibleExams.filter(e => levelAllows(e.klass));
   st.exams = visibleExams;
 
   if (isRestrictedTeacher && allowedSubjectIds.size === 0) {
@@ -2265,7 +2269,7 @@ function renderStudentReportCard(st, scope) {
    above. Shows every student's mark, percentage, level and class
    position for just that one exam. ---- */
 function renderSingleExamReport(st, scope) {
-  const examsInScope = scope && scope.isTeacher ? st.exams.filter(e => scope.subjectIds.has(e.subjectId)) : st.exams;
+  const examsInScope = (scope && scope.isTeacher ? st.exams.filter(e => scope.subjectIds.has(e.subjectId)) : st.exams).filter(e => levelAllows(e.klass));
   if (examsInScope.length === 0) {
     document.getElementById('modeWrap').innerHTML = `<div class="empty"><div class="empty-title">No exams yet</div><p>${scope && scope.isTeacher ? 'No assessments recorded yet for your subject(s).' : 'Create an exam first from the Exams page.'}</p></div>`;
     return;

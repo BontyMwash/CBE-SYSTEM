@@ -35,6 +35,7 @@ Views.notify = async function () {
   }
 
   let publishedSorted = [...st.published].sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+  publishedSorted = publishedSorted.filter(p => levelAllows(p.klass));
   if (scope.isTeacher) publishedSorted = publishedSorted.filter(p => scope.classLabels.has(p.klass));
   if (publishedSorted.length === 0) {
     document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">No published results yet</div><p>Results can only be sent to parents once a sitting has been published on the <a href="#analysis">Analysis</a> page${scope.isTeacher ? ', for one of your classes' : ''}.</p></div>`;
