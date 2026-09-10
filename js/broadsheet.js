@@ -107,7 +107,7 @@ Views.broadsheet = async function () {
     return;
   }
 
-  const classes = scope.isTeacher ? [...scope.classLabels].sort() : classesFromStudents(st.students);
+  const classes = scope.isTeacher ? [...scope.classLabels].sort() : classesFromStudents(st.students).filter(levelAllows);
 
   document.getElementById('content').innerHTML = `
     <div class="filter-row no-print">

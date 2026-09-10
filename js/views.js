@@ -2147,7 +2147,7 @@ Views.reports = async function (mode) {
 
 /* ---- Mode: merged term report card (Opener + Midterm + Endterm per subject) ---- */
 function renderStudentReportCard(st, scope) {
-  const classes = scope && scope.isTeacher ? [...scope.classLabels].sort() : classesFromStudents(st.students);
+  const classes = scope && scope.isTeacher ? [...scope.classLabels].sort() : classesFromStudents(st.students).filter(levelAllows);
 
   const html = `
     <div class="filter-row no-print">

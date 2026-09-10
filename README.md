@@ -48,6 +48,7 @@ project/
 │   └── 011_allow_manual_notification_channel.sql # migration for existing installs — lets "mark as sent" (bulk, no message) log a notification
 │   └── 012_class_teacher_add_students.sql # migration for existing installs — lets a class teacher add learners into their own class(es)
 │   ├── 013_admin_section_scope.sql # migration for existing installs — lets a superadmin restrict an admin login to Primary, Junior Secondary, or Senior School only
+│   ├── 023_section_scope_publish.sql # migration for existing installs — closes a gap in 013: makes "Publish results" respect a section-scoped admin's Section too
 │   ├── 015_lesson_plans_and_schemes.sql # historical — feature removed, see 017
 │   ├── 016_curriculum_documents.sql # historical — feature removed, see 017
 │   └── 017_remove_lesson_plans_and_schemes.sql # ⚠️ RUN THIS if you ever ran 015/016 — drops the Lesson Plans & Schemes of Work feature
@@ -101,7 +102,13 @@ Also run `sql/013_admin_section_scope.sql` — it adds the optional
 Senior School), used by the level switcher near the logo and the
 "Section" field on the Users page; without it, admin logins stay
 unrestricted as before, but the Section field/switcher won't have any
-effect at the database level. If you previously ran
+effect at the database level. If you've already run 013, also run
+`sql/023_section_scope_publish.sql` — 013 didn't cover the "Publish
+results" button on the Analysis page, so a section-scoped admin
+could previously still publish or unpublish another section's
+results; 023 closes that gap so each section's admin really is
+independent for publishing, the same way they already are for
+classes, students, exams and results. If you previously ran
 `sql/015_lesson_plans_and_schemes.sql` and/or
 `sql/016_curriculum_documents.sql`, also run
 `sql/017_remove_lesson_plans_and_schemes.sql` — the Lesson Plans &

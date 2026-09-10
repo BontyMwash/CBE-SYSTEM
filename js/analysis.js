@@ -21,7 +21,7 @@ Views.analysis = async function () {
     return;
   }
 
-  const classes = classesFromStudents(st.students);
+  const classes = classesFromStudents(st.students).filter(levelAllows);
   const examTypeNames = Grading.examTypeNames(st);
 
   document.getElementById('content').innerHTML = `
