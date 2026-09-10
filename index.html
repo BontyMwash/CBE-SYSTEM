@@ -35,6 +35,15 @@ href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css"
      this one script, so upgrading past 0.9.3 should be re-tested
      against all of them first, not just the one that flagged it. -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js"></script>
+<!-- pdf-lib: used only to stitch together the separately-rendered
+     PDF chunks that a large multi-page export (e.g. a whole class of
+     report cards) now gets split into, so every page can be captured
+     at full resolution instead of the old single giant capture that
+     had to be scaled down (and blurred) once it grew tall enough.
+     See UI._buildMultiPagePdf / _mergePdfBuffers in js/ui.js. If this
+     fails to load, PDF export still works — it just falls back to
+     the single-pass capture for very large exports. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script>
   // Apply saved theme before paint, so there's no light-mode flash.
   (function () {

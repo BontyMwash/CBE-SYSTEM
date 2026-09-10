@@ -216,11 +216,50 @@ const UI = {
   // keeps the capture within a safe pixel budget — a lower-resolution
   // PDF is a far better outcome than a blank one. 2 stays the ceiling
   // for anything small enough not to need this.
+  // Shared ceiling used both as the fallback-scale calculation below
+  // and as the per-chunk height budget in _chunkElsForPdf — see that
+  // function's comment for why splitting into chunks is now the
+  // primary defence and this scale reduction is only a last-resort
+  // safety net for a single element too tall to split.
+  _SAFE_MAX_CANVAS_PX: 14000,
+
   _safePdfScale(els) {
     const totalHeightPx = els.reduce((sum, el) => sum + (el.scrollHeight || el.offsetHeight || 0), 0) || 1;
-    const SAFE_MAX_PX = 14000; // conservative vs. real-world canvas-size limits, incl. lower-end devices
-    const scale = Math.min(2, SAFE_MAX_PX / totalHeightPx);
+    const scale = Math.min(2, UI._SAFE_MAX_CANVAS_PX / totalHeightPx);
     return Math.max(0.5, scale); // never blur it into illegibility — see note below if this floor is ever hit
+  },
+
+  // Splits a long list of elements (e.g. a whole class of report
+  // cards) into groups small enough that EACH group can be captured
+  // at the full scale of 2 without tripping the canvas-size ceiling
+  // _safePdfScale exists to protect against. Previously the entire
+  // class was captured as one continuous canvas, so _safePdfScale
+  // had to scale the WHOLE thing down (as low as 0.5x) once the
+  // class was large enough — every report card came out visibly
+  // blurry, not just the overflow. Chunking first means each capture
+  // individually stays under budget, so _safePdfScale naturally
+  // returns 2 for every chunk in the normal case, and every page
+  // stays at full resolution regardless of class size. The resulting
+  // per-chunk PDFs are stitched back into one document afterward
+  // (see _buildMultiPagePdf/_mergePdfBuffers) — the split is purely
+  // an internal rendering detail, invisible in the final file.
+  _chunkElsForPdf(els) {
+    const BUDGET_PX = UI._SAFE_MAX_CANVAS_PX / 2; // css-px budget that keeps a scale-2 capture at/under the ceiling
+    const chunks = [];
+    let current = [];
+    let currentHeight = 0;
+    els.forEach(el => {
+      const h = el.scrollHeight || el.offsetHeight || 0;
+      if (current.length && currentHeight + h > BUDGET_PX) {
+        chunks.push(current);
+        current = [];
+        currentHeight = 0;
+      }
+      current.push(el);
+      currentHeight += h;
+    });
+    if (current.length) chunks.push(current);
+    return chunks;
   },
 
   // html2pdf.js renders/captures the source element at a CSS pixel
@@ -490,6 +529,76 @@ const UI = {
     } catch (e) { /* best-effort — proceed with capture regardless */ }
   },
 
+  // Captures ONE chunk (a small group of elements — see
+  // _chunkElsForPdf) through the normal html2pdf pipeline, stamps its
+  // footer immediately (each chunk is a self-contained little PDF at
+  // this point, so _stampPdfFooter's per-page loop works unchanged),
+  // then hands back the raw PDF bytes for _mergePdfBuffers to stitch
+  // together with the other chunks.
+  async _renderPdfChunkBuffer(chunk, orientation, format, footerOpts) {
+    const wrap = UI._buildPdfWrap(chunk, orientation, format);
+    try {
+      const pdf = await html2pdf().set({
+        margin: UI._pdfMarginArray(),
+        html2canvas: { scale: UI._safePdfScale(chunk), useCORS: true, backgroundColor: '#ffffff' },
+        jsPDF: { unit: 'mm', format, orientation },
+        pagebreak: { mode: ['css', 'legacy'] }
+      }).from(wrap).toPdf().get('pdf');
+      UI._stampPdfFooter(pdf, footerOpts);
+      return pdf.output('arraybuffer');
+    } finally {
+      UI._removePdfWrap(wrap);
+    }
+  },
+
+  // Stitches multiple already-generated PDFs (one per chunk) into a
+  // single continuous document using pdf-lib (loaded in index.html),
+  // copying every page across byte-for-byte rather than re-rastering
+  // anything — no further quality loss beyond what each chunk's own
+  // html2canvas capture already introduced.
+  async _mergePdfBuffers(buffers) {
+    if (buffers.length === 1) return buffers[0];
+    const merged = await PDFLib.PDFDocument.create();
+    for (const buf of buffers) {
+      const src = await PDFLib.PDFDocument.load(buf);
+      const pages = await merged.copyPages(src, src.getPageIndices());
+      pages.forEach(p => merged.addPage(p));
+    }
+    return merged.save();
+  },
+
+  // Shared by downloadPDF and pdfBlob: produces the final PDF bytes
+  // for a (possibly large) list of elements. Splits into chunks so
+  // every page renders at full resolution (see _chunkElsForPdf) and
+  // merges them back into one file with pdf-lib. If pdf-lib didn't
+  // load, or the whole export already fits in a single chunk, falls
+  // straight back to one plain html2pdf pass — still correct, just
+  // without the extra sharpness the chunked path buys for a large
+  // multi-page export.
+  async _buildMultiPagePdf(els, orientation, format, footerOpts) {
+    const chunks = UI._chunkElsForPdf(els);
+    if (chunks.length <= 1 || typeof PDFLib === 'undefined') {
+      const wrap = UI._buildPdfWrap(els, orientation, format);
+      try {
+        const pdf = await html2pdf().set({
+          margin: UI._pdfMarginArray(),
+          html2canvas: { scale: UI._safePdfScale(els), useCORS: true, backgroundColor: '#ffffff' },
+          jsPDF: { unit: 'mm', format, orientation },
+          pagebreak: { mode: ['css', 'legacy'] }
+        }).from(wrap).toPdf().get('pdf');
+        UI._stampPdfFooter(pdf, footerOpts);
+        return pdf.output('arraybuffer');
+      } finally {
+        UI._removePdfWrap(wrap);
+      }
+    }
+    const buffers = [];
+    for (const chunk of chunks) {
+      buffers.push(await UI._renderPdfChunkBuffer(chunk, orientation, format, footerOpts));
+    }
+    return UI._mergePdfBuffers(buffers);
+  },
+
   // One-click "Download PDF": renders a printable element (or several,
   // e.g. a whole class of report cards) straight to a downloadable PDF
   // file client-side, using html2pdf.js (loaded in index.html). This is
@@ -511,20 +620,21 @@ const UI = {
 
     const originalLabel = btn ? btn.innerHTML : null;
     if (btn) { btn.disabled = true; btn.innerHTML = 'Preparing PDF…'; }
-    const wrap = UI._buildPdfWrap(els, orientation, format);
     try {
       await UI._waitForPdfFonts();
-      await html2pdf().set({
-        margin: UI._pdfMarginArray(),
-        filename: filename.endsWith('.pdf') ? filename : `${filename}.pdf`,
-        html2canvas: { scale: UI._safePdfScale(els), useCORS: true, backgroundColor: '#ffffff' },
-        jsPDF: { unit: 'mm', format, orientation },
-        pagebreak: { mode: ['css', 'legacy'] }
-      }).from(wrap).toPdf().get('pdf').then(pdf => UI._stampPdfFooter(pdf, opts && opts.footer)).save();
+      const bytes = await UI._buildMultiPagePdf(els, orientation, format, opts && opts.footer);
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename.endsWith('.pdf') ? filename : `${filename}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
     } catch (e) {
       UI.toast('Could not generate PDF: ' + e.message);
     } finally {
-      UI._removePdfWrap(wrap);
       if (btn) { btn.disabled = false; btn.innerHTML = originalLabel; }
     }
   },
@@ -605,18 +715,9 @@ const UI = {
     if (els.length === 0) return null;
     const orientation = (opts && opts.orientation) || 'portrait';
     const format = (opts && opts.format) || 'a4';
-    const wrap = UI._buildPdfWrap(els, orientation, format);
-    try {
-      await UI._waitForPdfFonts();
-      return await html2pdf().set({
-        margin: UI._pdfMarginArray(),
-        html2canvas: { scale: UI._safePdfScale(els), useCORS: true, backgroundColor: '#ffffff' },
-        jsPDF: { unit: 'mm', format, orientation },
-        pagebreak: { mode: ['css', 'legacy'] }
-      }).from(wrap).toPdf().get('pdf').then(pdf => UI._stampPdfFooter(pdf, opts && opts.footer)).outputPdf('blob');
-    } finally {
-      UI._removePdfWrap(wrap);
-    }
+    await UI._waitForPdfFonts();
+    const bytes = await UI._buildMultiPagePdf(els, orientation, format, opts && opts.footer);
+    return new Blob([bytes], { type: 'application/pdf' });
   },
 
   // Lightweight "more actions" menu, shown as a modal action sheet
