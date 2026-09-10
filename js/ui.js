@@ -199,6 +199,30 @@ const UI = {
     return [m, m, m + UI._PDF_FOOTER_RESERVE_MM, m];
   },
 
+  // html2pdf captures ALL of `els` as ONE continuous image (they're
+  // stacked into a single off-screen wrap — see _buildPdfWrap — and
+  // html2canvas photographs that whole wrap in one shot before
+  // html2pdf slices the result into per-page chunks). At a fixed
+  // scale of 2, that combined canvas keeps growing with the class
+  // size — for a full class of report cards it can reach tens of
+  // thousands of pixels tall. Browsers cap how large a single canvas
+  // can be (limits vary, but tens of thousands of pixels tall is
+  // squarely in the danger zone on real devices, not just a
+  // theoretical edge case) — and going over that cap doesn't throw an
+  // error, it just silently hands back a blank canvas, which is what
+  // was producing entirely empty downloaded PDFs for whole-class
+  // exports specifically (the only export that stacks this many tall
+  // elements into one capture). Scaling down before that happens
+  // keeps the capture within a safe pixel budget — a lower-resolution
+  // PDF is a far better outcome than a blank one. 2 stays the ceiling
+  // for anything small enough not to need this.
+  _safePdfScale(els) {
+    const totalHeightPx = els.reduce((sum, el) => sum + (el.scrollHeight || el.offsetHeight || 0), 0) || 1;
+    const SAFE_MAX_PX = 14000; // conservative vs. real-world canvas-size limits, incl. lower-end devices
+    const scale = Math.min(2, SAFE_MAX_PX / totalHeightPx);
+    return Math.max(0.5, scale); // never blur it into illegibility — see note below if this floor is ever hit
+  },
+
   // html2pdf.js renders/captures the source element at a CSS pixel
   // width equal to the PDF page's content width (page width minus
   // left/right margins, converted at 96dpi) — it does this internally
@@ -493,7 +517,7 @@ const UI = {
       await html2pdf().set({
         margin: UI._pdfMarginArray(),
         filename: filename.endsWith('.pdf') ? filename : `${filename}.pdf`,
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+        html2canvas: { scale: UI._safePdfScale(els), useCORS: true, backgroundColor: '#ffffff' },
         jsPDF: { unit: 'mm', format, orientation },
         pagebreak: { mode: ['css', 'legacy'] }
       }).from(wrap).toPdf().get('pdf').then(pdf => UI._stampPdfFooter(pdf, opts && opts.footer)).save();
@@ -522,7 +546,19 @@ const UI = {
   // left/center/right left unset renders as blank, not a fallback.
   _stampPdfFooter(pdf, footerOpts) {
     const pageCount = pdf.internal.getNumberOfPages();
-    const { width: pw, height: ph } = pdf.internal.pageSize;
+    // jsPDF's pageSize only exposes getWidth()/getHeight() methods —
+    // NOT .width/.height properties (confirmed against the exact
+    // jsPDF build html2pdf.js vendors internally). Destructuring
+    // .width/.height here silently produced `undefined`, so every
+    // computation below it (bandTop, the footer text's x/y) evaluated
+    // to NaN, and jsPDF writes that literally into the PDF's raw
+    // content-stream operators (e.g. "NaN NaN Td") — which is invalid
+    // PDF syntax that a strict reader can choke on for the rest of
+    // that content stream. Silently doing nothing instead of drawing
+    // a real footer was the mildest failure mode; malformed operators
+    // corrupting page rendering entirely was the worst one.
+    const pw = pdf.internal.pageSize.getWidth();
+    const ph = pdf.internal.pageSize.getHeight();
     const useDefault = !footerOpts;
     const leftText = useDefault ? '' : (footerOpts.left || '');
     const centerText = useDefault
@@ -574,7 +610,7 @@ const UI = {
       await UI._waitForPdfFonts();
       return await html2pdf().set({
         margin: UI._pdfMarginArray(),
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+        html2canvas: { scale: UI._safePdfScale(els), useCORS: true, backgroundColor: '#ffffff' },
         jsPDF: { unit: 'mm', format, orientation },
         pagebreak: { mode: ['css', 'legacy'] }
       }).from(wrap).toPdf().get('pdf').then(pdf => UI._stampPdfFooter(pdf, opts && opts.footer)).outputPdf('blob');
