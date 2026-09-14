@@ -24,6 +24,19 @@ function classesFromStudents(students) {
   return [...new Set(students.map(s => s.klass).filter(Boolean))].sort();
 }
 
+// Natural/alphanumeric compare for admission numbers ("2025-014" sorts
+// before "2025-100", "9" sorts before "10") — plain localeCompare would
+// sort those lexicographically instead. Students with no admission
+// number recorded sort to the bottom, alphabetically by name.
+function admissionNoCompare(a, b) {
+  const av = (a.admissionNo || '').trim();
+  const bv = (b.admissionNo || '').trim();
+  if (!av && !bv) return a.name.localeCompare(b.name);
+  if (!av) return 1;
+  if (!bv) return -1;
+  return av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' }) || a.name.localeCompare(b.name);
+}
+
 // Preferred source for "which class" dropdowns everywhere in the app:
 // the Classes/Streams page (st.classes). Falls back to whatever class
 // names already exist on students, for schools that haven't set up
@@ -106,6 +119,24 @@ function buildReportMastheadHTML(st, titleText, reportLabel, term, year) {
       <h2>${UI.esc(st.settings.schoolName)}${schoolCode ? ` <span class="report-title-code">(${UI.esc(schoolCode)})</span>` : ''}</h2>
       ${st.settings.motto ? `<span class="report-title-motto">${UI.esc(st.settings.motto)}</span>` : ''}
       <span class="report-title-sub">${UI.esc(titleText)} &middot; ${UI.esc(reportLabel)} &middot; ${UI.esc(term)} ${UI.esc(year)}</span>
+    </div>
+  `;
+}
+
+// Masthead for the printable/PDF student list — same school-name band
+// as buildReportMastheadHTML, but describing the active filters instead
+// of a term/year exam sitting (this view has neither).
+function buildStudentListMastheadHTML(st, filterClass, filterSection, filterGender) {
+  const schoolCode = (st.settings.schoolCode || '').trim();
+  const bits = [];
+  bits.push(filterClass || 'All classes');
+  if (filterSection) bits.push(filterSection.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
+  if (filterGender && filterGender !== 'all') bits.push(filterGender === 'none' ? 'Gender not specified' : (filterGender === 'M' ? 'Male' : 'Female'));
+  return `
+    <div class="report-title-band">
+      <h2>${UI.esc(st.settings.schoolName)}${schoolCode ? ` <span class="report-title-code">(${UI.esc(schoolCode)})</span>` : ''}</h2>
+      ${st.settings.motto ? `<span class="report-title-motto">${UI.esc(st.settings.motto)}</span>` : ''}
+      <span class="report-title-sub">Student List &middot; ${UI.esc(bits.join(' · '))} &middot; ${new Date().toLocaleDateString()}</span>
     </div>
   `;
 }
@@ -873,6 +904,7 @@ Views.students = async function () {
       </select>
       <input type="text" id="searchBox" placeholder="Search by name or admission no." style="min-width:220px;">
       <button class="btn" id="studentsCsvBtn"><i class="fa-solid fa-download"></i> Download CSV</button>
+      <button class="btn" id="studentsPdfBtn"><i class="fa-solid fa-file-pdf"></i> Download PDF</button>
     </div>
   `;
 
@@ -897,17 +929,18 @@ Views.students = async function () {
       const q = search.toLowerCase();
       rows = rows.filter(s => s.name.toLowerCase().includes(q) || (s.admissionNo || '').toLowerCase().includes(q));
     }
-    rows = [...rows].sort((a, b) => a.klass.localeCompare(b.klass) || a.name.localeCompare(b.name));
+    rows = [...rows].sort(admissionNoCompare);
 
     if (rows.length === 0) {
       return `<div class="empty"><div class="empty-title">No students found</div><p>Try a different search, or add a new student.</p></div>`;
     }
 
     return `
-      <div class="ledger">
+      <div class="ledger" id="studentsPrintArea">
+        <div style="padding:16px 16px 0 16px;">${buildStudentListMastheadHTML(st, filterClass, filterSection, filterGender)}</div>
         <div class="ledger-scroll">
           <table class="ledger-table">
-            <thead><tr><th>#</th><th>Name</th><th>Admission No.</th><th>Class</th><th>Gender</th><th>Section</th><th>Parent Contact</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>Name</th><th>Admission No.</th><th>Class</th><th>Gender</th><th>Section</th><th>Parent Contact</th><th class="no-print"></th></tr></thead>
             <tbody>
               ${rows.map((s, i) => `
                 <tr>
@@ -918,7 +951,7 @@ Views.students = async function () {
                   <td>${genderBadge(s)}</td>
                   <td>${sectionBadge(s)}</td>
                   <td>${UI.esc(s.parentPhone) || UI.esc(s.parentEmail) || '<span class="row-index">—</span>'}</td>
-                  <td>
+                  <td class="no-print">
                     <button class="btn btn-sm btn-ghost" data-edit="${s.id}">Edit</button>
                     <button class="btn btn-sm btn-danger" data-del="${s.id}">Delete</button>
                   </td>
@@ -927,6 +960,7 @@ Views.students = async function () {
             </tbody>
           </table>
         </div>
+        ${buildPrintFooterHTML()}
       </div>
     `;
   }
@@ -940,7 +974,7 @@ Views.students = async function () {
       const q = search.toLowerCase();
       rows = rows.filter(s => s.name.toLowerCase().includes(q) || (s.admissionNo || '').toLowerCase().includes(q));
     }
-    return [...rows].sort((a, b) => a.klass.localeCompare(b.klass) || a.name.localeCompare(b.name));
+    return [...rows].sort(admissionNoCompare);
   }
 
   function paint() {
@@ -956,6 +990,12 @@ Views.students = async function () {
       const header = ['Name', 'Admission No.', 'Class', 'Gender', 'Parent name', 'Parent phone', 'Parent email'];
       const csvRows = rows.map(s => [s.name, s.admissionNo || '', s.klass, s.gender || '', s.parentName || '', s.parentPhone || '', s.parentEmail || '']);
       UI.downloadCSV(`class-list-${filterClass || 'all-classes'}`.replace(/\s+/g, '_'), header, csvRows);
+    };
+    document.getElementById('studentsPdfBtn').onclick = (e) => {
+      const rows = filteredRows(filterClass, search, filterSection, filterGender);
+      if (rows.length === 0) { UI.toast('No students to download'); return; }
+      const el = document.getElementById('studentsPrintArea');
+      UI.downloadPDF(el, `class-list-${filterClass || 'all-classes'}`.replace(/\s+/g, '_'), e.currentTarget, { orientation: 'landscape' });
     };
   }
 
