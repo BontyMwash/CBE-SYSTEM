@@ -89,7 +89,13 @@ Views.classes = async function () {
   // the Students page ("Edit" -> change Class) for exceptions.
   function openPromoteForm(from) {
     const roster = st.students.filter(s => s.klass === from.label);
-    const targets = classOptionLabels(st).filter(label => label !== from.label);
+    // Deliberately NOT classOptionLabels() here: that respects the
+    // Primary/Junior Secondary/Senior School level switcher, which would
+    // hide Grade 7-9 as a target while viewing Primary and make year-end
+    // promotion out of Grade 6 impossible. allClassOptionLabels() ignores
+    // that filter so every class/stream, in any section, is a valid
+    // promotion target.
+    const targets = allClassOptionLabels(st).filter(label => label !== from.label);
     UI.openModal(`
       <h2>Promote "${UI.esc(from.label)}"</h2>
       <p class="field-hint">Moves all ${roster.length} learner${roster.length === 1 ? '' : 's'} currently in <strong>${UI.esc(from.label)}</strong> into the class you pick below. Their results and report card history stay linked to them — only their current class changes.</p>

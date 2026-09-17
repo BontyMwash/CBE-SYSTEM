@@ -48,6 +48,19 @@ function classOptionLabels(st) {
   return classesFromStudents(st.students).filter(levelAllows);
 }
 
+// Same as classOptionLabels(), but ignores the Primary/Junior Secondary/
+// Senior School level switcher entirely. The switcher is a view-scope
+// convenience for lists (Classes, Students, etc.) — it should never stop
+// an admin from picking a target class in a *different* section, e.g.
+// promoting a Grade 6 (Primary) class up to Grade 7 (Junior Secondary)
+// at year-end. Used only by the "Promote" action on the Classes page.
+function allClassOptionLabels(st) {
+  if (st.classes && st.classes.length) {
+    return [...st.classes].sort((a, b) => a.label.localeCompare(b.label)).map(c => c.label);
+  }
+  return classesFromStudents(st.students);
+}
+
 // CBC grade bands: PP1/PP2 + Grade 1-6 = Primary, Grade 7-9 = Junior
 // Secondary, Grade 10-12 = Senior School. Parsed from the class/grade
 // name (e.g. "Grade 7", "PP1") so report cards can label themselves
