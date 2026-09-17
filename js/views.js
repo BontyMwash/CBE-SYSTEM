@@ -2056,7 +2056,7 @@ Views.results = async function () {
   function renderGrid(examId) {
     const exam = st.exams.find(e => e.id === examId);
     const locked = isLocked(exam);
-    const students = st.students.filter(s => s.klass === exam.klass).sort((a, b) => a.name.localeCompare(b.name));
+    const students = st.students.filter(s => s.klass === exam.klass).sort(admissionNoCompare);
     if (students.length === 0) {
       return `<div class="empty"><div class="empty-title">No students in ${UI.esc(exam.klass)}</div><p>Add students to this class first.</p></div>`;
     }
