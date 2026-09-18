@@ -1291,8 +1291,15 @@ Views.subjects = async function () {
     return name.replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase();
   }
 
-  function openForm(existing) {
+  // A brand-new subject defaults its Level to whichever tab the admin is
+  // currently filtered to (passed in as `defaultSection`), NOT to "All
+  // levels" — that mismatch was the bug where a subject added while
+  // looking at Junior Secondary came out unscoped and silently leaked
+  // into every other level's picker. Editing an existing subject still
+  // shows its own real section, never the filter.
+  function openForm(existing, defaultSection) {
     const isEdit = !!existing;
+    const initialSection = isEdit ? (existing.section || '') : (defaultSection || '');
     UI.openModal(`
       <h2>${isEdit ? 'Edit subject' : 'Add subject'}</h2>
       <div class="form-grid">
@@ -1308,14 +1315,14 @@ Views.subjects = async function () {
         <div class="field">
           <label>Level</label>
           <select id="f_section">
-            <option value="" ${!isEdit || !existing.section ? 'selected' : ''}>All levels</option>
-            <option value="primary" ${isEdit && existing.section === 'primary' ? 'selected' : ''}>Primary — all of Grade 1&ndash;6</option>
-            <option value="lower-primary" ${isEdit && existing.section === 'lower-primary' ? 'selected' : ''}>Lower Primary only (Grade 1&ndash;3)</option>
-            <option value="upper-primary" ${isEdit && existing.section === 'upper-primary' ? 'selected' : ''}>Upper Primary only (Grade 4&ndash;6)</option>
-            <option value="junior-secondary" ${isEdit && existing.section === 'junior-secondary' ? 'selected' : ''}>Junior Secondary only (Grade 7&ndash;9)</option>
-            <option value="senior-school" ${isEdit && existing.section === 'senior-school' ? 'selected' : ''}>Senior School only (Grade 10&ndash;12)</option>
+            <option value="" ${initialSection === '' ? 'selected' : ''}>All levels (shared everywhere &mdash; use with care)</option>
+            <option value="primary" ${initialSection === 'primary' ? 'selected' : ''}>Primary only &mdash; Lower &amp; Upper (Grade 1&ndash;6)</option>
+            <option value="lower-primary" ${initialSection === 'lower-primary' ? 'selected' : ''}>Lower Primary only (Grade 1&ndash;3)</option>
+            <option value="upper-primary" ${initialSection === 'upper-primary' ? 'selected' : ''}>Upper Primary only (Grade 4&ndash;6)</option>
+            <option value="junior-secondary" ${initialSection === 'junior-secondary' ? 'selected' : ''}>Junior Secondary only (Grade 7&ndash;9)</option>
+            <option value="senior-school" ${initialSection === 'senior-school' ? 'selected' : ''}>Senior School only (Grade 10&ndash;12)</option>
           </select>
-          <p class="field-hint">Scoping a subject keeps it out of the picker when creating exams for other levels &mdash; e.g. Chemistry for Senior School only, or a Lower Primary subject that Grade 4&ndash;6 never sits. &ldquo;Primary&rdquo; covers Lower and Upper Primary together.</p>
+          <p class="field-hint">${defaultSection && !isEdit ? `Defaulted to <strong>${UI.esc(sectionLabel(defaultSection))}</strong> since that's the level you're viewing &mdash; change it only if this subject should also appear elsewhere.` : 'Scoping a subject keeps it out of the picker for every other level &mdash; e.g. Chemistry for Senior School only. Leave on "All levels" only for a subject every level genuinely shares.'}</p>
         </div>
       </div>
       <div class="modal-actions">
@@ -1364,9 +1371,11 @@ Views.subjects = async function () {
     </div>
     <div id="wrap">${renderTable('')}</div>
   `;
-  document.getElementById('addSubjectBtn').onclick = () => openForm(null);
+  let activeFilterSection = '';
+  document.getElementById('addSubjectBtn').onclick = () => openForm(null, activeFilterSection);
   document.getElementById('sectionFilter').onchange = (e) => {
-    document.getElementById('wrap').innerHTML = renderTable(e.target.value);
+    activeFilterSection = e.target.value;
+    document.getElementById('wrap').innerHTML = renderTable(activeFilterSection);
     wireRowActions();
   };
   wireRowActions();
