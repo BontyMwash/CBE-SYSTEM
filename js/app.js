@@ -55,7 +55,7 @@ const App = {
       wrap.innerHTML = '';
       return;
     }
-    const LABELS = { primary: 'Primary', 'junior-secondary': 'Junior Secondary', 'senior-school': 'Senior School' };
+    const LABELS = { primary: 'Primary', 'lower-primary': 'Lower Primary', 'upper-primary': 'Upper Primary', 'junior-secondary': 'Junior Secondary', 'senior-school': 'Senior School' };
     if (user.role === 'admin' && user.section_scope) {
       wrap.innerHTML = `<div class="level-locked-badge" title="This login is limited to ${LABELS[user.section_scope]} by your superadmin."><i class="fa-solid fa-lock"></i> ${LABELS[user.section_scope]}</div>`;
       return;
@@ -65,7 +65,9 @@ const App = {
     wrap.innerHTML = `
       <select id="levelSwitcherSel" title="Filter the whole app to one section">
         <option value="" ${current === '' ? 'selected' : ''}>All levels</option>
-        <option value="primary" ${current === 'primary' ? 'selected' : ''}>Primary</option>
+        <option value="primary" ${current === 'primary' ? 'selected' : ''}>Primary (Grade 1&ndash;6)</option>
+        <option value="lower-primary" ${current === 'lower-primary' ? 'selected' : ''}>&nbsp;&nbsp;&mdash; Lower Primary (Grade 1&ndash;3)</option>
+        <option value="upper-primary" ${current === 'upper-primary' ? 'selected' : ''}>&nbsp;&nbsp;&mdash; Upper Primary (Grade 4&ndash;6)</option>
         <option value="junior-secondary" ${current === 'junior-secondary' ? 'selected' : ''}>Junior Secondary</option>
         <option value="senior-school" ${current === 'senior-school' ? 'selected' : ''}>Senior School</option>
       </select>

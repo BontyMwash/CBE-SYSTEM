@@ -561,7 +561,7 @@ Views.broadsheet = async function () {
         <span id="bsCount" class="field-hint" style="margin-left:auto;"></span>
       </div>
       <div class="ledger" id="bsPrintArea">
-        <div style="padding:16px 16px 0 16px;">${buildReportMastheadHTML(st, `Broadsheet — ${klass}`, `${type} Results`, term, year)}</div>
+        <div style="padding:16px 16px 0 16px;">${buildReportMastheadHTML(st, `${klassTitlePrefix(st, klass)}Broadsheet — ${klass}`, `${type} Results`, term, year)}</div>
         <div class="ledger-scroll ledger-scroll-y">
           <table class="ledger-table">
             ${bsColgroupHTML(subjectCols.length)}
@@ -712,7 +712,7 @@ Views.broadsheet = async function () {
 
       <div id="bsSummaryArea" style="margin-top:28px;">
         ${!showSummary ? '' : `
-          <div style="padding:0 0 12px 0;">${buildReportMastheadHTML(st, `${gradeName} Performance Summary`, `${type} Results`, term, year)}</div>
+          <div style="padding:0 0 12px 0;">${buildReportMastheadHTML(st, `${sectionTitlePrefix(gradeSection(gradeName))}${gradeName} Performance Summary`, `${type} Results`, term, year)}</div>
           <div class="section-title">Stream</div>
           ${summaryTableHtml('Stream', streamSummary, { showTeacher: true })}
           <div class="section-title">Gender</div>

@@ -17,7 +17,7 @@ Views.classes = async function () {
   function sectionBadge(c) {
     const section = gradeSection(c.name);
     if (!section) return '<span class="row-index">—</span>';
-    return `<span class="badge badge-${section.key === 'primary' ? 'ME' : section.key === 'junior-secondary' ? 'AE' : 'EE'}">${UI.esc(section.label)}</span>`;
+    return `<span class="badge badge-${sectionBadgeClass(section.key)}">${UI.esc(section.label)}</span>`;
   }
 
   function renderTable() {
@@ -25,7 +25,7 @@ Views.classes = async function () {
       return `<div class="empty"><div class="empty-title">No classes yet</div><p>Add a class (e.g. "Grade 7"), and optionally split it into streams (e.g. "East", "West").</p></div>`;
     }
     let rows = [...st.classes].filter(c => levelAllows(c.name));
-    if (sectionFilter) rows = rows.filter(c => { const s = gradeSection(c.name); return s && s.key === sectionFilter; });
+    if (sectionFilter) rows = rows.filter(c => { const s = gradeSection(c.name); return s && sectionCovers(sectionFilter, s.key); });
     rows.sort((a, b) => a.label.localeCompare(b.label));
     if (rows.length === 0) {
       return `<div class="empty"><div class="empty-title">No classes in this section</div><p>Try a different section, or add one on the form above.</p></div>`;
@@ -177,12 +177,14 @@ Views.classes = async function () {
 
   document.getElementById('content').innerHTML = `
     <p class="field-hint" style="margin-bottom:14px;">
-      Classes and streams created here show up as dropdown options when adding students, creating exams, entering results, and printing reports — so class names stay consistent across the school. Section (Primary / Junior Secondary) is worked out automatically from the class name (e.g. "Grade 7", "PP1") — no need to set it separately.
+      Classes and streams created here show up as dropdown options when adding students, creating exams, entering results, and printing reports — so class names stay consistent across the school. Section (Lower Primary / Upper Primary / Junior Secondary / Senior School) is worked out automatically from the class name (e.g. "Grade 2" → Lower Primary, "Grade 5" → Upper Primary, "Grade 7" → Junior Secondary) — no need to set it separately.
     </p>
     <div class="filter-row" style="margin-bottom:14px;">
       <select id="sectionFilterSel">
         <option value="">All sections</option>
         <option value="primary">Primary (PP1–PP2, Grade 1–6)</option>
+        <option value="lower-primary">&nbsp;&nbsp;— Lower Primary (Grade 1–3)</option>
+        <option value="upper-primary">&nbsp;&nbsp;— Upper Primary (Grade 4–6)</option>
         <option value="junior-secondary">Junior Secondary (Grade 7–9)</option>
         <option value="senior-school">Senior School (Grade 10–12)</option>
       </select>

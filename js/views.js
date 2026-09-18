@@ -61,25 +61,101 @@ function allClassOptionLabels(st) {
   return classesFromStudents(st.students);
 }
 
-// CBC grade bands: PP1/PP2 + Grade 1-6 = Primary, Grade 7-9 = Junior
-// Secondary, Grade 10-12 = Senior School. Parsed from the class/grade
-// name (e.g. "Grade 7", "PP1") so report cards can label themselves
-// correctly without needing a separate field to maintain. Returns
-// null for a class name that doesn't match a recognised CBC grade
-// (e.g. a custom name) — callers should fall back to a generic title.
+// CBC grade bands, finest-grained first:
+//   PP1/PP2            -> Primary (unbanded — pre-primary isn't Grade 1-6)
+//   Grade 1-3          -> Lower Primary   (child of Primary)
+//   Grade 4-6          -> Upper Primary   (child of Primary)
+//   Grade 7-9          -> Junior Secondary
+//   Grade 10-12        -> Senior School
+// Lower and Upper Primary are sub-bands of Primary rather than
+// replacements for it: anything scoped to 'primary' (a subject, a
+// section-scoped admin login, the level switcher) still covers both,
+// which is why SECTION_PARENT exists and why sectionCovers() — not a
+// bare === — is used everywhere a section is matched.
+//
+// Parsed from the class/grade name (e.g. "Grade 7", "PP1") so report
+// cards can label themselves correctly without needing a separate
+// field to maintain. Returns null for a class name that doesn't match
+// a recognised CBC grade (e.g. a custom name) — callers should fall
+// back to a generic title.
+const SECTION_PARENT = { 'lower-primary': 'primary', 'upper-primary': 'primary' };
+
+// Every selectable section key -> how it's written in the UI and at the
+// top of a printable report. Single source of truth for the labels, so
+// adding a band later means touching one object instead of ten dropdowns.
+const SECTION_INFO = {
+  'primary':          { label: 'Primary',          title: 'Primary School Report Card' },
+  'lower-primary':    { label: 'Lower Primary',    title: 'Lower Primary Report Card' },
+  'upper-primary':    { label: 'Upper Primary',    title: 'Upper Primary Report Card' },
+  'junior-secondary': { label: 'Junior Secondary', title: 'Junior Secondary Report Card' },
+  'senior-school':    { label: 'Senior School',    title: 'Senior School Report Card' },
+};
+
+function sectionInfo(key) {
+  const info = SECTION_INFO[key];
+  return info ? { key, label: info.label, title: info.title } : null;
+}
+
+// True if scope `scopeKey` includes a class/subject in section
+// `sectionKey`. A scope covers its own band and any band beneath it, so
+// 'primary' covers Lower and Upper Primary, while 'lower-primary'
+// covers only itself. An empty scope covers everything.
+function sectionCovers(scopeKey, sectionKey) {
+  if (!scopeKey) return true;
+  if (scopeKey === sectionKey) return true;
+  return SECTION_PARENT[sectionKey] === scopeKey;
+}
+
+// Badge colour class for a section key, shared by the Classes, Students
+// and Subjects tables so one band always looks the same everywhere.
+function sectionBadgeClass(key) {
+  if (key === 'primary' || key === 'lower-primary') return 'ME';
+  if (key === 'upper-primary' || key === 'junior-secondary') return 'AE';
+  if (key === 'senior-school') return 'EE';
+  return 'none';
+}
+
 function gradeSection(gradeName) {
   const s = (gradeName || '').toLowerCase();
   if (/\bpp\s*-?\s*[12]\b/.test(s) || /pre[\s-]?primary/.test(s)) {
-    return { key: 'primary', label: 'Primary', title: 'Primary School Report Card' };
+    return sectionInfo('primary');
   }
   const m = s.match(/grade\s*-?\s*(\d{1,2})/);
   if (m) {
     const n = parseInt(m[1], 10);
-    if (n >= 1 && n <= 6) return { key: 'primary', label: 'Primary', title: 'Primary School Report Card' };
-    if (n >= 7 && n <= 9) return { key: 'junior-secondary', label: 'Junior Secondary', title: 'Junior Secondary Report Card' };
-    if (n >= 10 && n <= 12) return { key: 'senior-school', label: 'Senior School', title: 'Senior School Report Card' };
+    if (n >= 1 && n <= 3) return sectionInfo('lower-primary');
+    if (n >= 4 && n <= 6) return sectionInfo('upper-primary');
+    if (n >= 7 && n <= 9) return sectionInfo('junior-secondary');
+    if (n >= 10 && n <= 12) return sectionInfo('senior-school');
   }
   return null;
+}
+
+// Section prefix for a printable report's title line, e.g. turning
+// "Broadsheet — Grade 2 Blue" into "Lower Primary · Broadsheet — Grade 2
+// Blue". Every printout says which CBC band it belongs to, so a stack of
+// printed reports can be sorted by level without reading the class names.
+// Returns '' for a class name that isn't a recognised CBC grade, leaving
+// the title exactly as it was.
+function sectionTitlePrefix(section) {
+  return section ? `${section.label} \u00b7 ` : '';
+}
+
+// Same, but starting from a class/stream LABEL (e.g. "Grade 5 Blue").
+function klassTitlePrefix(st, klassLabel) {
+  if (!klassLabel) return '';
+  return sectionTitlePrefix(sectionForKlassLabel(st, klassLabel));
+}
+
+// Section prefix for a report that spans many classes (whole-school
+// analysis, class/stream comparison): named only when the level
+// switcher or a section-scoped admin login has narrowed the report to
+// one band, since otherwise the report genuinely covers all of them.
+function activeLevelTitlePrefix() {
+  const level = effectiveLevel();
+  if (!level) return '';
+  const info = SECTION_INFO[level];
+  return info ? `${info.label} \u00b7 ` : '';
 }
 
 // ---- Level switcher (Primary / Junior Secondary / Senior School) ----
@@ -107,7 +183,8 @@ function levelAllows(klassName) {
   const level = effectiveLevel();
   if (!level) return true;
   const section = gradeSection(klassName);
-  return !section || section.key === level;
+  // A "Primary" filter/scope keeps both Lower and Upper Primary classes.
+  return !section || sectionCovers(level, section.key);
 }
 
 // Shared masthead for every printable report (report card, single-exam
@@ -143,7 +220,7 @@ function buildStudentListMastheadHTML(st, filterClass, filterSection, filterGend
   const schoolCode = (st.settings.schoolCode || '').trim();
   const bits = [];
   bits.push(filterClass || 'All classes');
-  if (filterSection) bits.push(filterSection.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
+  if (filterSection) bits.push(SECTION_INFO[filterSection] ? SECTION_INFO[filterSection].label : filterSection.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
   if (filterGender && filterGender !== 'all') bits.push(filterGender === 'none' ? 'Gender not specified' : (filterGender === 'M' ? 'Male' : 'Female'));
   return `
     <div class="report-title-band">
@@ -360,17 +437,21 @@ function sectionForKlassLabel(st, klassLabel) {
   return gradeSection(classEntry ? classEntry.name : klassLabel);
 }
 
-// Primary, Junior Secondary and Senior School genuinely offer different
-// subjects (e.g. Chemistry doesn't exist below Senior School) — a
-// subject with section:'' is shared across every level (the default,
-// so nothing already set up disappears); anything else only shows up
-// for classes in that one section. Used everywhere a subject picker is
-// scoped to an already-chosen class (exam creation, results entry).
+// Lower Primary, Upper Primary, Junior Secondary and Senior School
+// genuinely offer different subjects (e.g. Chemistry doesn't exist
+// below Senior School; Pre-Technical Studies is Junior Secondary only;
+// Grade 1-3 runs a narrower Lower Primary list than Grade 4-6) — a
+// subject with section:'' is shared across every level (the default, so
+// nothing already set up disappears); anything else only shows up for
+// classes in that band. A subject scoped to 'primary' still shows for
+// both Lower and Upper Primary, so existing Primary-scoped subjects
+// keep working untouched. Used everywhere a subject picker is scoped to
+// an already-chosen class (exam creation, results entry).
 function subjectsForKlass(st, klassLabel) {
   if (!klassLabel) return st.subjects;
   const section = sectionForKlassLabel(st, klassLabel);
   if (!section) return st.subjects;
-  return st.subjects.filter(s => !s.section || s.section === section.key);
+  return st.subjects.filter(s => sectionCovers(s.section || '', section.key));
 }
 
 // Shared by the teacher-facing screens (My Classes, Learners,
@@ -901,9 +982,11 @@ Views.students = async function () {
     <div class="filter-row">
       <select id="sectionFilter">
         <option value="">All sections</option>
-        <option value="primary">Primary</option>
-        <option value="junior-secondary">Junior Secondary</option>
-        <option value="senior-school">Senior School</option>
+        <option value="primary">Primary (Grade 1&ndash;6)</option>
+        <option value="lower-primary">Lower Primary (Grade 1&ndash;3)</option>
+        <option value="upper-primary">Upper Primary (Grade 4&ndash;6)</option>
+        <option value="junior-secondary">Junior Secondary (Grade 7&ndash;9)</option>
+        <option value="senior-school">Senior School (Grade 10&ndash;12)</option>
       </select>
       <select id="classFilter">
         <option value="">All classes</option>
@@ -924,7 +1007,7 @@ Views.students = async function () {
   function sectionBadge(s) {
     const section = sectionForKlassLabel(st, s.klass);
     if (!section) return '<span class="row-index">—</span>';
-    return `<span class="badge badge-${section.key === 'primary' ? 'ME' : section.key === 'junior-secondary' ? 'AE' : 'EE'}">${UI.esc(section.label)}</span>`;
+    return `<span class="badge badge-${sectionBadgeClass(section.key)}">${UI.esc(section.label)}</span>`;
   }
 
   function genderBadge(s) {
@@ -936,7 +1019,7 @@ Views.students = async function () {
   function renderTable(filterClass, search, filterSection, filterGender) {
     let rows = st.students.filter(s => levelAllows(s.klass));
     if (filterClass) rows = rows.filter(s => s.klass === filterClass);
-    if (filterSection) rows = rows.filter(s => { const sec = sectionForKlassLabel(st, s.klass); return sec && sec.key === filterSection; });
+    if (filterSection) rows = rows.filter(s => { const sec = sectionForKlassLabel(st, s.klass); return sec && sectionCovers(filterSection, sec.key); });
     if (filterGender && filterGender !== 'all') rows = rows.filter(s => (s.gender || '') === (filterGender === 'none' ? '' : filterGender));
     if (search) {
       const q = search.toLowerCase();
@@ -981,7 +1064,7 @@ Views.students = async function () {
   function filteredRows(filterClass, search, filterSection, filterGender) {
     let rows = st.students.filter(s => levelAllows(s.klass));
     if (filterClass) rows = rows.filter(s => s.klass === filterClass);
-    if (filterSection) rows = rows.filter(s => { const sec = sectionForKlassLabel(st, s.klass); return sec && sec.key === filterSection; });
+    if (filterSection) rows = rows.filter(s => { const sec = sectionForKlassLabel(st, s.klass); return sec && sectionCovers(filterSection, sec.key); });
     if (filterGender && filterGender !== 'all') rows = rows.filter(s => (s.gender || '') === (filterGender === 'none' ? '' : filterGender));
     if (search) {
       const q = search.toLowerCase();
@@ -1144,16 +1227,17 @@ Views.subjects = async function () {
   showLoading();
   const st = await Store.current();
 
-  const SECTION_LABELS = { '': 'All levels', 'primary': 'Primary', 'junior-secondary': 'Junior Secondary', 'senior-school': 'Senior School' };
+  function sectionLabel(key) {
+    return key ? (SECTION_INFO[key] ? SECTION_INFO[key].label : key) : 'All levels';
+  }
   function sectionBadge(s) {
     const key = s.section || '';
-    const cls = key === 'primary' ? 'ME' : key === 'junior-secondary' ? 'AE' : key === 'senior-school' ? 'EE' : 'none';
-    return `<span class="badge badge-${cls}">${UI.esc(SECTION_LABELS[key])}</span>`;
+    return `<span class="badge badge-${sectionBadgeClass(key)}">${UI.esc(sectionLabel(key))}</span>`;
   }
 
   function renderTable(filterSection) {
     let rows = [...st.subjects].sort((a, b) => a.name.localeCompare(b.name));
-    if (filterSection) rows = rows.filter(s => (s.section || '') === filterSection);
+    if (filterSection) rows = rows.filter(s => sectionCovers(filterSection, s.section || '') && (s.section || ''));
     if (st.subjects.length === 0) {
       return `<div class="empty"><div class="empty-title">No subjects yet</div><p>Add subjects like Mathematics, English, Integrated Science.</p></div>`;
     }
@@ -1224,12 +1308,14 @@ Views.subjects = async function () {
         <div class="field">
           <label>Level</label>
           <select id="f_section">
-            <option value="" ${!isEdit || !existing.section ? 'selected' : ''}>All levels (Primary, Junior Secondary & Senior School)</option>
-            <option value="primary" ${isEdit && existing.section === 'primary' ? 'selected' : ''}>Primary only</option>
-            <option value="junior-secondary" ${isEdit && existing.section === 'junior-secondary' ? 'selected' : ''}>Junior Secondary only</option>
-            <option value="senior-school" ${isEdit && existing.section === 'senior-school' ? 'selected' : ''}>Senior School only</option>
+            <option value="" ${!isEdit || !existing.section ? 'selected' : ''}>All levels</option>
+            <option value="primary" ${isEdit && existing.section === 'primary' ? 'selected' : ''}>Primary — all of Grade 1&ndash;6</option>
+            <option value="lower-primary" ${isEdit && existing.section === 'lower-primary' ? 'selected' : ''}>Lower Primary only (Grade 1&ndash;3)</option>
+            <option value="upper-primary" ${isEdit && existing.section === 'upper-primary' ? 'selected' : ''}>Upper Primary only (Grade 4&ndash;6)</option>
+            <option value="junior-secondary" ${isEdit && existing.section === 'junior-secondary' ? 'selected' : ''}>Junior Secondary only (Grade 7&ndash;9)</option>
+            <option value="senior-school" ${isEdit && existing.section === 'senior-school' ? 'selected' : ''}>Senior School only (Grade 10&ndash;12)</option>
           </select>
-          <p class="field-hint">Scoping a subject (e.g. Chemistry) to one level keeps it out of the picker when creating exams for other levels.</p>
+          <p class="field-hint">Scoping a subject keeps it out of the picker when creating exams for other levels &mdash; e.g. Chemistry for Senior School only, or a Lower Primary subject that Grade 4&ndash;6 never sits. &ldquo;Primary&rdquo; covers Lower and Upper Primary together.</p>
         </div>
       </div>
       <div class="modal-actions">
@@ -1269,9 +1355,11 @@ Views.subjects = async function () {
     <div class="filter-row">
       <select id="sectionFilter">
         <option value="">All levels</option>
-        <option value="primary">Primary</option>
-        <option value="junior-secondary">Junior Secondary</option>
-        <option value="senior-school">Senior School</option>
+        <option value="primary">Primary (Grade 1&ndash;6)</option>
+        <option value="lower-primary">Lower Primary (Grade 1&ndash;3)</option>
+        <option value="upper-primary">Upper Primary (Grade 4&ndash;6)</option>
+        <option value="junior-secondary">Junior Secondary (Grade 7&ndash;9)</option>
+        <option value="senior-school">Senior School (Grade 10&ndash;12)</option>
       </select>
     </div>
     <div id="wrap">${renderTable('')}</div>
@@ -2565,7 +2653,7 @@ function renderClassPerformanceReport(st, scope) {
 
     return `
       <div class="report-card" id="cpPrintArea">
-        ${buildReportMastheadHTML(st, 'Class / Stream Performance Report', picked.type || 'All sittings', picked.term, picked.year)}
+        ${buildReportMastheadHTML(st, `${activeLevelTitlePrefix()}Class / Stream Performance Report`, picked.type || 'All sittings', picked.term, picked.year)}
         <div class="report-meta-grid">
           <div><span class="k">Classes/streams:</span>${stats.length}</div>
           <div><span class="k">School mean:</span>${schoolMean === null ? '—' : schoolMean.toFixed(1) + '%'}</div>

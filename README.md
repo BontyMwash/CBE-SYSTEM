@@ -49,6 +49,7 @@ project/
 │   └── 012_class_teacher_add_students.sql # migration for existing installs — lets a class teacher add learners into their own class(es)
 │   ├── 013_admin_section_scope.sql # migration for existing installs — lets a superadmin restrict an admin login to Primary, Junior Secondary, or Senior School only
 │   ├── 023_section_scope_publish.sql # migration for existing installs — closes a gap in 013: makes "Publish results" respect a section-scoped admin's Section too
+│   ├── 024_primary_bands.sql # migration for existing installs — lets a subject be scoped to Lower Primary (Grade 1–3) or Upper Primary (Grade 4–6), not just "Primary"
 │   ├── 015_lesson_plans_and_schemes.sql # historical — feature removed, see 017
 │   ├── 016_curriculum_documents.sql # historical — feature removed, see 017
 │   └── 017_remove_lesson_plans_and_schemes.sql # ⚠️ RUN THIS if you ever ran 015/016 — drops the Lesson Plans & Schemes of Work feature

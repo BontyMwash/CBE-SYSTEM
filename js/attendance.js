@@ -255,7 +255,7 @@ function renderReportMode(st, myKlasses, initialKlass) {
       </tr>`;
     document.getElementById('arWrap').innerHTML = `
       <div id="arPrintArea">
-        ${buildReportMastheadHTML(st, `${picked.period[0].toUpperCase()}${picked.period.slice(1)} Attendance Report`, picked.klass, range.from, range.to === range.from ? '' : `– ${range.to}`)}
+        ${buildReportMastheadHTML(st, `${picked.klass ? klassTitlePrefix(st, picked.klass) : activeLevelTitlePrefix()}${picked.period[0].toUpperCase()}${picked.period.slice(1)} Attendance Report`, picked.klass, range.from, range.to === range.from ? '' : `– ${range.to}`)}
         <p class="field-hint" style="margin:0 0 14px 0;">${UI.esc(picked.klass)} &middot; ${range.label} &middot; ${daysMarked} day${daysMarked === 1 ? '' : 's'} with attendance marked.</p>
         ${rows.length === 0 ? `<div class="empty"><div class="empty-title">No learners in ${UI.esc(picked.klass)}</div></div>` : `
         <div class="ledger">

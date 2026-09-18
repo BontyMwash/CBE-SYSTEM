@@ -121,7 +121,7 @@ Views.analysis = async function () {
       <div id="anPrintArea">
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:2px;">
           <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-            <h3 style="margin:0;">${UI.esc(klass)} &middot; ${UI.esc(type)} &middot; ${UI.esc(term)} ${UI.esc(String(year))}</h3>
+            <h3 style="margin:0;">${UI.esc(klassTitlePrefix(st, klass))}${UI.esc(klass)} &middot; ${UI.esc(type)} &middot; ${UI.esc(term)} ${UI.esc(String(year))}</h3>
             ${statusBadge}
           </div>
           <div class="filter-row no-print" style="margin:0;">

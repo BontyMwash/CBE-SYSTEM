@@ -170,7 +170,7 @@ Views.meritList = async function () {
     const scopeLabel = gradeName || 'Whole school';
     wrap.innerHTML = `
       <div class="ledger" id="mlPrintArea">
-        <div style="padding:16px 16px 0 16px;">${buildReportMastheadHTML(st, `Merit List — ${scopeLabel}`, `${type} Results`, term, year)}</div>
+        <div style="padding:16px 16px 0 16px;">${buildReportMastheadHTML(st, `${gradeName ? sectionTitlePrefix(gradeSection(gradeName)) : activeLevelTitlePrefix()}Merit List — ${scopeLabel}`, `${type} Results`, term, year)}</div>
         <div class="ledger-scroll ledger-scroll-y">
           <table class="ledger-table">
             <thead>
