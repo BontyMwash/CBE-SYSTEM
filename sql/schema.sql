@@ -76,10 +76,11 @@ create table subjects (
   -- Short code (e.g. "MAT", "ENG") used on the broadsheet instead of the
   -- full subject name, so more subject columns fit the printable page width.
   code        text not null default '',
-  -- '' = shared across every level, or 'primary' / 'junior-secondary' /
-  -- 'senior-school' to scope this subject to just that CBC section
-  -- (e.g. Chemistry only offered from Senior School up).
-  section     text not null default '' check (section in ('', 'primary', 'junior-secondary', 'senior-school')),
+  -- '' = shared across every level, or 'primary' / 'lower-primary' /
+  -- 'upper-primary' / 'junior-secondary' / 'senior-school' to scope this
+  -- subject to just that CBC band ('primary' covers both Lower and Upper
+  -- Primary; e.g. Chemistry only offered from Senior School up).
+  section     text not null default '' check (section in ('', 'primary', 'lower-primary', 'upper-primary', 'junior-secondary', 'senior-school')),
   created_at  timestamptz not null default now()
 );
 
