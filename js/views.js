@@ -96,6 +96,14 @@ function sectionInfo(key) {
   return info ? { key, label: info.label, title: info.title } : null;
 }
 
+// Shared everywhere a section key needs turning into its display name
+// (Subjects, Classes, Students, Users) — 'All levels' for '' /
+// null/undefined, otherwise the label from SECTION_INFO (falling back
+// to the raw key for any value SECTION_INFO doesn't recognise).
+function sectionLabel(key) {
+  return key ? (SECTION_INFO[key] ? SECTION_INFO[key].label : key) : 'All levels';
+}
+
 // True if scope `scopeKey` includes a class/subject in section
 // `sectionKey`. A scope covers its own band and any band beneath it, so
 // 'primary' covers Lower and Upper Primary, while 'lower-primary'
@@ -1271,9 +1279,6 @@ Views.subjects = async function () {
   showLoading();
   const st = await Store.current();
 
-  function sectionLabel(key) {
-    return key ? (SECTION_INFO[key] ? SECTION_INFO[key].label : key) : 'All levels';
-  }
   function sectionBadge(s) {
     const key = s.section || '';
     return `<span class="badge badge-${sectionBadgeClass(key)}">${UI.esc(sectionLabel(key))}</span>`;
