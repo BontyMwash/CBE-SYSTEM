@@ -24,17 +24,21 @@ const Auth = {
     ],
     // Teacher section — kept in this order because it's the order the
     // sidebar is meant to walk a teacher through their day:
-    // Dashboard -> My Classes -> Learners -> Assessments -> Marks Entry
-    // -> Marks Analysis -> Gradebook -> Report Cards -> Attendance ->
-    // Competency Assessment -> Reports. Broadsheet (whole-class, every
-    // subject) and Merit List (whole-grade, across streams) are
-    // deliberately NOT in this base list — those are whole-class-scope
-    // actions, only appropriate for a teacher who actually holds a
-    // class (a "class teacher"), and are added back in allowedRoutes()
-    // below for exactly those teachers. "Send Results to Parents" is
-    // never given to any teacher — see userClassTeacherExtra below.
+    // Dashboard -> My Classes -> Learners -> Marks Entry -> Marks
+    // Analysis -> Gradebook -> Report Cards -> Attendance ->
+    // Competency Assessment -> Reports. "Assessments" (creating/editing
+    // exam sittings) is deliberately NOT given to teachers — creating
+    // exams is an admin-only action (see the Exams page); a teacher
+    // only enters marks against exams the admin has already created,
+    // via Marks Entry. Broadsheet (whole-class, every subject) and
+    // Merit List (whole-grade, across streams) are also NOT in this
+    // base list — those are whole-class-scope actions, only appropriate
+    // for a teacher who actually holds a class (a "class teacher"), and
+    // are added back in allowedRoutes() below for exactly those
+    // teachers. "Send Results to Parents" is never given to any
+    // teacher — see userClassTeacherExtra below.
     user: [
-      'dashboard', 'myClasses', 'learners', 'assessments', 'results', 'analysis',
+      'dashboard', 'myClasses', 'learners', 'results', 'analysis',
       'gradebook', 'reports', 'attendance', 'competency'
     ],
     // Routes added on top of `user` only for teachers who are a class

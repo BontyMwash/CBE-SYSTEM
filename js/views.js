@@ -518,13 +518,16 @@ function teacherScope(st, user) {
     assignedClasses = st.classes.filter(c => inScope.has(c.id) || assignedClasses.some(ac => ac.id === c.id));
   }
 
-  // Fallback for teachers an admin hasn't explicitly assigned classes
-  // to yet: derive "their" classes from whichever classes have exams
-  // in a subject they teach, so the screens aren't empty on day one.
-  if (assignedClasses.length === 0 && subjectIds.size) {
-    const derivedLabels = new Set(st.exams.filter(e => subjectIds.has(e.subjectId)).map(e => e.klass));
-    assignedClasses = st.classes.filter(c => derivedLabels.has(c.label));
-  }
+  // NOTE: there used to be a fallback here that derived "their" classes
+  // from whichever classes had exams in a subject the teacher teaches,
+  // for teachers an admin hadn't explicitly assigned classes to yet.
+  // That's been removed: a subject id can be shared across levels
+  // (e.g. one "Mathematics" row used by both Grade 1 and Grade 7), so
+  // it derived classes from ANY level using that subject — a Junior
+  // Secondary Maths teacher could end up seeing a Grade 1 exam. A
+  // teacher with subjects but no classes now correctly sees an empty
+  // state asking their administrator to assign classes from the Users
+  // page ("Manage classes"), rather than a guess.
 
   return {
     isTeacher: true,
@@ -596,7 +599,13 @@ Views.dashboard = async function () {
   // never whole-school totals. Admins are unrestricted, as before.
   const classes = isTeacher ? [...scope.classLabels].sort() : classOptionLabels(st);
   const students = st.students.filter(s => levelAllows(s.klass) && (!isTeacher || scope.classLabels.has(s.klass)));
-  const exams = st.exams.filter(e => levelAllows(e.klass) && (!isTeacher || scope.subjectIds.has(e.subjectId)));
+  // Both the subject AND the class must be the teacher's own — a
+  // subject id can be shared across levels (e.g. one "Mathematics" row
+  // used by both Grade 1 and Grade 7), so checking subjectIds alone
+  // would leak another level's exams in that subject onto a teacher's
+  // dashboard. See the same fix in Marks Entry / Assessments / Single
+  // exam report below.
+  const exams = st.exams.filter(e => levelAllows(e.klass) && (!isTeacher || (scope.subjectIds.has(e.subjectId) && scope.classLabels.has(e.klass))));
   const examIdsInLevel = new Set(exams.map(e => e.id));
   const results = st.results.filter(r => examIdsInLevel.has(r.examId));
   const subjectIdsInLevel = new Set(exams.map(e => e.subjectId));
@@ -2067,7 +2076,14 @@ Views.results = async function () {
   const scope = teacherScope(st, user);
   const isRestrictedTeacher = scope.isTeacher;
   const allowedSubjectIds = isRestrictedTeacher ? scope.subjectIds : null;
-  let visibleExams = isRestrictedTeacher ? st.exams.filter(e => allowedSubjectIds.has(e.subjectId)) : st.exams;
+  // Require BOTH the subject and the class to be the teacher's own.
+  // A subject id can be shared across levels (e.g. one "Mathematics"
+  // row used by both Grade 1 and Grade 7), so filtering on subject
+  // alone let a Grade 1 exam in that subject show up for a teacher who
+  // only teaches it in Junior Secondary. See teacherScope() in views.js.
+  let visibleExams = isRestrictedTeacher
+    ? st.exams.filter(e => allowedSubjectIds.has(e.subjectId) && scope.classLabels.has(e.klass))
+    : st.exams;
   visibleExams = visibleExams.filter(e => levelAllows(e.klass));
   st.exams = visibleExams;
 
@@ -2477,7 +2493,12 @@ function renderStudentReportCard(st, scope) {
    above. Shows every student's mark, percentage, level and class
    position for just that one exam. ---- */
 function renderSingleExamReport(st, scope) {
-  const examsInScope = (scope && scope.isTeacher ? st.exams.filter(e => scope.subjectIds.has(e.subjectId)) : st.exams).filter(e => levelAllows(e.klass));
+  // Subject AND class must both be the teacher's own — see the note in
+  // Views.results above about a subject id being shared across levels.
+  const examsInScope = (scope && scope.isTeacher
+    ? st.exams.filter(e => scope.subjectIds.has(e.subjectId) && scope.classLabels.has(e.klass))
+    : st.exams
+  ).filter(e => levelAllows(e.klass));
   if (examsInScope.length === 0) {
     document.getElementById('modeWrap').innerHTML = `<div class="empty"><div class="empty-title">No exams yet</div><p>${scope && scope.isTeacher ? 'No assessments recorded yet for your subject(s).' : 'Create an exam first from the Exams page.'}</p></div>`;
     return;

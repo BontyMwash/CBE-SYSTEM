@@ -259,7 +259,11 @@ Views.assessments = async function () {
   const isTeacher = scope.isTeacher;
 
   const mySubjects = isTeacher ? st.subjects.filter(s => scope.subjectIds.has(s.id)) : st.subjects;
-  const myExams = isTeacher ? st.exams.filter(e => scope.subjectIds.has(e.subjectId)) : st.exams;
+  // Subject AND class must both be the teacher's own — a subject id can
+  // be shared across levels (e.g. one "Mathematics" row used by both
+  // Grade 1 and Grade 7), so filtering on subject alone would leak
+  // another level's exams in that subject into this list.
+  const myExams = isTeacher ? st.exams.filter(e => scope.subjectIds.has(e.subjectId) && scope.classLabels.has(e.klass)) : st.exams;
 
   setTopbarActions(`<button class="btn btn-primary" id="addAssessmentBtn" ${mySubjects.length === 0 ? 'disabled' : ''}>+ New assessment</button>`);
 
