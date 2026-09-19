@@ -1224,14 +1224,23 @@ Views.users = async function () {
       return;
     }
     const sortedSubjects = [...st.subjects].sort((a, b) => a.name.localeCompare(b.name));
+    // Same Section-vs-explicit-picks note as Manage classes — a Section
+    // grants every subject in that band automatically, on top of
+    // whatever's selected here, not instead of it.
+    const sectionNotice = existing.sectionScope ? `
+      <div class="field-hint" style="background:var(--warn-bg, #fff3cd); border:1px solid var(--warn-border, #ffe69c); border-radius:6px; padding:10px 12px; margin-bottom:12px;">
+        <strong>Heads up:</strong> ${UI.esc(existing.name)}'s Section is set to <strong>${UI.esc(sectionLabel(existing.sectionScope))}</strong>. That already grants them EVERY subject in ${UI.esc(sectionLabel(existing.sectionScope))}, automatically — the list below only ADDS to that, it doesn't replace it. If you want this teacher restricted to only the subject(s) you pick here, first clear their Section: "Edit name/role" → Section → "All levels".
+      </div>` : '';
+    const subjectInScope = (s) => existing.sectionScope && sectionsOverlap(s.section || '', existing.sectionScope);
     UI.openModal(`
       <h2>Manage subjects — ${UI.esc(existing.name)}</h2>
-      <p class="field-hint" style="margin-bottom:12px;">Only the subjects selected below will be visible to ${UI.esc(existing.name)} on Results Entry, Report Cards and Exams for editing — this keeps each teacher scoped to their own subject(s).</p>
+      ${sectionNotice}
+      <p class="field-hint" style="margin-bottom:12px;">${existing.sectionScope ? 'Select any EXTRA subjects this teacher should have, beyond their Section (above).' : `Only the subjects selected below will be visible to ${UI.esc(existing.name)} on Results Entry, Report Cards and Exams for editing — this keeps each teacher scoped to their own subject(s).`}</p>
       <div class="field full">
         <label>Subjects</label>
         <select id="subjectMultiSelect" multiple size="${Math.min(10, Math.max(4, sortedSubjects.length))}" style="width:100%;">
           ${sortedSubjects.map(s => `
-            <option value="${s.id}" ${assigned.has(s.id) ? 'selected' : ''}>${UI.esc(s.name)}${s.code ? ` (${UI.esc(s.code)})` : ''}</option>
+            <option value="${s.id}" ${assigned.has(s.id) ? 'selected' : ''}>${UI.esc(s.name)}${s.code ? ` (${UI.esc(s.code)})` : ''}${subjectInScope(s) ? ' [already via Section]' : ''}</option>
           `).join('')}
         </select>
         <p class="field-hint" style="margin-top:8px;">Hold Ctrl (Windows) or Cmd (Mac) to select more than one subject from the list.</p>
@@ -1267,14 +1276,25 @@ Views.users = async function () {
       `, (root) => { root.querySelector('#cancelBtn').onclick = () => UI.closeModal(); });
       return;
     }
+    // A Section on this teacher's profile ALSO grants every class in
+    // that band automatically (see teacherScope() in views.js) — on
+    // TOP of whatever's checked below, not instead of it. Without this
+    // notice, an admin who ticks just one class here is baffled when
+    // the teacher still sees every other class in their Section.
+    const sectionNotice = existing.sectionScope ? `
+      <div class="field-hint" style="background:var(--warn-bg, #fff3cd); border:1px solid var(--warn-border, #ffe69c); border-radius:6px; padding:10px 12px; margin-bottom:12px;">
+        <strong>Heads up:</strong> ${UI.esc(existing.name)}'s Section is set to <strong>${UI.esc(sectionLabel(existing.sectionScope))}</strong>. That already grants them EVERY class in ${UI.esc(sectionLabel(existing.sectionScope))}, automatically — the checkboxes below only ADD to that, they don't replace it. If you want this teacher restricted to only the class(es) you check here, first clear their Section: "Edit name/role" → Section → "All levels".
+      </div>` : '';
+    const classInScope = (c) => existing.sectionScope && (() => { const band = gradeSection(c.name); return band && sectionCovers(existing.sectionScope, band.key); })();
     UI.openModal(`
       <h2>Manage classes — ${UI.esc(existing.name)}</h2>
-      <p class="field-hint" style="margin-bottom:12px;">Only the classes checked below will show up under My Classes, Learners and Attendance for ${UI.esc(existing.name)} — this scopes a teacher (or class/homeroom teacher) to their own class(es).</p>
+      ${sectionNotice}
+      <p class="field-hint" style="margin-bottom:12px;">${existing.sectionScope ? 'Check any EXTRA classes this teacher should have, beyond their Section (above).' : `Only the classes checked below will show up under My Classes, Learners and Attendance for ${UI.esc(existing.name)} — this scopes a teacher (or class/homeroom teacher) to their own class(es).`}</p>
       <div class="form-grid">
         ${[...st.classes].sort((a, b) => a.label.localeCompare(b.label)).map(c => `
           <label class="field full" style="flex-direction:row; align-items:center; gap:10px;">
             <input type="checkbox" data-class-check="${c.id}" ${assigned.has(c.id) ? 'checked' : ''} style="width:auto;">
-            <span>${UI.esc(c.label)}</span>
+            <span>${UI.esc(c.label)}${classInScope(c) ? ' <span class="badge badge-none" style="font-size:0.75em;">already via Section</span>' : ''}</span>
           </label>
         `).join('')}
       </div>

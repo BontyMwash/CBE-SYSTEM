@@ -47,10 +47,11 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    // Must be a logged-in user of the app — same check pattern as
-    // manage-user, just without the extra role checks (any teacher/
-    // admin who can already open "Send Results to Parents" is allowed
-    // to send through the school's own gateway too).
+    // Must be a logged-in user of the app, AND admin/superadmin — "Send
+    // Results to Parents" (the only screen that calls this) is no
+    // longer given to any teacher login, so this matches the UI: a
+    // teacher can't reach the button, and can't call this directly
+    // either even if they found the endpoint.
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) return json({ error: "Missing Authorization header" }, 401);
     const callerClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
@@ -58,6 +59,14 @@ serve(async (req) => {
     });
     const { data: { user: caller }, error: callerErr } = await callerClient.auth.getUser();
     if (callerErr || !caller) return json({ error: "Invalid session" }, 401);
+
+    const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+    const { data: callerProfile, error: profileErr } = await adminClient
+      .from("profiles").select("role").eq("id", caller.id).single();
+    if (profileErr || !callerProfile) return json({ error: "Caller has no profile" }, 403);
+    if (!["admin", "superadmin"].includes(callerProfile.role)) {
+      return json({ error: "Only an admin can send results SMS." }, 403);
+    }
 
     if (!AT_USERNAME || !AT_API_KEY) {
       return json({
