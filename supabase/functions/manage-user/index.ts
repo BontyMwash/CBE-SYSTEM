@@ -66,8 +66,9 @@ async function handleCreate(adminClient: any, callerProfile: any, body: any) {
   if (!["admin", "user"].includes(role)) {
     return json({ error: "role must be 'admin' or 'user'" }, 400);
   }
-  if (sectionScope && !["primary", "junior-secondary", "senior-school"].includes(sectionScope)) {
-    return json({ error: "sectionScope must be 'primary', 'junior-secondary' or 'senior-school'" }, 400);
+  const VALID_SECTIONS = ["primary", "lower-primary", "upper-primary", "junior-secondary", "senior-school"];
+  if (sectionScope && !VALID_SECTIONS.includes(sectionScope)) {
+    return json({ error: `sectionScope must be one of: ${VALID_SECTIONS.join(", ")}` }, 400);
   }
 
   let targetSchoolId = schoolId;
@@ -98,9 +99,13 @@ async function handleCreate(adminClient: any, callerProfile: any, body: any) {
   });
   if (createErr) return json({ error: createErr.message }, 400);
 
+  // section_scope is meaningful for BOTH roles: it restricts an admin
+  // to one CBC level, and auto-grants a teacher every subject/class in
+  // one CBC level (see teacher_has_subject/teacher_has_class in
+  // 025_teacher_section_scope.sql). Save it as given for either role.
   const { error: insertErr } = await adminClient.from("profiles").insert({
     id: created.user.id, school_id: targetSchoolId, role, name,
-    section_scope: role === "admin" ? (sectionScope || null) : null,
+    section_scope: sectionScope || null,
   });
   if (insertErr) {
     await adminClient.auth.admin.deleteUser(created.user.id); // roll back

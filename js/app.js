@@ -56,8 +56,9 @@ const App = {
       return;
     }
     const LABELS = { primary: 'Primary', 'lower-primary': 'Lower Primary', 'upper-primary': 'Upper Primary', 'junior-secondary': 'Junior Secondary', 'senior-school': 'Senior School' };
-    if (user.role === 'admin' && user.section_scope) {
-      wrap.innerHTML = `<div class="level-locked-badge" title="This login is limited to ${LABELS[user.section_scope]} by your superadmin."><i class="fa-solid fa-lock"></i> ${LABELS[user.section_scope]}</div>`;
+    if (user.section_scope && (user.role === 'admin' || user.role === 'user')) {
+      const why = user.role === 'admin' ? 'This login is limited to' : 'This login automatically sees';
+      wrap.innerHTML = `<div class="level-locked-badge" title="${why} ${LABELS[user.section_scope]}."><i class="fa-solid fa-lock"></i> ${LABELS[user.section_scope]}</div>`;
       return;
     }
     let current = '';

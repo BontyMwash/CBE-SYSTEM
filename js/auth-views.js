@@ -1020,10 +1020,24 @@ Views.users = async function () {
     return new Set(teacherClasses.filter(tc => tc.teacherId === teacherId).map(tc => tc.classId));
   }
 
-  const SECTION_LABELS = { primary: 'Primary', 'junior-secondary': 'Junior Secondary', 'senior-school': 'Senior School' };
+  // Reuses the same SECTION_INFO used everywhere else a level is
+  // picked (Subjects, Classes) so the two never drift apart.
   function sectionOptions(existingScope) {
-    return `<option value="" ${!existingScope ? 'selected' : ''}>All sections (unrestricted)</option>` +
-      Object.entries(SECTION_LABELS).map(([k, label]) => `<option value="${k}" ${existingScope === k ? 'selected' : ''}>${label} only</option>`).join('');
+    return `<option value="" ${!existingScope ? 'selected' : ''}>All levels (unrestricted)</option>` +
+      Object.entries(SECTION_INFO).map(([k, info]) => `<option value="${k}" ${existingScope === k ? 'selected' : ''}>${info.label} only</option>`).join('');
+  }
+  // Different meaning per role: for an admin, Section RESTRICTS which
+  // classes/students/exams they can create or edit (a gate — see
+  // admin_class_allowed in the SQL). For a teacher, Section GRANTS
+  // automatic access to every subject and class in that band, on top
+  // of whatever's picked in "Manage subjects"/"Manage classes" (an
+  // extra source of access, not a gate — see teacher_has_subject /
+  // teacher_has_class). Same field, opposite direction, so the hint
+  // text below it is written per-role rather than shared.
+  function sectionHint(role) {
+    return role === 'admin'
+      ? 'Restrict this admin login to just one level — useful if different levels are run day-to-day by different admins under you. Leave as "All levels" for a full-access admin.'
+      : 'Automatically gives this teacher every subject and class in the chosen level, so you don’t have to tick each one by hand in "Manage subjects" / "Manage classes" below. Leave as "All levels" and assign subjects/classes individually instead if this teacher’s subjects don’t line up with one clean band.';
   }
 
   function renderTable() {
@@ -1040,9 +1054,7 @@ Views.users = async function () {
                 <td class="row-index">${i + 1}</td>
                 <td>${UI.esc(u.name)}</td>
                 <td><span class="badge badge-${u.role === 'admin' ? 'ME' : 'EE'}">${u.role}</span></td>
-                <td>${u.role === 'admin'
-                  ? (u.sectionScope ? UI.esc(SECTION_LABELS[u.sectionScope] || u.sectionScope) : '<span class="row-index">All sections</span>')
-                  : '<span class="row-index">—</span>'}</td>
+                <td>${u.sectionScope ? UI.esc(sectionLabel(u.sectionScope)) : '<span class="row-index">All levels</span>'}</td>
                 <td>${u.role === 'user'
                   ? (subjectsForTeacher(u.id).size
                       ? [...subjectsForTeacher(u.id)].map(id => UI.esc(st.subjects.find(s => s.id === id)?.name || '?')).join(', ')
@@ -1086,10 +1098,10 @@ Views.users = async function () {
           <label>Role</label>
           <select id="f_role">${roleOptions(existing.role)}</select>
         </div>
-        <div class="field full" id="f_section_wrap" style="${existing.role === 'admin' ? '' : 'display:none;'}">
+        <div class="field full" id="f_section_wrap">
           <label>Section</label>
           <select id="f_section">${sectionOptions(existing.sectionScope)}</select>
-          <p class="field-hint">Restrict this admin login to only Primary, only Junior Secondary, or only Senior School — useful if the two levels are run day-to-day by different admins under you. Leave as "All sections" for a full-access admin.</p>
+          <p class="field-hint" id="f_section_hint">${sectionHint(existing.role)}</p>
         </div>
       </div>
       <div class="modal-actions">
@@ -1099,7 +1111,7 @@ Views.users = async function () {
     `, (root) => {
       root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
       root.querySelector('#f_role').onchange = (e) => {
-        root.querySelector('#f_section_wrap').style.display = e.target.value === 'admin' ? '' : 'none';
+        root.querySelector('#f_section_hint').textContent = sectionHint(e.target.value);
       };
       root.querySelector('#saveBtn').onclick = async () => {
         const name = root.querySelector('#f_name').value.trim();
@@ -1107,7 +1119,7 @@ Views.users = async function () {
         const sectionScope = root.querySelector('#f_section')?.value || '';
         if (!name) { UI.toast('Name is required'); return; }
         try {
-          await Store.updateUserProfile(existing.id, { name, role, sectionScope });
+          await Store.updateUserProfile(existing.id, { name, role, sectionScope: sectionScope || '' });
           UI.toast('Login updated');
           UI.closeModal();
           Views.users();
@@ -1138,10 +1150,10 @@ Views.users = async function () {
           <label>Role</label>
           <select id="f_role">${roleOptions('user')}</select>
         </div>
-        <div class="field full" id="f_section_wrap" style="display:none;">
+        <div class="field full" id="f_section_wrap">
           <label>Section</label>
           <select id="f_section">${sectionOptions('')}</select>
-          <p class="field-hint">Restrict this admin login to only Primary, only Junior Secondary, or only Senior School — useful if the two levels are run day-to-day by different admins under you. Leave as "All sections" for a full-access admin.</p>
+          <p class="field-hint" id="f_section_hint">${sectionHint('user')}</p>
         </div>
       </div>
       <div class="modal-actions">
@@ -1151,7 +1163,7 @@ Views.users = async function () {
     `, (root) => {
       root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
       root.querySelector('#f_role').onchange = (e) => {
-        root.querySelector('#f_section_wrap').style.display = e.target.value === 'admin' ? '' : 'none';
+        root.querySelector('#f_section_hint').textContent = sectionHint(e.target.value);
       };
       root.querySelector('#saveBtn').onclick = async () => {
         const name = root.querySelector('#f_name').value.trim();
@@ -1165,7 +1177,7 @@ Views.users = async function () {
         const saveBtn = root.querySelector('#saveBtn');
         saveBtn.disabled = true;
         saveBtn.textContent = 'Creating…';
-        const result = await Auth.createUser({ email, password, name, role, schoolId, sectionScope: role === 'admin' ? sectionScope : '' });
+        const result = await Auth.createUser({ email, password, name, role, schoolId, sectionScope });
         saveBtn.disabled = false;
         saveBtn.textContent = 'Create login';
         if (!result.ok) { UI.toast('Could not create login: ' + result.error); return; }
@@ -1309,7 +1321,7 @@ Views.users = async function () {
         ${existing.role === 'admin' ? `
         <div class="field full">
           <label>Section access</label>
-          <p style="margin:0;">${existing.sectionScope ? UI.esc(SECTION_LABELS[existing.sectionScope] || existing.sectionScope) : 'All sections (unrestricted)'}</p>
+          <p style="margin:0;">${existing.sectionScope ? UI.esc(sectionLabel(existing.sectionScope)) : 'All levels (unrestricted)'}</p>
         </div>` : `
         <div class="field full">
           <label>Assigned subjects</label>

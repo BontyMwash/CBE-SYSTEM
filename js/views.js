@@ -106,6 +106,23 @@ function sectionCovers(scopeKey, sectionKey) {
   return SECTION_PARENT[sectionKey] === scopeKey;
 }
 
+// Like sectionCovers(), but symmetric: true if band `a` and band `b`
+// overlap AT ALL, regardless of which one is the "broader" side. Needed
+// because — unlike a class, which always parses to one leaf band —
+// a SUBJECT's own section can itself be the parent 'primary' (meaning
+// "applies to both Lower and Upper Primary"). So when checking whether
+// a subject belongs to a teacher's section scope, either side could be
+// the parent: a Lower-Primary-scoped teacher should see a subject
+// scoped to 'primary' (it covers them), AND a Primary-scoped teacher
+// should see a subject scoped narrowly to just 'lower-primary' (they
+// teach that range too). sectionCovers() alone only catches one of
+// those two directions.
+function sectionsOverlap(a, b) {
+  if (!a || !b) return true;
+  if (a === b) return true;
+  return SECTION_PARENT[a] === b || SECTION_PARENT[b] === a;
+}
+
 // Badge colour class for a section key, shared by the Classes, Students
 // and Subjects tables so one band always looks the same everywhere.
 function sectionBadgeClass(key) {
@@ -459,12 +476,39 @@ function subjectsForKlass(st, klassLabel) {
 // out which classes/subjects a "user" (teacher) login is scoped to.
 // Admins/superadmins are never restricted, so this returns null sets
 // for them (meaning "everything").
+//
+// A teacher's visible subjects/classes are the UNION of two sources:
+//   1. Explicit assignment (teacher_subjects / teacher_classes,
+//      set via "Manage subjects" / "Manage classes" on the Users page)
+//      — fine-grained, per-subject or per-class picks.
+//   2. Their Section (profiles.section_scope, e.g. "Lower Primary") —
+//      coarse-grained: EVERY subject and class in that band, with no
+//      per-item picking needed. This is what makes a Lower Primary
+//      teacher automatically see only Lower Primary subjects without
+//      an admin having to tick every box by hand.
+// A teacher can have either, both, or neither. The database enforces
+// the same union (see teacher_has_subject/teacher_has_class in
+// 025_teacher_section_scope.sql) so what's shown here always matches
+// what the teacher can actually save.
 function teacherScope(st, user) {
   const isTeacher = !!user && user.role === 'user';
   if (!isTeacher) return { isTeacher: false, subjectIds: null, classIds: null, classLabels: null };
 
+  const sectionScope = user.section_scope || '';
+
   const subjectIds = new Set(st.teacherSubjects.filter(ts => ts.teacherId === user.id).map(ts => ts.subjectId));
+  if (sectionScope) {
+    st.subjects.forEach(s => { if (sectionsOverlap(s.section || '', sectionScope)) subjectIds.add(s.id); });
+  }
+
   let assignedClasses = st.classes.filter(c => st.teacherClasses.some(tc => tc.teacherId === user.id && tc.classId === c.id));
+  if (sectionScope) {
+    const inScope = new Set(st.classes.filter(c => {
+      const band = gradeSection(c.name);
+      return band && sectionCovers(sectionScope, band.key);
+    }).map(c => c.id));
+    assignedClasses = st.classes.filter(c => inScope.has(c.id) || assignedClasses.some(ac => ac.id === c.id));
+  }
 
   // Fallback for teachers an admin hasn't explicitly assigned classes
   // to yet: derive "their" classes from whichever classes have exams

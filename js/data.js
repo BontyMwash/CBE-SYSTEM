@@ -162,11 +162,15 @@ const Store = {
     const dbPatch = {};
     if (patch.name !== undefined) dbPatch.name = patch.name;
     if (patch.role !== undefined) dbPatch.role = patch.role;
-    // section_scope only means anything for admins — clearing it for a
-    // 'user' (teacher) row keeps the column tidy, since teachers are
-    // never restricted by it (they use teacher_classes instead).
+    // section_scope means something for BOTH roles now: for an admin
+    // it restricts which classes they can manage; for a teacher
+    // ('user') it auto-grants every subject/class in that band (see
+    // teacherScope() in views.js and teacher_has_subject/
+    // teacher_has_class in 025_teacher_section_scope.sql). So it's
+    // saved as given, for either role — no more forcing it to null
+    // for teachers.
     if (patch.sectionScope !== undefined) {
-      dbPatch.section_scope = (patch.role || 'user') === 'admin' ? (patch.sectionScope || null) : null;
+      dbPatch.section_scope = patch.sectionScope || null;
     }
     const { data, error } = await supabase.from('profiles').update(dbPatch).eq('id', id).select().single();
     this._throwIfError('update profile', error);
