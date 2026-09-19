@@ -572,6 +572,9 @@ Views.dashboard = async function () {
   setTopbarActions('');
   showDashboardSkeleton();
   const st = await Store.current();
+  const user = Auth.currentUser();
+  const scope = teacherScope(st, user);
+  const isTeacher = scope.isTeacher;
   const allowed = Auth.allowedRoutes();
   const canGo = (route) => allowed.includes(route);
 
@@ -588,9 +591,12 @@ Views.dashboard = async function () {
   // effectiveLevel()/levelAllows() above the switcher), so the whole
   // dashboard — not just the class cards — updates when the person
   // switches Primary / Junior Secondary / Senior School.
-  const classes = classOptionLabels(st);
-  const students = st.students.filter(s => levelAllows(s.klass));
-  const exams = st.exams.filter(e => levelAllows(e.klass));
+  // A teacher's dashboard shows THEIR classes/subjects/students only —
+  // the same scope every other teacher screen uses (teacherScope()) —
+  // never whole-school totals. Admins are unrestricted, as before.
+  const classes = isTeacher ? [...scope.classLabels].sort() : classOptionLabels(st);
+  const students = st.students.filter(s => levelAllows(s.klass) && (!isTeacher || scope.classLabels.has(s.klass)));
+  const exams = st.exams.filter(e => levelAllows(e.klass) && (!isTeacher || scope.subjectIds.has(e.subjectId)));
   const examIdsInLevel = new Set(exams.map(e => e.id));
   const results = st.results.filter(r => examIdsInLevel.has(r.examId));
   const subjectIdsInLevel = new Set(exams.map(e => e.subjectId));
@@ -2051,13 +2057,16 @@ Views.results = async function () {
   const st = await Store.current();
   const user = Auth.currentUser();
 
-  // Teachers ("user" role) only see/edit exams for subjects assigned to
-  // them (see Users -> Manage subjects). Admins/superadmins see everything
-  // in their section — levelAllows applies the section-scope lock for a
-  // restricted admin (or whatever the level switcher is set to for
-  // everyone else), same as the Exams list page already does.
-  const isRestrictedTeacher = user && user.role === 'user';
-  const allowedSubjectIds = isRestrictedTeacher ? new Set(st.teacherSubjects.filter(ts => ts.teacherId === user.id).map(ts => ts.subjectId)) : null;
+  // Teachers ("user" role) only see/edit exams for subjects they're
+  // scoped to — via teacherScope(), the same rule every other teacher
+  // screen uses (explicit "Manage subjects" picks, UNION their Section
+  // if one is set). Admins/superadmins see everything in their section
+  // — levelAllows applies the section-scope lock for a restricted admin
+  // (or whatever the level switcher is set to for everyone else), same
+  // as the Exams list page already does.
+  const scope = teacherScope(st, user);
+  const isRestrictedTeacher = scope.isTeacher;
+  const allowedSubjectIds = isRestrictedTeacher ? scope.subjectIds : null;
   let visibleExams = isRestrictedTeacher ? st.exams.filter(e => allowedSubjectIds.has(e.subjectId)) : st.exams;
   visibleExams = visibleExams.filter(e => levelAllows(e.klass));
   st.exams = visibleExams;

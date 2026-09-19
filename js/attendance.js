@@ -27,7 +27,11 @@ Views.attendance = async function () {
   const scope = teacherScope(st, user);
   const isTeacher = scope.isTeacher;
 
-  const myKlasses = isTeacher && scope.classLabels.size ? [...scope.classLabels].sort() : classOptionLabels(st);
+  // NEVER fall back to classOptionLabels(st) (every class in the school)
+  // for a teacher — only for an admin. A teacher with zero assigned
+  // classes must see an empty list (and the "ask your administrator"
+  // message below), not every other teacher's classes.
+  const myKlasses = isTeacher ? [...scope.classLabels].sort() : classOptionLabels(st);
 
   if (myKlasses.length === 0) {
     document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">No classes to mark attendance for</div><p>${isTeacher ? 'Ask your administrator to assign your class(es) from the Users page.' : 'Add a class first from the Classes page.'}</p></div>`;
@@ -319,7 +323,11 @@ Views.competency = async function () {
   const isTeacher = scope.isTeacher;
 
   const mySubjects = isTeacher ? st.subjects.filter(s => scope.subjectIds.has(s.id)) : st.subjects;
-  const myKlasses = isTeacher && scope.classLabels.size ? [...scope.classLabels].sort() : classOptionLabels(st);
+  // NEVER fall back to classOptionLabels(st) (every class in the school)
+  // for a teacher — only for an admin. A teacher with zero assigned
+  // classes must see an empty list (and the "ask your administrator"
+  // message below), not every other teacher's classes.
+  const myKlasses = isTeacher ? [...scope.classLabels].sort() : classOptionLabels(st);
 
   if (mySubjects.length === 0 || myKlasses.length === 0) {
     document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">Nothing to assess yet</div><p>${isTeacher ? 'Ask your administrator to assign your subject(s) and class(es) from the Users page.' : 'Add a class and a subject first.'}</p></div>`;

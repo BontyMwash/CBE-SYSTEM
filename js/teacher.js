@@ -312,7 +312,10 @@ Views.assessments = async function () {
   function openForm() {
     if (mySubjects.length === 0) { UI.toast('No subjects assigned to you'); return; }
     if (st.examTypes.length === 0) { UI.toast('Ask your administrator to add an exam type first, from Settings -> Exam types'); return; }
-    const classOpts = isTeacher && scope.classLabels.size ? [...scope.classLabels].sort() : classOptionLabels(st);
+    // Never offer every school class to a teacher who has none of
+    // their own assigned yet — see the same fix in attendance.js.
+    const classOpts = isTeacher ? [...scope.classLabels].sort() : classOptionLabels(st);
+    if (isTeacher && classOpts.length === 0) { UI.toast('No classes assigned to you yet — ask your administrator to assign one from the Users page.'); return; }
     UI.openModal(`
       <h2>New assessment</h2>
       <div class="form-grid">
@@ -404,7 +407,9 @@ Views.gradebook = async function () {
   const isTeacher = scope.isTeacher;
 
   const mySubjects = isTeacher ? st.subjects.filter(s => scope.subjectIds.has(s.id)) : st.subjects;
-  const myKlasses = isTeacher && scope.classLabels.size ? [...scope.classLabels].sort() : classOptionLabels(st);
+  // Never offer every school class to a teacher who has none of their
+  // own assigned yet — see the same fix in attendance.js.
+  const myKlasses = isTeacher ? [...scope.classLabels].sort() : classOptionLabels(st);
 
   if (mySubjects.length === 0 || myKlasses.length === 0 || st.students.length === 0) {
     document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">Nothing to show yet</div><p>The Gradebook needs at least one class, one of your subjects, and some recorded marks.</p></div>`;

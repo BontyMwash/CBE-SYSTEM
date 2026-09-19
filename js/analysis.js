@@ -15,6 +15,7 @@ Views.analysis = async function () {
   const st = await Store.current();
   const user = Auth.currentUser();
   const isAdmin = !!user && (user.role === 'admin' || user.role === 'superadmin');
+  const scope = teacherScope(st, user);
 
   if (st.students.length === 0 || st.exams.length === 0) {
     document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">Nothing to analyse yet</div><p>Add students and record at least one exam first.</p></div>`;
@@ -415,7 +416,9 @@ Views.analysis = async function () {
      Teacher flow: pick only from sittings the admin has already
      published — nothing shows here until that happens.
      ------------------------------------------------------------ */
-  const publishedSorted = [...st.published].sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+  const publishedSorted = [...st.published]
+    .filter(p => !scope.isTeacher || scope.classLabels.has(p.klass))
+    .sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
   if (publishedSorted.length === 0) {
     document.getElementById('anPickerWrap').innerHTML = '';
     document.getElementById('anBody').innerHTML = `<div class="empty"><div class="empty-title">No results published yet</div><p>Check back once your admin publishes this term's results.</p></div>`;
