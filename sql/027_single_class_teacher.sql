@@ -64,7 +64,7 @@ alter table classes add column if not exists class_teacher_id uuid references pr
 update classes c
 set class_teacher_id = only_teacher.teacher_id
 from (
-  select class_id, min(teacher_id) as teacher_id
+  select class_id, (array_agg(teacher_id))[1] as teacher_id
   from teacher_classes
   group by class_id
   having count(*) = 1
