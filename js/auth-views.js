@@ -1010,14 +1010,26 @@ Views.users = async function () {
   // Subjects + existing teacher->subject assignments, for the "Manage
   // subjects" modal below (restricts what a teacher login can see/edit).
   const st = await Store.current();
-  let teacherSubjects = st.teacherSubjects;
   let teacherClasses = st.teacherClasses;
+  let teacherSubjectClasses = st.teacherSubjectClasses;
 
   function subjectsForTeacher(teacherId) {
-    return new Set(teacherSubjects.filter(ts => ts.teacherId === teacherId).map(ts => ts.subjectId));
+    // Flat "which subjects at all" — used only for the summary column
+    // in the table below. Permission checks use subjectClassesForTeacher.
+    return new Set(teacherSubjectClasses.filter(tsc => tsc.teacherId === teacherId).map(tsc => tsc.subjectId));
   }
   function classesForTeacher(teacherId) {
     return new Set(teacherClasses.filter(tc => tc.teacherId === teacherId).map(tc => tc.classId));
+  }
+  // classId -> Set(subjectId) — the real, per-class assignment this
+  // teacher has. See sql/026_teacher_subject_per_class.sql.
+  function subjectClassesForTeacher(teacherId) {
+    const map = new Map();
+    teacherSubjectClasses.filter(tsc => tsc.teacherId === teacherId).forEach(tsc => {
+      if (!map.has(tsc.classId)) map.set(tsc.classId, new Set());
+      map.get(tsc.classId).add(tsc.subjectId);
+    });
+    return map;
   }
 
   // Reuses the same SECTION_INFO used everywhere else a level is
@@ -1214,7 +1226,6 @@ Views.users = async function () {
   }
 
   function openSubjectsForm(existing) {
-    const assigned = subjectsForTeacher(existing.id);
     if (st.subjects.length === 0) {
       UI.openModal(`
         <h2>Manage subjects — ${UI.esc(existing.name)}</h2>
@@ -1223,27 +1234,50 @@ Views.users = async function () {
       `, (root) => { root.querySelector('#cancelBtn').onclick = () => UI.closeModal(); });
       return;
     }
-    const sortedSubjects = [...st.subjects].sort((a, b) => a.name.localeCompare(b.name));
+    if (st.classes.length === 0) {
+      UI.openModal(`
+        <h2>Manage subjects — ${UI.esc(existing.name)}</h2>
+        <p class="field-hint">No classes exist yet. Add some from the Classes page first — subjects are assigned per class, so a class has to exist before you can tick a subject for it.</p>
+        <div class="modal-actions"><button class="btn btn-ghost" id="cancelBtn">Close</button></div>
+      `, (root) => { root.querySelector('#cancelBtn').onclick = () => UI.closeModal(); });
+      return;
+    }
+    // classId -> Set(subjectId) this teacher is already assigned.
+    const assignedByClass = subjectClassesForTeacher(existing.id);
+    const sortedClasses = [...st.classes].sort((a, b) => a.label.localeCompare(b.label));
     // Same Section-vs-explicit-picks note as Manage classes — a Section
     // grants every subject in that band automatically, on top of
-    // whatever's selected here, not instead of it.
+    // whatever's ticked here, not instead of it.
     const sectionNotice = existing.sectionScope ? `
       <div class="field-hint" style="background:var(--warn-bg, #fff3cd); border:1px solid var(--warn-border, #ffe69c); border-radius:6px; padding:10px 12px; margin-bottom:12px;">
-        <strong>Heads up:</strong> ${UI.esc(existing.name)}'s Section is set to <strong>${UI.esc(sectionLabel(existing.sectionScope))}</strong>. That already grants them EVERY subject in ${UI.esc(sectionLabel(existing.sectionScope))}, automatically — the list below only ADDS to that, it doesn't replace it. If you want this teacher restricted to only the subject(s) you pick here, first clear their Section: "Edit name/role" → Section → "All levels".
+        <strong>Heads up:</strong> ${UI.esc(existing.name)}'s Section is set to <strong>${UI.esc(sectionLabel(existing.sectionScope))}</strong>. That already grants them EVERY subject in EVERY class in ${UI.esc(sectionLabel(existing.sectionScope))}, automatically — the checkboxes below only ADD extra subjects on top of that (useful for a subject they also teach outside their Section, e.g. one Junior Secondary class). If you want this teacher restricted to only what you tick below, first clear their Section: "Edit name/role" → Section → "All levels".
       </div>` : '';
-    const subjectInScope = (s) => existing.sectionScope && sectionsOverlap(s.section || '', existing.sectionScope);
+    const classInScope = (c) => existing.sectionScope && (() => { const band = gradeSection(c.name); return band && sectionCovers(existing.sectionScope, band.key); })();
     UI.openModal(`
       <h2>Manage subjects — ${UI.esc(existing.name)}</h2>
       ${sectionNotice}
-      <p class="field-hint" style="margin-bottom:12px;">${existing.sectionScope ? 'Select any EXTRA subjects this teacher should have, beyond their Section (above).' : `Only the subjects selected below will be visible to ${UI.esc(existing.name)} on Results Entry, Report Cards and Exams for editing — this keeps each teacher scoped to their own subject(s).`}</p>
-      <div class="field full">
-        <label>Subjects</label>
-        <select id="subjectMultiSelect" multiple size="${Math.min(10, Math.max(4, sortedSubjects.length))}" style="width:100%;">
-          ${sortedSubjects.map(s => `
-            <option value="${s.id}" ${assigned.has(s.id) ? 'selected' : ''}>${UI.esc(s.name)}${s.code ? ` (${UI.esc(s.code)})` : ''}${subjectInScope(s) ? ' [already via Section]' : ''}</option>
-          `).join('')}
-        </select>
-        <p class="field-hint" style="margin-top:8px;">Hold Ctrl (Windows) or Cmd (Mac) to select more than one subject from the list.</p>
+      <p class="field-hint" style="margin-bottom:12px;">
+        Tick subjects PER CLASS. A teacher who teaches five subjects in one class and only one in another should be ticked exactly that way — this is what keeps Marks Entry, Gradebook, Assessments and Attendance from ever showing them a subject they don't actually teach in a given class, even when the same subject (e.g. "Mathematics") is also taught in other classes by someone else.
+      </p>
+      <div style="max-height:56vh; overflow-y:auto; display:flex; flex-direction:column; gap:12px; padding-right:4px;">
+        ${sortedClasses.map(c => {
+          const subjectsHere = subjectsForKlass(st, c.label).slice().sort((a, b) => a.name.localeCompare(b.name));
+          const assigned = assignedByClass.get(c.id) || new Set();
+          const inScope = classInScope(c);
+          return `
+            <div class="field full" style="border:1px solid var(--border, #e5e7eb); border-radius:8px; padding:10px 12px; margin:0;">
+              <label style="font-weight:600; display:block; margin-bottom:8px;">${UI.esc(c.label)}${inScope ? ' <span class="badge badge-none" style="font-size:0.75em; font-weight:400;">every subject already via Section</span>' : ''}</label>
+              ${subjectsHere.length === 0 ? '<p class="field-hint" style="margin:0;">No subjects set up for this level yet.</p>' : `
+              <div style="display:flex; flex-wrap:wrap; gap:8px;">
+                ${subjectsHere.map(s => `
+                  <label style="display:flex; align-items:center; gap:6px; border:1px solid var(--border, #e5e7eb); border-radius:6px; padding:4px 10px; font-weight:400; cursor:pointer;">
+                    <input type="checkbox" data-subj-class="${c.id}::${s.id}" ${assigned.has(s.id) ? 'checked' : ''} style="width:auto;">
+                    <span>${UI.esc(s.name)}${s.code ? ` (${UI.esc(s.code)})` : ''}</span>
+                  </label>
+                `).join('')}
+              </div>`}
+            </div>`;
+        }).join('')}
       </div>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
@@ -1252,10 +1286,18 @@ Views.users = async function () {
     `, (root) => {
       root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
       root.querySelector('#saveBtn').onclick = async () => {
-        const subjectIds = Array.from(root.querySelector('#subjectMultiSelect').selectedOptions)
-          .map(opt => opt.value);
+        // Every class in the modal is included (even with an empty
+        // array) so unchecking every box for a class actually clears
+        // it, instead of silently leaving the old assignment in place.
+        const subjectIdsByClass = {};
+        sortedClasses.forEach(c => { subjectIdsByClass[c.id] = []; });
+        Array.from(root.querySelectorAll('[data-subj-class]')).forEach(cb => {
+          if (!cb.checked) return;
+          const [classId, subjectId] = cb.dataset.subjClass.split('::');
+          subjectIdsByClass[classId].push(subjectId);
+        });
         try {
-          await Store.setTeacherSubjects(existing.id, subjectIds);
+          await Store.setTeacherSubjectClasses(existing.id, subjectIdsByClass);
           UI.toast('Subjects updated');
           UI.closeModal();
           Views.users();
@@ -1321,7 +1363,14 @@ Views.users = async function () {
   }
 
   function openProfileModal(existing) {
-    const subjNames = [...subjectsForTeacher(existing.id)].map(id => st.subjects.find(s => s.id === id)?.name || '?');
+    const subjectClassMap = subjectClassesForTeacher(existing.id);
+    const subjectsByClassLines = [...subjectClassMap.entries()]
+      .map(([classId, subjectIds]) => {
+        const label = st.classes.find(c => c.id === classId)?.label || '?';
+        const names = [...subjectIds].map(id => st.subjects.find(s => s.id === id)?.name || '?').sort();
+        return { label, names };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label));
     const classLabels = [...classesForTeacher(existing.id)].map(id => st.classes.find(c => c.id === id)?.label || '?');
     const joined = existing.createdAt ? new Date(existing.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }) : '—';
     const initials = existing.name.trim().split(/\s+/).slice(0, 2).map(p => p[0]?.toUpperCase() || '').join('') || '?';
@@ -1344,12 +1393,16 @@ Views.users = async function () {
           <p style="margin:0;">${existing.sectionScope ? UI.esc(sectionLabel(existing.sectionScope)) : 'All levels (unrestricted)'}</p>
         </div>` : `
         <div class="field full">
-          <label>Assigned subjects</label>
-          <p style="margin:0;">${subjNames.length ? UI.esc(subjNames.join(', ')) : 'None assigned'}</p>
+          <label>Section access</label>
+          <p style="margin:0;">${existing.sectionScope ? `Every subject &amp; class in ${UI.esc(sectionLabel(existing.sectionScope))}` : 'None — relies entirely on the assignments below'}</p>
         </div>
         <div class="field full">
-          <label>Assigned classes</label>
-          <p style="margin:0;">${classLabels.length ? UI.esc(classLabels.join(', ')) : 'None assigned'}</p>
+          <label>Assigned subjects, per class</label>
+          ${subjectsByClassLines.length ? `<ul style="margin:0; padding-left:18px;">${subjectsByClassLines.map(l => `<li>${UI.esc(l.label)}: ${UI.esc(l.names.join(', '))}</li>`).join('')}</ul>` : '<p style="margin:0;">None assigned</p>'}
+        </div>
+        <div class="field full">
+          <label>Class teacher (homeroom) for</label>
+          <p style="margin:0;">${classLabels.length ? UI.esc(classLabels.join(', ')) : 'None — not a class teacher for any class'}</p>
         </div>`}
         <div class="field full">
           <label>Member since</label>

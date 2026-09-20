@@ -198,7 +198,11 @@ Views.broadsheet = async function () {
     // A published sitting is locked everywhere marks can be entered
     // (this table included) — unpublish it from Analysis first.
     const locked = (st.published || []).some(p => p.klass === klass && p.type === type && p.term === term && String(p.year) === String(year));
-    const canEditCol = (col) => !scope.isTeacher || scope.subjectIds.has(col.subject.id);
+    // Subject must be assigned to this teacher SPECIFICALLY FOR THIS
+    // CLASS (klass is fixed for the whole render() call) — a subject
+    // id can be shared across levels, so scope.subjectIds alone would
+    // let them edit a subject here they only actually teach elsewhere.
+    const canEditCol = (col) => !scope.isTeacher || !!scope.subjectsByClass.get(klass)?.has(col.subject.id);
     const canEditAny = !locked && subjectCols.some(canEditCol);
 
     // Build per-student rows

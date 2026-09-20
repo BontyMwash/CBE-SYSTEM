@@ -27,14 +27,18 @@ Views.attendance = async function () {
   const scope = teacherScope(st, user);
   const isTeacher = scope.isTeacher;
 
-  // NEVER fall back to classOptionLabels(st) (every class in the school)
-  // for a teacher — only for an admin. A teacher with zero assigned
-  // classes must see an empty list (and the "ask your administrator"
+  // Attendance is a CLASS TEACHER (homeroom) action, not a subject
+  // teacher one — uses scope.homeroomClassLabels, never the broader
+  // homeroom-or-subject union, so a subject-only teacher can't take
+  // attendance for a class they merely teach a subject in. NEVER fall
+  // back to classOptionLabels(st) (every class in the school) for a
+  // teacher — only for an admin. A teacher who holds no class as
+  // homeroom must see an empty list (and the "ask your administrator"
   // message below), not every other teacher's classes.
-  const myKlasses = isTeacher ? [...scope.classLabels].sort() : classOptionLabels(st);
+  const myKlasses = isTeacher ? [...scope.homeroomClassLabels].sort() : classOptionLabels(st);
 
   if (myKlasses.length === 0) {
-    document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">No classes to mark attendance for</div><p>${isTeacher ? 'Ask your administrator to assign your class(es) from the Users page.' : 'Add a class first from the Classes page.'}</p></div>`;
+    document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">No classes to mark attendance for</div><p>${isTeacher ? 'Attendance is taken by the class teacher — ask your administrator to assign you a class (not just a subject) from the Users page.' : 'Add a class first from the Classes page.'}</p></div>`;
     return;
   }
 
@@ -322,26 +326,39 @@ Views.competency = async function () {
   const scope = teacherScope(st, user);
   const isTeacher = scope.isTeacher;
 
-  const mySubjects = isTeacher ? st.subjects.filter(s => scope.subjectIds.has(s.id)) : st.subjects;
   // NEVER fall back to classOptionLabels(st) (every class in the school)
   // for a teacher — only for an admin. A teacher with zero assigned
   // classes must see an empty list (and the "ask your administrator"
-  // message below), not every other teacher's classes.
-  const myKlasses = isTeacher ? [...scope.classLabels].sort() : classOptionLabels(st);
+  // message below), not every other teacher's classes. The class list
+  // itself comes from subjectsByClass — classes the teacher teaches AT
+  // LEAST ONE subject in — not the broader homeroom-or-subject union.
+  const myKlasses = isTeacher ? [...scope.subjectsByClass.keys()].sort() : classOptionLabels(st);
 
-  if (mySubjects.length === 0 || myKlasses.length === 0) {
+  // Subject choices depend on the CURRENTLY PICKED class — see the
+  // same fix in Views.gradebook (teacher.js) and teacherScope() in
+  // views.js: a subject id can be shared across levels, so a flat
+  // subject list would offer subjects the teacher doesn't actually
+  // teach in whichever class happens to be picked.
+  function subjectsForKlassPicker(klass) {
+    if (!isTeacher) return st.subjects;
+    const ids = scope.subjectsByClass.get(klass) || new Set();
+    return st.subjects.filter(s => ids.has(s.id));
+  }
+
+  if (myKlasses.length === 0) {
     document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">Nothing to assess yet</div><p>${isTeacher ? 'Ask your administrator to assign your subject(s) and class(es) from the Users page.' : 'Add a class and a subject first.'}</p></div>`;
     return;
   }
 
-  let picked = { klass: myKlasses[0], subjectId: mySubjects[0].id, term: st.settings.term, year: String(st.settings.year), strand: '', subStrand: '' };
+  let mySubjects = subjectsForKlassPicker(myKlasses[0]);
+  let picked = { klass: myKlasses[0], subjectId: mySubjects[0]?.id || '', term: st.settings.term, year: String(st.settings.year), strand: '', subStrand: '' };
   let existingForSubject = [];
   let rows = [];
 
   function bandCode(rating) { return { code: rating, label: rating }; }
 
   async function loadExisting() {
-    existingForSubject = await Store.competenciesFor(picked.subjectId, picked.term, picked.year);
+    existingForSubject = picked.subjectId ? await Store.competenciesFor(picked.subjectId, picked.term, picked.year) : [];
   }
 
   function knownStrands() {
@@ -380,6 +397,9 @@ Views.competency = async function () {
   }
 
   function renderGrid() {
+    if (!picked.subjectId) {
+      return `<div class="empty"><div class="empty-title">No subject assigned to you for ${UI.esc(picked.klass)}</div><p>Ask your administrator to assign you a subject for this class from the Users page.</p></div>`;
+    }
     if (!picked.strand.trim()) {
       return `<div class="empty"><div class="empty-title">Enter a strand to begin</div><p>Type the competency strand you're assessing (e.g. "Listening and speaking") above.</p></div>`;
     }
@@ -484,7 +504,16 @@ Views.competency = async function () {
   }
 
   function wirePicker() {
-    document.getElementById('cpKlass').onchange = (e) => { picked.klass = e.target.value; paintBody(); };
+    document.getElementById('cpKlass').onchange = async (e) => {
+      picked.klass = e.target.value;
+      // Changing class changes which subjects are even valid choices —
+      // re-derive them and default to the first one for this class.
+      mySubjects = subjectsForKlassPicker(picked.klass);
+      picked.subjectId = mySubjects[0]?.id || '';
+      await loadExisting();
+      refreshPicker();
+      paintBody();
+    };
     document.getElementById('cpSubject').onchange = async (e) => { picked.subjectId = e.target.value; await loadExisting(); refreshPicker(); paintBody(); };
     document.getElementById('cpTerm').onchange = async (e) => { picked.term = e.target.value; await loadExisting(); refreshPicker(); paintBody(); };
     document.getElementById('cpYear').onchange = async (e) => { picked.year = String(Number(e.target.value) || st.settings.year); await loadExisting(); refreshPicker(); paintBody(); };

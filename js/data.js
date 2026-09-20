@@ -30,6 +30,7 @@ const Store = {
   _mapResult: (r) => ({ id: r.id, examId: r.exam_id, studentId: r.student_id, marks: Number(r.marks) }),
   _mapTeacherSubject: (r) => ({ id: r.id, teacherId: r.teacher_id, subjectId: r.subject_id }),
   _mapTeacherClass: (r) => ({ id: r.id, teacherId: r.teacher_id, classId: r.class_id }),
+  _mapTeacherSubjectClass: (r) => ({ id: r.id, teacherId: r.teacher_id, subjectId: r.subject_id, classId: r.class_id }),
   _mapAttendance: (r) => ({ id: r.id, klass: r.klass, date: r.att_date, studentId: r.student_id, status: r.status, remarks: r.remarks || '', markedBy: r.marked_by }),
   _mapCompetency: (r) => ({
     id: r.id, studentId: r.student_id, subjectId: r.subject_id, term: r.term, year: r.year,
@@ -52,11 +53,11 @@ const Store = {
     if (!schoolId) {
       return {
         settings: { schoolName: '', schoolCode: '', motto: '', term: 'Term 1', year: new Date().getFullYear(), gradingBands: [], headName: '' },
-        classes: [], students: [], subjects: [], examTypes: [], exams: [], results: [], teacherSubjects: [], teacherClasses: [], published: []
+        classes: [], students: [], subjects: [], examTypes: [], exams: [], results: [], teacherSubjects: [], teacherClasses: [], teacherSubjectClasses: [], published: []
       };
     }
 
-    const [schoolRes, classesRes, studentsRes, subjectsRes, examTypesRes, examsRes, resultsRes, teacherSubjectsRes, teacherClassesRes, publishedRes] = await Promise.all([
+    const [schoolRes, classesRes, studentsRes, subjectsRes, examTypesRes, examsRes, resultsRes, teacherSubjectsRes, teacherClassesRes, teacherSubjectClassesRes, publishedRes] = await Promise.all([
       supabase.from('schools').select('*').eq('id', schoolId).single(),
       supabase.from('classes').select('*').eq('school_id', schoolId).order('name').order('stream'),
       supabase.from('students').select('*').eq('school_id', schoolId).order('name'),
@@ -64,13 +65,24 @@ const Store = {
       supabase.from('exam_types').select('*').eq('school_id', schoolId).order('sort_order').order('name'),
       supabase.from('exams').select('*').eq('school_id', schoolId),
       supabase.from('results').select('*, exams!inner(school_id)').eq('exams.school_id', schoolId),
-      // RLS scopes this automatically: admins see every assignment in the
-      // school (to manage them), teachers see only their own (to filter
-      // their own Results Entry / marks-editing screens).
+      // Legacy flat list — kept for the one-time migration backfill only.
+      // No permission check anywhere in the app or the database reads
+      // this anymore; teacherSubjectClasses below is the source of
+      // truth for "which subject(s) does this teacher teach, and in
+      // which class(es)". See sql/026_teacher_subject_per_class.sql.
       supabase.from('teacher_subjects').select('*').eq('school_id', schoolId),
       // Same idea as teacher_subjects, but for classes — powers "My
-      // Classes" / "Learners" / "Attendance" for a teacher login.
+      // Classes" / "Learners" / "Attendance" (homeroom) for a teacher
+      // login. Independent of teacherSubjectClasses: a class teacher
+      // may hold a class without teaching every subject in it, and a
+      // subject teacher may teach a subject across classes they
+      // aren't the class teacher of.
       supabase.from('teacher_classes').select('*').eq('school_id', schoolId),
+      // The real, per-class subject assignment ("this teacher teaches
+      // this subject IN THIS class") — see sql/026_teacher_subject_
+      // per_class.sql. Drives Marks Entry, Assessments, Gradebook,
+      // Competency Assessment and Broadsheet column-editing.
+      supabase.from('teacher_subject_classes').select('*').eq('school_id', schoolId),
       // Which (class, exam type, term, year) sittings the admin has
       // published — this is what unlocks the Analysis page for teachers.
       supabase.from('published_results').select('*').eq('school_id', schoolId)
@@ -85,6 +97,7 @@ const Store = {
     this._throwIfError('load results', resultsRes.error);
     this._throwIfError('load teacher subjects', teacherSubjectsRes.error);
     this._throwIfError('load teacher classes', teacherClassesRes.error);
+    this._throwIfError('load teacher subject-class assignments', teacherSubjectClassesRes.error);
     this._throwIfError('load published results', publishedRes.error);
 
     return {
@@ -97,6 +110,7 @@ const Store = {
       results: (resultsRes.data || []).map(this._mapResult),
       teacherSubjects: (teacherSubjectsRes.data || []).map(this._mapTeacherSubject),
       teacherClasses: (teacherClassesRes.data || []).map(this._mapTeacherClass),
+      teacherSubjectClasses: (teacherSubjectClassesRes.data || []).map(this._mapTeacherSubjectClass),
       published: (publishedRes.data || []).map(this._mapPublished)
     };
   },
@@ -338,6 +352,11 @@ const Store = {
   },
 
   // ---- Teacher <-> subject assignments ("see/edit their subjects only") ----
+  // LEGACY — kept only so old code that might still call it doesn't
+  // throw; no RLS policy consults teacher_subjects anymore, and the
+  // admin UI ("Manage subjects") no longer writes to it either. Use
+  // setTeacherSubjectsForClass below instead. See
+  // sql/026_teacher_subject_per_class.sql.
   async setTeacherSubjects(teacherId, subjectIds) {
     const { error: delErr } = await supabase.from('teacher_subjects').delete().eq('teacher_id', teacherId);
     this._throwIfError('clear teacher subjects', delErr);
@@ -346,6 +365,52 @@ const Store = {
     const { data, error } = await supabase.from('teacher_subjects').insert(rows).select();
     this._throwIfError('save teacher subjects', error);
     return (data || []).map(this._mapTeacherSubject);
+  },
+
+  // ---- Teacher <-> (subject, class) assignments — the real, per-level
+  // scoping. "Which subject(s) does this teacher teach, and in which
+  // class(es)?" Replaces the old flat, class-blind teacher_subjects
+  // for every permission check (RLS + teacherScope() in views.js).
+  //
+  // subjectIdsByClass: { [classId]: string[] of subjectIds } — the
+  // COMPLETE desired assignment for this teacher, across every class
+  // being edited in one save (the "Manage subjects" modal edits one
+  // teacher's whole assignment at once, class by class). Classes not
+  // present in the object are left untouched — pass an empty array
+  // for a class to clear just that class's subjects.
+  async setTeacherSubjectClasses(teacherId, subjectIdsByClass) {
+    const classIds = Object.keys(subjectIdsByClass);
+    if (classIds.length) {
+      const { error: delErr } = await supabase.from('teacher_subject_classes')
+        .delete().eq('teacher_id', teacherId).in('class_id', classIds);
+      this._throwIfError('clear teacher subject-class assignments', delErr);
+    }
+    const rows = [];
+    classIds.forEach(classId => {
+      (subjectIdsByClass[classId] || []).forEach(subjectId => {
+        rows.push({ school_id: this.activeSchoolId, teacher_id: teacherId, subject_id: subjectId, class_id: classId });
+      });
+    });
+    if (!rows.length) return [];
+    const { data, error } = await supabase.from('teacher_subject_classes').insert(rows).select();
+    this._throwIfError('save teacher subject-class assignments', error);
+    return (data || []).map(this._mapTeacherSubjectClass);
+  },
+
+  // Convenience for adding/removing just ONE (subject, class) pair —
+  // used by the "Manage subjects" modal's per-class add/remove chips
+  // so a change to one class never touches another class's rows.
+  async addTeacherSubjectClass(teacherId, subjectId, classId) {
+    const { data, error } = await supabase.from('teacher_subject_classes')
+      .insert({ school_id: this.activeSchoolId, teacher_id: teacherId, subject_id: subjectId, class_id: classId })
+      .select().single();
+    this._throwIfError('add teacher subject-class assignment', error);
+    return this._mapTeacherSubjectClass(data);
+  },
+  async removeTeacherSubjectClass(teacherId, subjectId, classId) {
+    const { error } = await supabase.from('teacher_subject_classes')
+      .delete().eq('teacher_id', teacherId).eq('subject_id', subjectId).eq('class_id', classId);
+    this._throwIfError('remove teacher subject-class assignment', error);
   },
 
   // ---- Exams ----

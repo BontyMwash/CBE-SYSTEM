@@ -30,13 +30,18 @@ Views.myClasses = async function () {
   }
 
   function subjectsTaughtIn(klassLabel) {
-    const subjIds = new Set(st.exams.filter(e => e.klass === klassLabel && (!scope.isTeacher || scope.subjectIds.has(e.subjectId))).map(e => e.subjectId));
+    const allowed = scope.isTeacher ? (scope.subjectsByClass.get(klassLabel) || new Set()) : null;
+    const subjIds = new Set(st.exams.filter(e => e.klass === klassLabel && (!scope.isTeacher || allowed.has(e.subjectId))).map(e => e.subjectId));
     return [...subjIds].map(id => st.subjects.find(s => s.id === id)).filter(Boolean).map(s => s.name);
   }
 
   const cards = myClasses.map(c => {
     const studentCount = st.students.filter(s => s.klass === c.label).length;
     const subjectNames = subjectsTaughtIn(c.label);
+    // Attendance is a CLASS TEACHER action — only offer the shortcut
+    // for a class this login actually holds as homeroom, not a class
+    // they merely teach a subject in (see teacherScope() in views.js).
+    const isHomeroom = !scope.isTeacher || scope.homeroomClassLabels.has(c.label);
     return `
       <div class="card class-card">
         <h3 style="margin:0 0 4px 0;">${UI.esc(c.label)}</h3>
@@ -45,7 +50,7 @@ Views.myClasses = async function () {
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
           <button class="btn btn-sm" data-learners="${UI.esc(c.label)}">Learners</button>
           <button class="btn btn-sm" data-marks="${UI.esc(c.label)}">Marks Entry</button>
-          <button class="btn btn-sm" data-attendance="${UI.esc(c.label)}">Attendance</button>
+          ${isHomeroom ? `<button class="btn btn-sm" data-attendance="${UI.esc(c.label)}">Attendance</button>` : ''}
         </div>
       </div>`;
   }).join('');
@@ -75,8 +80,12 @@ Views.learners = async function () {
 
   // Only an actual CLASS teacher (assigned a class via the Users page,
   // not just a subject) may add a learner here, and only into the
-  // class(es) they hold — a subject-only teacher still can't.
-  const canAddLearner = !!user && user.role === 'user' && !!user.isClassTeacher;
+  // class(es) they hold — a subject-only teacher still can't. Uses
+  // scope.homeroomClassLabels rather than the legacy user.isClassTeacher
+  // flag so a Section-scoped generalist teacher (whose homeroom classes
+  // come from their Section, not an explicit "Manage classes" pick)
+  // also gets the button, matching what the database actually allows.
+  const canAddLearner = !!user && user.role === 'user' && scope.homeroomClassLabels.size > 0;
   setTopbarActions(canAddLearner ? `<button class="btn btn-primary" id="addLearnerBtn">+ Add learner</button>` : '');
   showLoading();
 
@@ -89,7 +98,7 @@ Views.learners = async function () {
   }
 
   function openAddLearnerForm() {
-    const classOpts = [...scope.classLabels].sort();
+    const classOpts = [...scope.homeroomClassLabels].sort();
     UI.openModal(`
       <h2>Add learner</h2>
       <div class="form-grid">
@@ -158,7 +167,11 @@ Views.learners = async function () {
     const pcts = [];
     st.results.filter(r => r.studentId === studentId).forEach(r => {
       const exam = st.exams.find(e => e.id === r.examId);
-      if (exam && (!scope.isTeacher || scope.subjectIds.has(exam.subjectId))) pcts.push(Grading.percent(r.marks, exam.totalMarks));
+      // Must be a subject the teacher teaches IN THAT EXAM'S OWN CLASS
+      // — scope.subjectIds alone would also count a subject they teach
+      // in a different class, since a subject id can be shared across
+      // levels (see teacherScope() in views.js).
+      if (exam && (!scope.isTeacher || !!scope.subjectsByClass.get(exam.klass)?.has(exam.subjectId))) pcts.push(Grading.percent(r.marks, exam.totalMarks));
     });
     return Grading.average(pcts);
   }
@@ -259,11 +272,11 @@ Views.assessments = async function () {
   const isTeacher = scope.isTeacher;
 
   const mySubjects = isTeacher ? st.subjects.filter(s => scope.subjectIds.has(s.id)) : st.subjects;
-  // Subject AND class must both be the teacher's own — a subject id can
+  // (subject, class) must be an actual assigned pair — a subject id can
   // be shared across levels (e.g. one "Mathematics" row used by both
   // Grade 1 and Grade 7), so filtering on subject alone would leak
   // another level's exams in that subject into this list.
-  const myExams = isTeacher ? st.exams.filter(e => scope.subjectIds.has(e.subjectId) && scope.classLabels.has(e.klass)) : st.exams;
+  const myExams = isTeacher ? st.exams.filter(e => !!scope.subjectsByClass.get(e.klass)?.has(e.subjectId)) : st.exams;
 
   setTopbarActions(`<button class="btn btn-primary" id="addAssessmentBtn" ${mySubjects.length === 0 ? 'disabled' : ''}>+ New assessment</button>`);
 
@@ -410,17 +423,29 @@ Views.gradebook = async function () {
   const scope = teacherScope(st, user);
   const isTeacher = scope.isTeacher;
 
-  const mySubjects = isTeacher ? st.subjects.filter(s => scope.subjectIds.has(s.id)) : st.subjects;
-  // Never offer every school class to a teacher who has none of their
-  // own assigned yet — see the same fix in attendance.js.
-  const myKlasses = isTeacher ? [...scope.classLabels].sort() : classOptionLabels(st);
+  // The class list itself is drawn from subjectsByClass — every class
+  // the teacher teaches AT LEAST ONE subject in — not the broader
+  // homeroom-or-subject union, since a homeroom class the teacher
+  // teaches nothing in has no gradebook to show.
+  const myKlasses = isTeacher ? [...scope.subjectsByClass.keys()].sort() : classOptionLabels(st);
 
-  if (mySubjects.length === 0 || myKlasses.length === 0 || st.students.length === 0) {
+  // Subject choices depend on the CURRENTLY PICKED class — a teacher
+  // teaching 5 subjects in Upper Primary and only 1 in Junior Secondary
+  // must only see that 1 subject once a Junior class is picked, never
+  // all 6. See teacherScope()'s subjectsByClass in views.js.
+  function subjectsForKlassPicker(klass) {
+    if (!isTeacher) return st.subjects;
+    const ids = scope.subjectsByClass.get(klass) || new Set();
+    return st.subjects.filter(s => ids.has(s.id));
+  }
+
+  if (myKlasses.length === 0 || st.students.length === 0) {
     document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">Nothing to show yet</div><p>The Gradebook needs at least one class, one of your subjects, and some recorded marks.</p></div>`;
     return;
   }
 
-  let picked = { klass: myKlasses[0], subjectId: mySubjects[0].id, term: st.settings.term, year: String(st.settings.year) };
+  let mySubjects = subjectsForKlassPicker(myKlasses[0]);
+  let picked = { klass: myKlasses[0], subjectId: mySubjects[0]?.id || '', term: st.settings.term, year: String(st.settings.year) };
 
   function examTypesFor(subjectId, klass, term, year) {
     return st.exams
@@ -440,13 +465,16 @@ Views.gradebook = async function () {
   }
 
   function renderGrid() {
+    if (!picked.subjectId) {
+      return `<div class="empty"><div class="empty-title">No subject assigned to you for ${UI.esc(picked.klass)}</div><p>Ask your administrator to assign you a subject for this class from the Users page.</p></div>`;
+    }
     const exams = examTypesFor(picked.subjectId, picked.klass, picked.term, picked.year);
     const students = st.students.filter(s => s.klass === picked.klass).sort((a, b) => a.name.localeCompare(b.name));
     if (students.length === 0) {
       return `<div class="empty"><div class="empty-title">No learners in ${UI.esc(picked.klass)}</div></div>`;
     }
     if (exams.length === 0) {
-      return `<div class="empty"><div class="empty-title">No assessments recorded yet</div><p>Create one from Assessments for ${UI.esc(picked.klass)} &middot; ${UI.esc(st.subjects.find(s => s.id === picked.subjectId)?.name || '')} in ${UI.esc(picked.term)} ${UI.esc(picked.year)}.</p></div>`;
+      return `<div class="empty"><div class="empty-title">No assessments recorded yet</div><p>Ask your administrator to create an exam for ${UI.esc(picked.klass)} &middot; ${UI.esc(st.subjects.find(s => s.id === picked.subjectId)?.name || '')} in ${UI.esc(picked.term)} ${UI.esc(picked.year)}.</p></div>`;
     }
     return `
       <div class="ledger">
@@ -484,7 +512,14 @@ Views.gradebook = async function () {
   }
 
   function wirePicker() {
-    document.getElementById('gbKlass').onchange = (e) => { picked.klass = e.target.value; paint(); };
+    document.getElementById('gbKlass').onchange = (e) => {
+      picked.klass = e.target.value;
+      // Changing class changes which subjects are even valid choices —
+      // re-derive them and default to the first one for this class.
+      mySubjects = subjectsForKlassPicker(picked.klass);
+      picked.subjectId = mySubjects[0]?.id || '';
+      paint();
+    };
     document.getElementById('gbSubject').onchange = (e) => { picked.subjectId = e.target.value; paint(); };
     document.getElementById('gbTerm').onchange = (e) => { picked.term = e.target.value; paint(); };
     document.getElementById('gbYear').onchange = (e) => { picked.year = String(Number(e.target.value) || st.settings.year); paint(); };

@@ -485,56 +485,92 @@ function subjectsForKlass(st, klassLabel) {
 // Admins/superadmins are never restricted, so this returns null sets
 // for them (meaning "everything").
 //
-// A teacher's visible subjects/classes are the UNION of two sources:
-//   1. Explicit assignment (teacher_subjects / teacher_classes,
-//      set via "Manage subjects" / "Manage classes" on the Users page)
-//      — fine-grained, per-subject or per-class picks.
-//   2. Their Section (profiles.section_scope, e.g. "Lower Primary") —
-//      coarse-grained: EVERY subject and class in that band, with no
-//      per-item picking needed. This is what makes a Lower Primary
-//      teacher automatically see only Lower Primary subjects without
-//      an admin having to tick every box by hand.
-// A teacher can have either, both, or neither. The database enforces
-// the same union (see teacher_has_subject/teacher_has_class in
-// 025_teacher_section_scope.sql) so what's shown here always matches
-// what the teacher can actually save.
+// Two DIFFERENT kinds of scope, kept separate on purpose:
+//
+//   1. homeroomClassLabels — classes this teacher actually HOLDS (via
+//      teacher_classes / "Manage classes", or their Section). This is
+//      what "class teacher" means across the app: only a homeroom
+//      teacher (or admin) may add a learner or take attendance for a
+//      class — see js/teacher.js (Learners) and js/attendance.js.
+//
+//   2. subjectsByClass — a per-class map of exactly which subject(s)
+//      this teacher teaches IN THAT CLASS (via teacher_subject_classes
+//      / "Manage subjects", per sql/026_teacher_subject_per_class.sql,
+//      or every subject in their Section for a class inside that
+//      Section). This is what governs Marks Entry, Gradebook,
+//      Competency Assessment and Broadsheet column-editing. It's a
+//      real (subject, class) pairing rather than two independently
+//      unioned lists — a subject id can be shared across levels (one
+//      "Mathematics" row used by both Grade 1 and Grade 7), so a flat
+//      subjectIds set intersected with a flat classLabels set would
+//      still wrongly allow, say, Science marks in a Junior class the
+//      teacher never actually teaches there, as long as they teach
+//      SOME subject in that class and Science somewhere else. See the
+//      migration notes for the exact bug this replaced.
+//
+// `classLabels`/`classIds`/`classes` below are the UNION of the two,
+// for screens that just need "everything this teacher can see" (e.g.
+// the Dashboard's class cards) — but anything that shows or edits an
+// EXAM, RESULT or COMPETENCY RATING must key off subjectsByClass, and
+// anything that adds a learner or takes ATTENDANCE must key off
+// homeroomClassLabels, never this union — using the union for either
+// re-opens the exact leaks this was written to close.
 function teacherScope(st, user) {
   const isTeacher = !!user && user.role === 'user';
-  if (!isTeacher) return { isTeacher: false, subjectIds: null, classIds: null, classLabels: null };
+  if (!isTeacher) {
+    return {
+      isTeacher: false, subjectIds: null, classIds: null, classLabels: null,
+      subjectsByClass: null, homeroomClassLabels: null
+    };
+  }
 
   const sectionScope = user.section_scope || '';
 
-  const subjectIds = new Set(st.teacherSubjects.filter(ts => ts.teacherId === user.id).map(ts => ts.subjectId));
-  if (sectionScope) {
-    st.subjects.forEach(s => { if (sectionsOverlap(s.section || '', sectionScope)) subjectIds.add(s.id); });
-  }
-
-  let assignedClasses = st.classes.filter(c => st.teacherClasses.some(tc => tc.teacherId === user.id && tc.classId === c.id));
+  // ---- 1. Homeroom classes ("class teacher" of) ----
+  let homeroomClasses = st.classes.filter(c => st.teacherClasses.some(tc => tc.teacherId === user.id && tc.classId === c.id));
   if (sectionScope) {
     const inScope = new Set(st.classes.filter(c => {
       const band = gradeSection(c.name);
       return band && sectionCovers(sectionScope, band.key);
     }).map(c => c.id));
-    assignedClasses = st.classes.filter(c => inScope.has(c.id) || assignedClasses.some(ac => ac.id === c.id));
+    homeroomClasses = st.classes.filter(c => inScope.has(c.id) || homeroomClasses.some(hc => hc.id === c.id));
+  }
+  const homeroomClassLabels = new Set(homeroomClasses.map(c => c.label));
+
+  // ---- 2. Per-class subject grants ----
+  const subjectsByClass = new Map(); // classLabel -> Set(subjectId)
+  const grant = (klassLabel, subjectId) => {
+    if (!subjectsByClass.has(klassLabel)) subjectsByClass.set(klassLabel, new Set());
+    subjectsByClass.get(klassLabel).add(subjectId);
+  };
+  (st.teacherSubjectClasses || []).filter(tsc => tsc.teacherId === user.id).forEach(tsc => {
+    const cls = st.classes.find(c => c.id === tsc.classId);
+    if (cls) grant(cls.label, tsc.subjectId);
+  });
+  if (sectionScope) {
+    const bandSubjects = st.subjects.filter(s => sectionsOverlap(s.section || '', sectionScope));
+    const bandClasses = st.classes.filter(c => {
+      const band = gradeSection(c.name);
+      return band && sectionCovers(sectionScope, band.key);
+    });
+    bandClasses.forEach(c => bandSubjects.forEach(s => grant(c.label, s.id)));
   }
 
-  // NOTE: there used to be a fallback here that derived "their" classes
-  // from whichever classes had exams in a subject the teacher teaches,
-  // for teachers an admin hadn't explicitly assigned classes to yet.
-  // That's been removed: a subject id can be shared across levels
-  // (e.g. one "Mathematics" row used by both Grade 1 and Grade 7), so
-  // it derived classes from ANY level using that subject — a Junior
-  // Secondary Maths teacher could end up seeing a Grade 1 exam. A
-  // teacher with subjects but no classes now correctly sees an empty
-  // state asking their administrator to assign classes from the Users
-  // page ("Manage classes"), rather than a guess.
+  const subjectIds = new Set();
+  subjectsByClass.forEach(set => set.forEach(id => subjectIds.add(id)));
+  const subjectClassLabels = new Set(subjectsByClass.keys());
+
+  // ---- Union, for "everything this teacher can see" screens ----
+  const allClasses = st.classes.filter(c => homeroomClassLabels.has(c.label) || subjectClassLabels.has(c.label));
 
   return {
     isTeacher: true,
     subjectIds,
-    classIds: new Set(assignedClasses.map(c => c.id)),
-    classLabels: new Set(assignedClasses.map(c => c.label)),
-    classes: assignedClasses
+    subjectsByClass,
+    homeroomClassLabels,
+    classIds: new Set(allClasses.map(c => c.id)),
+    classLabels: new Set(allClasses.map(c => c.label)),
+    classes: allClasses
   };
 }
 
@@ -599,13 +635,10 @@ Views.dashboard = async function () {
   // never whole-school totals. Admins are unrestricted, as before.
   const classes = isTeacher ? [...scope.classLabels].sort() : classOptionLabels(st);
   const students = st.students.filter(s => levelAllows(s.klass) && (!isTeacher || scope.classLabels.has(s.klass)));
-  // Both the subject AND the class must be the teacher's own — a
-  // subject id can be shared across levels (e.g. one "Mathematics" row
-  // used by both Grade 1 and Grade 7), so checking subjectIds alone
-  // would leak another level's exams in that subject onto a teacher's
-  // dashboard. See the same fix in Marks Entry / Assessments / Single
-  // exam report below.
-  const exams = st.exams.filter(e => levelAllows(e.klass) && (!isTeacher || (scope.subjectIds.has(e.subjectId) && scope.classLabels.has(e.klass))));
+  // The exam's class AND subject must form an actual (subject, class)
+  // pair the teacher is assigned — see teacherScope()'s subjectsByClass
+  // above for why intersecting two flat sets isn't enough.
+  const exams = st.exams.filter(e => levelAllows(e.klass) && (!isTeacher || !!scope.subjectsByClass.get(e.klass)?.has(e.subjectId)));
   const examIdsInLevel = new Set(exams.map(e => e.id));
   const results = st.results.filter(r => examIdsInLevel.has(r.examId));
   const subjectIdsInLevel = new Set(exams.map(e => e.subjectId));
@@ -2076,13 +2109,14 @@ Views.results = async function () {
   const scope = teacherScope(st, user);
   const isRestrictedTeacher = scope.isTeacher;
   const allowedSubjectIds = isRestrictedTeacher ? scope.subjectIds : null;
-  // Require BOTH the subject and the class to be the teacher's own.
-  // A subject id can be shared across levels (e.g. one "Mathematics"
-  // row used by both Grade 1 and Grade 7), so filtering on subject
-  // alone let a Grade 1 exam in that subject show up for a teacher who
-  // only teaches it in Junior Secondary. See teacherScope() in views.js.
+  // A teacher may only enter marks for an exam whose (subject, class)
+  // is an actual pair they're assigned — via "Manage subjects" (now
+  // per class/level, not global) or their Section. Checking the
+  // subject alone would let a subject id shared across levels (e.g.
+  // one "Mathematics" row used by both Grade 1 and Grade 7) leak
+  // another level's exam through. See teacherScope() in views.js.
   let visibleExams = isRestrictedTeacher
-    ? st.exams.filter(e => allowedSubjectIds.has(e.subjectId) && scope.classLabels.has(e.klass))
+    ? st.exams.filter(e => !!scope.subjectsByClass.get(e.klass)?.has(e.subjectId))
     : st.exams;
   visibleExams = visibleExams.filter(e => levelAllows(e.klass));
   st.exams = visibleExams;
@@ -2493,10 +2527,10 @@ function renderStudentReportCard(st, scope) {
    above. Shows every student's mark, percentage, level and class
    position for just that one exam. ---- */
 function renderSingleExamReport(st, scope) {
-  // Subject AND class must both be the teacher's own — see the note in
+  // (subject, class) must be an actual assigned pair — see the note in
   // Views.results above about a subject id being shared across levels.
   const examsInScope = (scope && scope.isTeacher
-    ? st.exams.filter(e => scope.subjectIds.has(e.subjectId) && scope.classLabels.has(e.klass))
+    ? st.exams.filter(e => !!scope.subjectsByClass.get(e.klass)?.has(e.subjectId))
     : st.exams
   ).filter(e => levelAllows(e.klass));
   if (examsInScope.length === 0) {
