@@ -479,6 +479,27 @@ function subjectsForKlass(st, klassLabel) {
   return st.subjects.filter(s => sectionCovers(s.section || '', section.key));
 }
 
+// Narrower than subjectsForKlass(): subjects a real teacher is
+// actually assigned to teach IN THIS SPECIFIC CLASS (via
+// teacher_subject_classes — "Manage subjects" on the Users page, per
+// sql/026_teacher_subject_per_class.sql), not merely subjects that
+// COULD apply at that class's level. Used when creating an exam, so
+// the subject picker never offers something nobody teaches there —
+// e.g. French being scoped to "Junior Secondary" in general doesn't
+// mean this particular Grade 7 class has anyone teaching it. Falls
+// back to the full level list (subjectsForKlass) when nobody has been
+// assigned ANY subject for this class yet, so a brand-new school
+// setting up exams before assigning teachers isn't blocked.
+function subjectsTaughtInKlass(st, klassLabel) {
+  const levelSubjects = subjectsForKlass(st, klassLabel);
+  const cls = (st.classes || []).find(c => c.label === klassLabel);
+  if (!cls) return levelSubjects;
+  const assignedIds = new Set((st.teacherSubjectClasses || []).filter(tsc => tsc.classId === cls.id).map(tsc => tsc.subjectId));
+  if (assignedIds.size === 0) return levelSubjects;
+  const taught = levelSubjects.filter(s => assignedIds.has(s.id));
+  return taught.length ? taught : levelSubjects;
+}
+
 // Shared by the teacher-facing screens (My Classes, Learners,
 // Assessments, Gradebook, Attendance, Competency Assessment): works
 // out which classes/subjects a "user" (teacher) login is scoped to.
@@ -487,11 +508,15 @@ function subjectsForKlass(st, klassLabel) {
 //
 // Two DIFFERENT kinds of scope, kept separate on purpose:
 //
-//   1. homeroomClassLabels — classes this teacher actually HOLDS (via
-//      teacher_classes / "Manage classes", or their Section). This is
-//      what "class teacher" means across the app: only a homeroom
-//      teacher (or admin) may add a learner or take attendance for a
-//      class — see js/teacher.js (Learners) and js/attendance.js.
+//   1. homeroomClassLabels — the class(es) this teacher IS THE CLASS
+//      TEACHER of (classes.classTeacherId — one specific person per
+//      class, set via "Manage classes" on the Users page), or every
+//      class in their Section. This is what "class teacher" means
+//      across the app: only THE class teacher (or admin) may add a
+//      learner or take attendance for a class — see js/teacher.js
+//      (Learners) and js/attendance.js, and
+//      sql/027_single_class_teacher.sql for why this had to be a
+//      single owner rather than "any teacher linked to this class".
 //
 //   2. subjectsByClass — a per-class map of exactly which subject(s)
 //      this teacher teaches IN THAT CLASS (via teacher_subject_classes
@@ -526,14 +551,19 @@ function teacherScope(st, user) {
 
   const sectionScope = user.section_scope || '';
 
-  // ---- 1. Homeroom classes ("class teacher" of) ----
-  let homeroomClasses = st.classes.filter(c => st.teacherClasses.some(tc => tc.teacherId === user.id && tc.classId === c.id));
+  // ---- 1. Homeroom classes ("THE class teacher" of) ----
+  // A class has exactly ONE class teacher (classes.classTeacherId —
+  // see sql/027_single_class_teacher.sql), not "any teacher ticked in
+  // Manage classes for this class" — that distinction is what makes
+  // Attendance and Add Learner strictly class-teacher-only.
+  let homeroomClasses = st.classes.filter(c => c.classTeacherId === user.id);
   if (sectionScope) {
-    const inScope = new Set(st.classes.filter(c => {
+    const inScope = st.classes.filter(c => {
       const band = gradeSection(c.name);
       return band && sectionCovers(sectionScope, band.key);
-    }).map(c => c.id));
-    homeroomClasses = st.classes.filter(c => inScope.has(c.id) || homeroomClasses.some(hc => hc.id === c.id));
+    });
+    const already = new Set(homeroomClasses.map(c => c.id));
+    inScope.forEach(c => { if (!already.has(c.id)) { homeroomClasses.push(c); already.add(c.id); } });
   }
   const homeroomClassLabels = new Set(homeroomClasses.map(c => c.label));
 
@@ -1950,7 +1980,7 @@ Views.exams = async function () {
       // never silently swaps the subject out from under you).
       function refreshSubjectOptions() {
         const klass = klassField.value.trim();
-        let options = subjectsForKlass(st, klass);
+        let options = subjectsTaughtInKlass(st, klass);
         if (isEdit && !options.some(s => s.id === existing.subjectId)) {
           const forced = st.subjects.find(s => s.id === existing.subjectId);
           if (forced) options = [forced, ...options];
@@ -1960,7 +1990,12 @@ Views.exams = async function () {
         const keep = isEdit && !subjectField.dataset.touched ? existing.subjectId : prevValue;
         if (options.some(s => s.id === keep)) subjectField.value = keep;
         const section = klass ? sectionForKlassLabel(st, klass) : null;
-        subjectHint.textContent = section ? `Showing subjects for ${section.label}${options.length !== st.subjects.length ? ` (${options.length} of ${st.subjects.length} total)` : ''}.` : 'Pick a class to narrow this list to its level.';
+        const levelCount = klass ? subjectsForKlass(st, klass).length : st.subjects.length;
+        subjectHint.textContent = section
+          ? (options.length !== levelCount
+              ? `Showing subjects actually assigned to a teacher for ${UI.esc(klass)} (${options.length} of ${levelCount} ${section.label} subjects).`
+              : `Showing subjects for ${section.label}${options.length !== st.subjects.length ? ` (${options.length} of ${st.subjects.length} total)` : ''}.`)
+          : 'Pick a class to narrow this list to its level.';
       }
       subjectField.addEventListener('change', () => { subjectField.dataset.touched = '1'; });
       klassField.addEventListener('change', refreshSubjectOptions);
@@ -2044,15 +2079,17 @@ Views.exams = async function () {
       const klassField = root.querySelector('#f_klass');
       const hintEl = root.querySelector('#f_allsubjects_hint');
       const saveBtn = root.querySelector('#saveBtn');
-      // Same section-scoping as the single-subject form — a class only
-      // gets exams for subjects actually offered at its level.
-      function scopedSubjects() { return subjectsForKlass(st, klassField.value.trim()); }
+      // Same scoping as the single-subject form — a class only gets
+      // exams for subjects actually assigned to a teacher there (never
+      // subjects merely eligible for that level but nobody teaches).
+      function scopedSubjects() { return subjectsTaughtInKlass(st, klassField.value.trim()); }
       function refreshHint() {
         const subs = scopedSubjects();
         const klass = klassField.value.trim();
         const section = klass ? sectionForKlassLabel(st, klass) : null;
+        const levelCount = klass ? subjectsForKlass(st, klass).length : st.subjects.length;
         hintEl.textContent = subs.length
-          ? `Will create exam entries for: ${subs.map(s => s.name).join(', ')}${section && subs.length !== st.subjects.length ? ` (${section.label} only)` : ''}`
+          ? `Will create exam entries for: ${subs.map(s => s.name).join(', ')}${section && subs.length !== levelCount ? ` (assigned to a teacher for ${klass} — ${subs.length} of ${levelCount} ${section.label} subjects)` : ''}`
           : (klass ? `No subjects are set up for ${section ? section.label : klass} yet — add one on the Subjects page.` : 'Pick a class to see which subjects this will create exams for.');
         saveBtn.textContent = `Create for ${subs.length} subject${subs.length === 1 ? '' : 's'}`;
         saveBtn.disabled = subs.length === 0;
@@ -2994,12 +3031,18 @@ Views.settings = async function () {
           </div>
           ${user.role === 'user' ? `
           <div class="field full">
-            <label>Assigned subjects</label>
-            <p style="margin:0;">${(() => { const names = st.teacherSubjects.filter(ts => ts.teacherId === user.id).map(ts => st.subjects.find(s => s.id === ts.subjectId)?.name).filter(Boolean); return names.length ? UI.esc(names.join(', ')) : 'None assigned'; })()}</p>
+            <label>Assigned subjects, per class</label>
+            <p style="margin:0;">${(() => {
+              const scope = teacherScope(st, user);
+              const lines = [...scope.subjectsByClass.entries()]
+                .map(([klass, subjectIds]) => `${klass}: ${[...subjectIds].map(id => st.subjects.find(s => s.id === id)?.name).filter(Boolean).sort().join(', ')}`)
+                .sort();
+              return lines.length ? UI.esc(lines.join(' • ')) : 'None assigned';
+            })()}</p>
           </div>
           <div class="field full">
-            <label>Assigned classes</label>
-            <p style="margin:0;">${(() => { const labels = st.teacherClasses.filter(tc => tc.teacherId === user.id).map(tc => st.classes.find(c => c.id === tc.classId)?.label).filter(Boolean); return labels.length ? UI.esc(labels.join(', ')) : 'None assigned'; })()}</p>
+            <label>Class teacher (homeroom) for</label>
+            <p style="margin:0;">${(() => { const labels = st.classes.filter(c => c.classTeacherId === user.id).map(c => c.label); return labels.length ? UI.esc(labels.join(', ')) : 'None — not a class teacher for any class'; })()}</p>
           </div>` : ''}
         </div>
       </div>
