@@ -479,6 +479,34 @@ function subjectsForKlass(st, klassLabel) {
   return st.subjects.filter(s => sectionCovers(s.section || '', section.key));
 }
 
+// Same idea as subjectsForKlass(), but strict — used ONLY for exam
+// creation. subjectsForKlass() treats a legacy unscoped subject
+// (section: '', created before Subjects became level-independent —
+// see Views.subjects) as "covers every level", which is exactly
+// right for things like the Subjects/Manage-subjects screens where a
+// genuinely shared subject should still show up everywhere. But for
+// creating an EXAM it means one old unscoped "Mathematics" row would
+// be offered for a Junior Secondary exam AND a Lower Primary exam AND
+// every level in between — the cross-level leak this whole project
+// has been closing. This function only counts a subject as belonging
+// to a level if it's ACTUALLY been given that level (or the shared
+// 'primary' parent) — never the empty/legacy case.
+//
+// This never changes any subject's own data — a legacy subject still
+// works everywhere else exactly as before (Subjects page's "All
+// levels (legacy)" tab, Manage Subjects, etc.); it just isn't offered
+// when creating a NEW exam until an admin gives it one real level.
+// Falls back to the broader subjectsForKlass() only if a level has NO
+// properly-scoped subjects at all yet, so exam creation isn't fully
+// blocked before old subjects have been re-tagged.
+function levelScopedSubjectsForExam(st, klassLabel) {
+  if (!klassLabel) return st.subjects;
+  const section = sectionForKlassLabel(st, klassLabel);
+  if (!section) return st.subjects;
+  const strict = st.subjects.filter(s => !!s.section && sectionCovers(s.section, section.key));
+  return strict.length ? strict : subjectsForKlass(st, klassLabel);
+}
+
 // Narrower than subjectsForKlass(): subjects a real teacher is
 // actually assigned to teach IN THIS SPECIFIC CLASS (via
 // teacher_subject_classes — "Manage subjects" on the Users page, per
@@ -491,7 +519,7 @@ function subjectsForKlass(st, klassLabel) {
 // assigned ANY subject for this class yet, so a brand-new school
 // setting up exams before assigning teachers isn't blocked.
 function subjectsTaughtInKlass(st, klassLabel) {
-  const levelSubjects = subjectsForKlass(st, klassLabel);
+  const levelSubjects = levelScopedSubjectsForExam(st, klassLabel);
   const cls = (st.classes || []).find(c => c.label === klassLabel);
   if (!cls) return levelSubjects;
   const assignedIds = new Set((st.teacherSubjectClasses || []).filter(tsc => tsc.classId === cls.id).map(tsc => tsc.subjectId));
@@ -2032,7 +2060,7 @@ Views.exams = async function () {
         const keep = isEdit && !subjectField.dataset.touched ? existing.subjectId : prevValue;
         if (options.some(s => s.id === keep)) subjectField.value = keep;
         const section = klass ? sectionForKlassLabel(st, klass) : null;
-        const levelCount = klass ? subjectsForKlass(st, klass).length : st.subjects.length;
+        const levelCount = klass ? levelScopedSubjectsForExam(st, klass).length : st.subjects.length;
         subjectHint.textContent = section
           ? (options.length !== levelCount
               ? `Showing subjects actually assigned to a teacher for ${UI.esc(klass)} (${options.length} of ${levelCount} ${section.label} subjects).`
@@ -2129,7 +2157,7 @@ Views.exams = async function () {
         const subs = scopedSubjects();
         const klass = klassField.value.trim();
         const section = klass ? sectionForKlassLabel(st, klass) : null;
-        const levelCount = klass ? subjectsForKlass(st, klass).length : st.subjects.length;
+        const levelCount = klass ? levelScopedSubjectsForExam(st, klass).length : st.subjects.length;
         hintEl.textContent = subs.length
           ? `Will create exam entries for: ${subs.map(s => s.name).join(', ')}${section && subs.length !== levelCount ? ` (assigned to a teacher for ${klass} — ${subs.length} of ${levelCount} ${section.label} subjects)` : ''}`
           : (klass ? `No subjects are set up for ${section ? section.label : klass} yet — add one on the Subjects page.` : 'Pick a class to see which subjects this will create exams for.');
