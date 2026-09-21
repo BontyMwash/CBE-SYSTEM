@@ -133,13 +133,25 @@ const Grading = {
   // instead of a hard-coded Opener/Midterm/Endterm array, so this grid grows
   // or shrinks with however many sittings the school actually uses.
   buildStudentTermGrid(st, studentId, term, year) {
-    const subjects = st.subjects;
+    // Only subjects with an actual exam created for THIS student's own
+    // class, in this term/year — not every subject in the whole
+    // school. A subject id can be shared across levels/classes, so
+    // without this a report card used to show a row (blank, since no
+    // exam existed) for every other class's subjects too.
+    const student = st.students.find(s => s.id === studentId);
+    if (!student) return [];
+    const examsHere = st.exams.filter(e => e.klass === student.klass && e.term === term && String(e.year) === String(year));
+    const subjectIds = [...new Set(examsHere.map(e => e.subjectId))];
+    const subjects = subjectIds
+      .map(id => st.subjects.find(s => s.id === id))
+      .filter(Boolean)
+      .sort((a, b) => a.name.localeCompare(b.name));
     const examTypes = this.examTypeNames(st);
     const grid = subjects.map(subj => {
       const row = { subject: subj, cells: {} , average: null};
       const pcts = [];
       examTypes.forEach(type => {
-        const exam = st.exams.find(e => e.subjectId === subj.id && e.type === type && e.term === term && String(e.year) === String(year));
+        const exam = st.exams.find(e => e.subjectId === subj.id && e.klass === student.klass && e.type === type && e.term === term && String(e.year) === String(year));
         if (!exam) { row.cells[type] = null; return; }
         const res = st.results.find(r => r.examId === exam.id && r.studentId === studentId);
         const pct = res ? this.percent(res.marks, exam.totalMarks) : null;
