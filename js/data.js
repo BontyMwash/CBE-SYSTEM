@@ -19,7 +19,7 @@ const Store = {
   activeSchoolId: null, // set by Auth after login / "view school" (superadmin)
 
   // ---- mappers: DB snake_case -> app camelCase ----
-  _mapClass: (r) => ({ id: r.id, name: r.name, stream: r.stream || '', label: r.stream ? `${r.name} ${r.stream}` : r.name, teacherName: r.teacher_name || '' }),
+  _mapClass: (r) => ({ id: r.id, name: r.name, stream: r.stream || '', label: r.stream ? `${r.name} ${r.stream}` : r.name, teacherName: r.teacher_name || '', classTeacherId: r.class_teacher_id || '' }),
   _mapStudent: (r) => ({
     id: r.id, name: r.name, admissionNo: r.admission_no || '', klass: r.klass, gender: r.gender || '',
     parentName: r.parent_name || '', parentPhone: r.parent_phone || '', parentEmail: r.parent_email || ''
@@ -490,7 +490,13 @@ const Store = {
     this._throwIfError('unpublish results', error);
   },
 
-  // ---- Teacher <-> class assignments ("My Classes" / roster / attendance scope) ----
+  // ---- Teacher <-> class assignments ----
+  // LEGACY — teacher_classes is a many-to-many table; kept so old data
+  // isn't lost, but no permission check anywhere reads it anymore. A
+  // class's actual class teacher (for Attendance / Add Learner — see
+  // sql/027_single_class_teacher.sql) is the single classes.class_
+  // teacher_id, set via setClassTeacher/setTeacherHomeroomClasses
+  // below. This method no longer has any UI caller.
   async setTeacherClasses(teacherId, classIds) {
     const { error: delErr } = await supabase.from('teacher_classes').delete().eq('teacher_id', teacherId);
     this._throwIfError('clear teacher classes', delErr);
@@ -499,6 +505,35 @@ const Store = {
     const { data, error } = await supabase.from('teacher_classes').insert(rows).select();
     this._throwIfError('save teacher classes', error);
     return (data || []).map(this._mapTeacherClass);
+  },
+
+  // Make `teacherId` the class teacher of `classId` — a class can only
+  // have ONE, so this silently takes over from whoever had it before
+  // (the "Manage classes" modal shows the current owner so an admin
+  // doesn't do this by accident). Pass teacherId = null to clear it.
+  async setClassTeacher(classId, teacherId) {
+    const { data, error } = await supabase.from('classes').update({ class_teacher_id: teacherId || null }).eq('id', classId).select().single();
+    this._throwIfError('set class teacher', error);
+    return this._mapClass(data);
+  },
+
+  // Bulk version for the "Manage classes" modal — classIds is the
+  // COMPLETE set of classes this teacher should be class teacher of.
+  // Any OTHER class currently owned by this teacher but missing from
+  // classIds is cleared to no class teacher.
+  async setTeacherHomeroomClasses(teacherId, classIds) {
+    const want = new Set(classIds);
+    const { data: currentlyOwned, error: curErr } = await supabase.from('classes').select('id').eq('class_teacher_id', teacherId);
+    this._throwIfError('load current class teacher assignments', curErr);
+    const toClear = (currentlyOwned || []).map(r => r.id).filter(id => !want.has(id));
+    if (toClear.length) {
+      const { error: clearErr } = await supabase.from('classes').update({ class_teacher_id: null }).in('id', toClear);
+      this._throwIfError('clear class teacher assignments', clearErr);
+    }
+    if (classIds.length) {
+      const { error: setErr } = await supabase.from('classes').update({ class_teacher_id: teacherId }).in('id', classIds);
+      this._throwIfError('save class teacher assignments', setErr);
+    }
   },
 
   // ---- Attendance ----
