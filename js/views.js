@@ -1610,13 +1610,36 @@ Views.exams = async function () {
 
   // ---- augmented rows: one per exam, with real, calculated stats ----
   function buildRows() {
-    return [...st.exams].filter(e => levelAllows(e.klass)).map(e => {
+    const rows = [...st.exams].filter(e => levelAllows(e.klass)).map(e => {
       const studentCount = st.students.filter(s => s.klass === e.klass).length;
       const entries = st.results.filter(r => r.examId === e.id).length;
       const pct = studentCount > 0 ? Math.round((entries / studentCount) * 100) : 0;
       const status = entries === 0 ? 'not-started' : (studentCount > 0 && entries >= studentCount ? 'complete' : 'in-progress');
       return { exam: e, studentCount, entries, pct, status, locked: isLockedExam(e) };
-    }).sort((a, b) => (b.exam.year - a.exam.year) || a.exam.term.localeCompare(b.exam.term) || a.exam.klass.localeCompare(b.exam.klass));
+    });
+    // Flag likely duplicate sittings: same class/type/term/year with a
+    // subject of the SAME NAME but a DIFFERENT subject id — almost
+    // always two separate subject records (e.g. an old, unscoped
+    // subject and its new level-specific replacement — see Views.
+    // subjects) that look identical in this table but are unrelated
+    // underneath. This is the #1 cause of "I entered marks but this
+    // exam still shows 0" — the marks were saved fine, just under the
+    // OTHER row. Flagging both rows here instead of silently merging
+    // them, since only an admin who knows which subject is current
+    // should decide what to do with the old one (Delete, or Import
+    // Marks across if it turns out to be the wrong one).
+    const bySittingAndName = new Map();
+    rows.forEach(r => {
+      const key = `${r.exam.klass}|${r.exam.type}|${r.exam.term}|${r.exam.year}|${subjectName(r.exam.subjectId).trim().toLowerCase()}`;
+      if (!bySittingAndName.has(key)) bySittingAndName.set(key, []);
+      bySittingAndName.get(key).push(r);
+    });
+    bySittingAndName.forEach(group => {
+      if (group.length < 2) return;
+      const distinctSubjectIds = new Set(group.map(r => r.exam.subjectId));
+      if (distinctSubjectIds.size > 1) group.forEach(r => { r.duplicateSuspect = true; });
+    });
+    return rows.sort((a, b) => (b.exam.year - a.exam.year) || a.exam.term.localeCompare(b.exam.term) || a.exam.klass.localeCompare(b.exam.klass));
   }
 
   const allRows = buildRows();
@@ -1790,7 +1813,7 @@ Views.exams = async function () {
                     <div class="class-cell">${UI.esc(e.klass)}</div>
                     ${r.studentCount ? `<div class="class-cell-sub">${r.studentCount} learner${r.studentCount === 1 ? '' : 's'}</div>` : ''}
                   </td>
-                  <td>${UI.esc(subjectName(e.subjectId))}</td>
+                  <td>${UI.esc(subjectName(e.subjectId))}${r.duplicateSuspect ? ` <i class="fa-solid fa-triangle-exclamation" style="color:var(--danger);" title="Another exam exists for this exact class/type/term/year with a subject of the same name but a DIFFERENT subject record. Marks entered against one won't show on the other — see the notice above."></i>` : ''}</td>
                   <td class="num">${UI.esc(e.totalMarks)}</td>
                   <td>${entriesCellHTML(r)}</td>
                   <td>${statusPill(r.status)}${r.locked ? ' <i class="fa-solid fa-lock locked-flag" title="Published & locked"></i>' : ''}</td>
@@ -1969,6 +1992,10 @@ Views.exams = async function () {
 
   document.getElementById('content').innerHTML = `
     <p class="page-intro">Manage examinations, subjects and learner assessments.</p>
+    ${allRows.some(r => r.duplicateSuspect) ? `
+      <div class="field-hint" style="background:var(--warn-bg, #fff3cd); border:1px solid var(--warn-border, #ffe69c); border-radius:6px; padding:10px 12px; margin-bottom:14px;">
+        <strong>⚠ Possible duplicate exams found.</strong> Some rows below (flagged with ⚠ next to the subject) share the exact same class/type/term/year but point to two DIFFERENT subject records with the same name — almost always an old subject and its newer replacement (see the Subjects page). Marks entered against one won't show on the other. Open "More actions" on whichever one has the marks and use "Export Marks", then "Import Marks" that same file into the correct one, then Delete the wrong exam.
+      </div>` : ''}
     ${renderStatCards()}
     ${renderFilterBar()}
     <div id="examsTableArea">${renderTableArea()}</div>
