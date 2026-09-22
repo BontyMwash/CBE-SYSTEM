@@ -58,7 +58,26 @@
 -- paste this whole file -> Run.
 -- ============================================================
 
-create or replace function public.merge_subjects(p_keep_id uuid, p_remove_id uuid)
+-- Drop EVERY existing function named merge_subjects in this schema,
+-- regardless of its exact signature or return type — belt-and-braces
+-- in case an earlier partial run left behind a version Postgres
+-- won't let a plain "drop function merge_subjects(uuid, uuid)" catch
+-- (e.g. a different parameter list). Safe to run even if none exist.
+do $$
+declare
+  r record;
+begin
+  for r in
+    select p.oid::regprocedure as sig
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'merge_subjects'
+  loop
+    execute format('drop function %s', r.sig);
+  end loop;
+end $$;
+
+create function public.merge_subjects(p_keep_id uuid, p_remove_id uuid)
 returns jsonb
 language plpgsql
 security definer
