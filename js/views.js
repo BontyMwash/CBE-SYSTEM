@@ -2410,13 +2410,23 @@ Views.results = async function () {
         input.classList.toggle('filled', v !== '');
         const studentId = input.dataset.student;
 
+        // Remember exactly what was here before, so a failed save can
+        // be rolled back — both the in-memory st.results (which other
+        // screens read from) and what's drawn on screen. Without this,
+        // a save that's rejected (e.g. a teacher no longer assigned to
+        // this subject/class — see teacher_subject_classes) still LOOKS
+        // like it worked: the input stays filled and graded even though
+        // nothing was actually written, and the mark quietly vanishes
+        // next time this page loads.
+        const existingIdx = st.results.findIndex(r => r.examId === exam.id && r.studentId === studentId);
+        const previous = existingIdx !== -1 ? { ...st.results[existingIdx] } : null;
+
         // Optimistic UI: show the new badge immediately from the value
         // just typed, and update our local cache — don't wait on the
         // network round-trip, so rapid entry across many rows stays
-        // smooth. Errors are reported via toast if the save fails.
+        // smooth. Rolled back below if the save actually fails.
         const band = v === '' ? null : Grading.levelForMarks(v, exam.totalMarks, st.settings.gradingBands);
         document.querySelector(`[data-level-for="${studentId}"]`).innerHTML = UI.badge(band);
-        const existingIdx = st.results.findIndex(r => r.examId === exam.id && r.studentId === studentId);
         if (v === '') {
           if (existingIdx !== -1) st.results.splice(existingIdx, 1);
         } else if (existingIdx !== -1) {
@@ -2426,7 +2436,21 @@ Views.results = async function () {
         }
 
         Store.setResult(exam.id, studentId, v === '' ? '' : v).catch(err => {
-          UI.toast('Could not save that mark: ' + err.message);
+          // Roll back the optimistic change so the screen matches what's
+          // actually saved, then explain why — this is almost always
+          // either the exam being locked/published, or (for a teacher
+          // login) no longer being assigned this subject for this class
+          // under "Manage subjects" on the Users page.
+          const idx = st.results.findIndex(r => r.examId === exam.id && r.studentId === studentId);
+          if (idx !== -1) st.results.splice(idx, 1);
+          if (previous) st.results.push(previous);
+          const revertedMarks = previous ? previous.marks : '';
+          const revertedBand = previous ? Grading.levelForMarks(previous.marks, exam.totalMarks, st.settings.gradingBands) : null;
+          input.value = revertedMarks;
+          input.classList.toggle('filled', revertedMarks !== '');
+          const levelCell = document.querySelector(`[data-level-for="${studentId}"]`);
+          if (levelCell) levelCell.innerHTML = UI.badge(revertedBand);
+          UI.toast('Could not save that mark — it has NOT been recorded: ' + err.message);
         });
       });
     });
