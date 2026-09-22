@@ -1010,6 +1010,7 @@ Views.users = async function () {
   // Subjects + existing teacher->subject assignments, for the "Manage
   // subjects" modal below (restricts what a teacher login can see/edit).
   const st = await Store.current();
+  let teacherClasses = st.teacherClasses;
   let teacherSubjectClasses = st.teacherSubjectClasses;
 
   function subjectsForTeacher(teacherId) {
@@ -1018,9 +1019,7 @@ Views.users = async function () {
     return new Set(teacherSubjectClasses.filter(tsc => tsc.teacherId === teacherId).map(tsc => tsc.subjectId));
   }
   function classesForTeacher(teacherId) {
-    // A class has exactly ONE class teacher (classes.classTeacherId) —
-    // see sql/027_single_class_teacher.sql.
-    return new Set(st.classes.filter(c => c.classTeacherId === teacherId).map(c => c.id));
+    return new Set(teacherClasses.filter(tc => tc.teacherId === teacherId).map(tc => tc.classId));
   }
   // classId -> Set(subjectId) — the real, per-class assignment this
   // teacher has. See sql/026_teacher_subject_per_class.sql.
@@ -1332,19 +1331,14 @@ Views.users = async function () {
     UI.openModal(`
       <h2>Manage classes — ${UI.esc(existing.name)}</h2>
       ${sectionNotice}
-      <p class="field-hint" style="margin-bottom:12px;">
-        A class has exactly ONE class teacher — only that person (or admin) can take attendance or add a learner for it.
-        ${existing.sectionScope ? 'Check any EXTRA class(es) this teacher should be the class teacher of, beyond their Section (above).' : `Check the class(es) ${UI.esc(existing.name)} is THE class teacher of. Checking a class already owned by someone else moves it to ${UI.esc(existing.name)} — it's shown below so you don't do that by accident.`}
-      </p>
+      <p class="field-hint" style="margin-bottom:12px;">${existing.sectionScope ? 'Check any EXTRA classes this teacher should have, beyond their Section (above).' : `Only the classes checked below will show up under My Classes, Learners and Attendance for ${UI.esc(existing.name)} — this scopes a teacher (or class/homeroom teacher) to their own class(es).`}</p>
       <div class="form-grid">
-        ${[...st.classes].sort((a, b) => a.label.localeCompare(b.label)).map(c => {
-          const ownerName = c.classTeacherId && c.classTeacherId !== existing.id ? (users.find(u => u.id === c.classTeacherId)?.name || 'another teacher') : '';
-          return `
+        ${[...st.classes].sort((a, b) => a.label.localeCompare(b.label)).map(c => `
           <label class="field full" style="flex-direction:row; align-items:center; gap:10px;">
             <input type="checkbox" data-class-check="${c.id}" ${assigned.has(c.id) ? 'checked' : ''} style="width:auto;">
-            <span>${UI.esc(c.label)}${classInScope(c) ? ' <span class="badge badge-none" style="font-size:0.75em;">already via Section</span>' : ''}${ownerName ? ` <span class="badge badge-none" style="font-size:0.75em;">currently: ${UI.esc(ownerName)}</span>` : ''}</span>
-          </label>`;
-        }).join('')}
+            <span>${UI.esc(c.label)}${classInScope(c) ? ' <span class="badge badge-none" style="font-size:0.75em;">already via Section</span>' : ''}</span>
+          </label>
+        `).join('')}
       </div>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
@@ -1357,7 +1351,7 @@ Views.users = async function () {
           .filter(cb => cb.checked)
           .map(cb => cb.dataset.classCheck);
         try {
-          await Store.setTeacherHomeroomClasses(existing.id, classIds);
+          await Store.setTeacherClasses(existing.id, classIds);
           UI.toast('Classes updated');
           UI.closeModal();
           Views.users();
