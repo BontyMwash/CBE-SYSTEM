@@ -1,0 +1,3329 @@
+/* ============================================================
+   Copyright (c) 2026 B~CBE Analytics. All rights reserved.
+
+   views.js — one render function per route. Each function is now
+   ASYNC: it awaits Store.current() (a real network call) before
+   rendering, then wires up its own event listeners.
+
+   Two patterns worth knowing:
+   - Infrequent actions (add/edit/delete a student, subject, exam...)
+     just await the Store call, then re-run the whole view function
+     to refresh from the server. Simple and always correct.
+   - Marks entry (the hot path — many rapid edits) updates the DOM
+     optimistically from the value just typed, and saves in the
+     background, rather than re-fetching after every keystroke.
+   ============================================================ */
+
+const Views = {};
+
+function setTopbarActions(html) {
+  document.getElementById('topbarActions').innerHTML = html || '';
+}
+
+function classesFromStudents(students) {
+  return [...new Set(students.map(s => s.klass).filter(Boolean))].sort();
+}
+
+// Natural/alphanumeric compare for admission numbers ("2025-014" sorts
+// before "2025-100", "9" sorts before "10") — plain localeCompare would
+// sort those lexicographically instead. Students with no admission
+// number recorded sort to the bottom, alphabetically by name.
+function admissionNoCompare(a, b) {
+  const av = (a.admissionNo || '').trim();
+  const bv = (b.admissionNo || '').trim();
+  if (!av && !bv) return a.name.localeCompare(b.name);
+  if (!av) return 1;
+  if (!bv) return -1;
+  return av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' }) || a.name.localeCompare(b.name);
+}
+
+// Preferred source for "which class" dropdowns everywhere in the app:
+// the Classes/Streams page (st.classes). Falls back to whatever class
+// names already exist on students, for schools that haven't set up
+// Classes yet (or are mid-migration).
+function classOptionLabels(st) {
+  if (st.classes && st.classes.length) {
+    return [...st.classes].filter(c => levelAllows(c.name)).sort((a, b) => a.label.localeCompare(b.label)).map(c => c.label);
+  }
+  return classesFromStudents(st.students).filter(levelAllows);
+}
+
+// Same as classOptionLabels(), but ignores the Primary/Junior Secondary/
+// Senior School level switcher entirely. The switcher is a view-scope
+// convenience for lists (Classes, Students, etc.) — it should never stop
+// an admin from picking a target class in a *different* section, e.g.
+// promoting a Grade 6 (Primary) class up to Grade 7 (Junior Secondary)
+// at year-end. Used only by the "Promote" action on the Classes page.
+function allClassOptionLabels(st) {
+  if (st.classes && st.classes.length) {
+    return [...st.classes].sort((a, b) => a.label.localeCompare(b.label)).map(c => c.label);
+  }
+  return classesFromStudents(st.students);
+}
+
+// CBC grade bands, finest-grained first:
+//   PP1/PP2            -> Primary (unbanded — pre-primary isn't Grade 1-6)
+//   Grade 1-3          -> Lower Primary   (child of Primary)
+//   Grade 4-6          -> Upper Primary   (child of Primary)
+//   Grade 7-9          -> Junior Secondary
+//   Grade 10-12        -> Senior School
+// Lower and Upper Primary are sub-bands of Primary rather than
+// replacements for it: anything scoped to 'primary' (a subject, a
+// section-scoped admin login, the level switcher) still covers both,
+// which is why SECTION_PARENT exists and why sectionCovers() — not a
+// bare === — is used everywhere a section is matched.
+//
+// Parsed from the class/grade name (e.g. "Grade 7", "PP1") so report
+// cards can label themselves correctly without needing a separate
+// field to maintain. Returns null for a class name that doesn't match
+// a recognised CBC grade (e.g. a custom name) — callers should fall
+// back to a generic title.
+const SECTION_PARENT = { 'lower-primary': 'primary', 'upper-primary': 'primary' };
+
+// Every selectable section key -> how it's written in the UI and at the
+// top of a printable report. Single source of truth for the labels, so
+// adding a band later means touching one object instead of ten dropdowns.
+const SECTION_INFO = {
+  'primary':          { label: 'Primary',          title: 'Primary School Report Card' },
+  'lower-primary':    { label: 'Lower Primary',    title: 'Lower Primary Report Card' },
+  'upper-primary':    { label: 'Upper Primary',    title: 'Upper Primary Report Card' },
+  'junior-secondary': { label: 'Junior Secondary', title: 'Junior Secondary Report Card' },
+  'senior-school':    { label: 'Senior School',    title: 'Senior School Report Card' },
+};
+
+function sectionInfo(key) {
+  const info = SECTION_INFO[key];
+  return info ? { key, label: info.label, title: info.title } : null;
+}
+
+// Shared everywhere a section key needs turning into its display name
+// (Subjects, Classes, Students, Users) — 'All levels' for '' /
+// null/undefined, otherwise the label from SECTION_INFO (falling back
+// to the raw key for any value SECTION_INFO doesn't recognise).
+function sectionLabel(key) {
+  return key ? (SECTION_INFO[key] ? SECTION_INFO[key].label : key) : 'All levels';
+}
+
+// True if scope `scopeKey` includes a class/subject in section
+// `sectionKey`. A scope covers its own band and any band beneath it, so
+// 'primary' covers Lower and Upper Primary, while 'lower-primary'
+// covers only itself. An empty scope covers everything.
+function sectionCovers(scopeKey, sectionKey) {
+  if (!scopeKey) return true;
+  if (scopeKey === sectionKey) return true;
+  return SECTION_PARENT[sectionKey] === scopeKey;
+}
+
+// Like sectionCovers(), but symmetric: true if band `a` and band `b`
+// overlap AT ALL, regardless of which one is the "broader" side. Needed
+// because — unlike a class, which always parses to one leaf band —
+// a SUBJECT's own section can itself be the parent 'primary' (meaning
+// "applies to both Lower and Upper Primary"). So when checking whether
+// a subject belongs to a teacher's section scope, either side could be
+// the parent: a Lower-Primary-scoped teacher should see a subject
+// scoped to 'primary' (it covers them), AND a Primary-scoped teacher
+// should see a subject scoped narrowly to just 'lower-primary' (they
+// teach that range too). sectionCovers() alone only catches one of
+// those two directions.
+function sectionsOverlap(a, b) {
+  if (!a || !b) return true;
+  if (a === b) return true;
+  return SECTION_PARENT[a] === b || SECTION_PARENT[b] === a;
+}
+
+// Badge colour class for a section key, shared by the Classes, Students
+// and Subjects tables so one band always looks the same everywhere.
+function sectionBadgeClass(key) {
+  if (key === 'primary' || key === 'lower-primary') return 'ME';
+  if (key === 'upper-primary' || key === 'junior-secondary') return 'AE';
+  if (key === 'senior-school') return 'EE';
+  return 'none';
+}
+
+function gradeSection(gradeName) {
+  const s = (gradeName || '').toLowerCase();
+  if (/\bpp\s*-?\s*[12]\b/.test(s) || /pre[\s-]?primary/.test(s)) {
+    return sectionInfo('primary');
+  }
+  const m = s.match(/grade\s*-?\s*(\d{1,2})/);
+  if (m) {
+    const n = parseInt(m[1], 10);
+    if (n >= 1 && n <= 3) return sectionInfo('lower-primary');
+    if (n >= 4 && n <= 6) return sectionInfo('upper-primary');
+    if (n >= 7 && n <= 9) return sectionInfo('junior-secondary');
+    if (n >= 10 && n <= 12) return sectionInfo('senior-school');
+  }
+  return null;
+}
+
+// Section prefix for a printable report's title line, e.g. turning
+// "Broadsheet — Grade 2 Blue" into "Lower Primary · Broadsheet — Grade 2
+// Blue". Every printout says which CBC band it belongs to, so a stack of
+// printed reports can be sorted by level without reading the class names.
+// Returns '' for a class name that isn't a recognised CBC grade, leaving
+// the title exactly as it was.
+function sectionTitlePrefix(section) {
+  return section ? `${section.label} \u00b7 ` : '';
+}
+
+// Same, but starting from a class/stream LABEL (e.g. "Grade 5 Blue").
+function klassTitlePrefix(st, klassLabel) {
+  if (!klassLabel) return '';
+  return sectionTitlePrefix(sectionForKlassLabel(st, klassLabel));
+}
+
+// Section prefix for a report that spans many classes (whole-school
+// analysis, class/stream comparison): named only when the level
+// switcher or a section-scoped admin login has narrowed the report to
+// one band, since otherwise the report genuinely covers all of them.
+function activeLevelTitlePrefix() {
+  const level = effectiveLevel();
+  if (!level) return '';
+  const info = SECTION_INFO[level];
+  return info ? `${info.label} \u00b7 ` : '';
+}
+
+// ---- Level switcher (Primary / Junior Secondary / Senior School) ----
+// The dropdown near the logo (built in app.js) lets a superadmin/admin/
+// teacher filter the whole app to one CBC section at a time. A
+// section-scoped admin login (profiles.section_scope, see
+// sql/013_admin_section_scope.sql) is instead LOCKED to their section —
+// the dropdown doesn't even show for them.
+//
+// effectiveLevel() is the single source of truth every list view below
+// filters through: the locked scope wins if present, otherwise whatever
+// the person picked in the switcher (persisted in localStorage),
+// otherwise '' (no filter — show everything, today's default behaviour).
+function effectiveLevel() {
+  const user = Auth.currentUser();
+  if (user && user.role === 'admin' && user.section_scope) return user.section_scope;
+  try { return localStorage.getItem('cbeLevel') || ''; } catch (e) { return ''; }
+}
+
+// True if `klassName` belongs to the currently active level filter.
+// Classes that don't parse as a recognised CBC grade (custom names)
+// are never hidden by the filter — same "unclassified stays visible"
+// rule the RLS side uses (see admin_class_allowed in the SQL migration).
+function levelAllows(klassName) {
+  const level = effectiveLevel();
+  if (!level) return true;
+  const section = gradeSection(klassName);
+  // A "Primary" filter/scope keeps both Lower and Upper Primary classes.
+  return !section || sectionCovers(level, section.key);
+}
+
+// Shared masthead for every printable report (report card, single-exam
+// report, class/stream performance report): school name is the headline,
+// the section/report title + term/year ride underneath as one compact
+// subtitle line. Replaces the old two-block layout (a solid-fill title
+// band stacked on top of a separate school-name header), which used up
+// more vertical space than it needed to.
+// Small "system name" stamp appended to the bottom of every printable
+// report card, broadsheet, single-exam report, class-performance
+// report, and published-analysis printout. Invisible on screen
+// (.print-footer is display:none there — see css/style.css) and only
+// rendered when the page is actually printed/exported to PDF.
+function buildPrintFooterHTML() {
+  return `<div class="print-footer">Generated by B~CBE Analytics &middot; ${new Date().toLocaleDateString()} &middot; &copy; ${new Date().getFullYear()} B~CBE Analytics. All rights reserved.</div>`;
+}
+
+function buildReportMastheadHTML(st, titleText, reportLabel, term, year) {
+  const schoolCode = (st.settings.schoolCode || '').trim();
+  return `
+    <div class="report-title-band">
+      <h2>${UI.esc(st.settings.schoolName)}${schoolCode ? ` <span class="report-title-code">(${UI.esc(schoolCode)})</span>` : ''}</h2>
+      ${st.settings.motto ? `<span class="report-title-motto">${UI.esc(st.settings.motto)}</span>` : ''}
+      <span class="report-title-sub">${UI.esc(titleText)} &middot; ${UI.esc(reportLabel)} &middot; ${UI.esc(term)} ${UI.esc(year)}</span>
+    </div>
+  `;
+}
+
+// Masthead for the printable/PDF student list — same school-name band
+// as buildReportMastheadHTML, but describing the active filters instead
+// of a term/year exam sitting (this view has neither).
+function buildStudentListMastheadHTML(st, filterClass, filterSection, filterGender) {
+  const schoolCode = (st.settings.schoolCode || '').trim();
+  const bits = [];
+  bits.push(filterClass || 'All classes');
+  if (filterSection) bits.push(SECTION_INFO[filterSection] ? SECTION_INFO[filterSection].label : filterSection.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
+  if (filterGender && filterGender !== 'all') bits.push(filterGender === 'none' ? 'Gender not specified' : (filterGender === 'M' ? 'Male' : 'Female'));
+  return `
+    <div class="report-title-band">
+      <h2>${UI.esc(st.settings.schoolName)}${schoolCode ? ` <span class="report-title-code">(${UI.esc(schoolCode)})</span>` : ''}</h2>
+      ${st.settings.motto ? `<span class="report-title-motto">${UI.esc(st.settings.motto)}</span>` : ''}
+      <span class="report-title-sub">Student List &middot; ${UI.esc(bits.join(' · '))} &middot; ${new Date().toLocaleDateString()}</span>
+    </div>
+  `;
+}
+
+// Builds one student's printable portrait report card (school masthead,
+// subjects x sitting(s) marks table, position/level, trend, comments,
+// signatures). Top-level (not nested in Views.reports) so it can also be
+// reused wherever else a real "normal printable report" is needed — e.g.
+// notify.js generates the same layout as the {report_link} PDF sent to
+// parents alongside their results message.
+function buildReportCardHTML(st, student, term, year, examType) {
+  const allTypeNames = Grading.examTypeNames(st);
+  const isSingle = !!examType;
+  const typesToShow = isSingle ? [examType] : allTypeNames;
+  const grid = Grading.buildStudentTermGrid(st, student.id, term, year);
+
+  const overallAvg = isSingle
+    ? Grading.average(grid.map(r => (r.cells[examType] ? r.cells[examType].pct : null)).filter(v => v !== null))
+    : Grading.average(grid.map(r => r.average).filter(v => v !== null));
+  // Complete = a mark recorded for every subject exam that actually
+  // exists for this student's own class/stream in this sitting. A
+  // student missing even one subject didn't finish the exam, so the
+  // "Average performance" line below shows Z rather than a percentage
+  // computed off a partial record.
+  const relevantExams = st.exams.filter(e => e.klass === student.klass && e.term === term && String(e.year) === String(year) && (!isSingle || e.type === examType));
+  const overallComplete = relevantExams.length > 0 && relevantExams.every(e => st.results.some(r => r.examId === e.id && r.studentId === student.id));
+  const overallBand = !overallComplete ? Grading.MISSING_BAND : Grading.levelForMarks(overallAvg, 100, st.settings.gradingBands);
+  const overallPoints = !overallComplete ? null : Grading.pointsForBand(overallBand, st.settings.gradingBands);
+
+  const rowsHtml = grid.map(row => {
+    const cellHtml = (type) => {
+      const c = row.cells[type];
+      if (!c) return `<td class="num row-index">—</td>`;
+      const band = Grading.levelForMarks(c.marks, c.totalMarks, st.settings.gradingBands);
+      return `<td class="num">${c.pct.toFixed(1)}% ${UI.badge(band)}</td>`;
+    };
+    const avgBand = row.average === null ? null : Grading.levelForMarks(row.average, 100, st.settings.gradingBands);
+    return `<tr>
+      <td>${UI.esc(row.subject.name)}</td>
+      ${typesToShow.map(cellHtml).join('')}
+      ${isSingle ? '' : `<td class="num">${row.average === null ? '—' : row.average.toFixed(1) + '%'} ${UI.badge(avgBand)}</td>`}
+    </tr>`;
+  }).join('');
+
+  const reportLabel = isSingle ? `${examType} Report` : 'Report Card';
+  const colCount = typesToShow.length + (isSingle ? 1 : 2);
+  const teacherComment = Grading.autoComment(overallComplete ? overallAvg : null, 'teacher');
+  const headComment = Grading.autoComment(overallComplete ? overallAvg : null, 'head');
+
+  // Position in stream (this exact class/stream label) and in class
+  // (the whole grade, all streams combined) — the two collapse to the
+  // same figure for schools that haven't split a grade into streams.
+  const classEntry = st.classes.find(c => c.label === student.klass);
+  const gradeNameOf = (s) => {
+    const ce = st.classes.find(c => c.label === s.klass);
+    return ce ? ce.name : s.klass;
+  };
+  const gradeName = classEntry ? classEntry.name : student.klass;
+  const streamMates = st.students.filter(s => s.klass === student.klass);
+  const gradeMates = st.students.filter(s => gradeNameOf(s) === gradeName);
+  const streamPos = positionOf(st, student.id, streamMates, term, year, examType, isSingle);
+  const showStreamRow = classEntry && classEntry.stream && gradeMates.length !== streamMates.length;
+  const classPos = showStreamRow ? positionOf(st, student.id, gradeMates, term, year, examType, isSingle) : streamPos;
+
+  // Performance trend across the term's sittings (only meaningful for
+  // the merged, all-exam-types view — a single sitting is one point).
+  const trendPoints = isSingle ? [] : allTypeNames.map(t => {
+    const vals = grid.map(r => (r.cells[t] ? r.cells[t].pct : null)).filter(v => v !== null);
+    return { type: t, avg: Grading.average(vals) };
+  }).filter(p => p.avg !== null);
+
+  // Class Teacher's / Head of Institution's real names, set once on the
+  // Classes and Settings pages, printed automatically on every report.
+  const classTeacherName = classEntry ? classEntry.teacherName : '';
+  const headName = st.settings.headName || '';
+
+  const section = gradeSection(gradeName);
+  const titleBandText = section ? section.title : 'Learner Report Card';
+
+  return `
+    <div class="report-card">
+      ${buildReportMastheadHTML(st, titleBandText, reportLabel, term, year)}
+      <div class="report-meta-grid">
+        <div><span class="k">Name:</span>${UI.esc(student.name)}</div>
+        <div><span class="k">Admission No.:</span>${UI.esc(student.admissionNo) || '—'}</div>
+        <div><span class="k">Class:</span>${UI.esc(student.klass)}</div>
+        <div><span class="k">Average performance:</span>${!overallComplete ? UI.badge(Grading.MISSING_BAND) : overallAvg.toFixed(1) + '%'}</div>
+        <div><span class="k">Points:</span>${overallPoints === null ? '—' : overallPoints}</div>
+        <div><span class="k">Position in class:</span>${classPos.position === 'Z' ? `${UI.badge(Grading.MISSING_BAND)} — marks pending, ranked last of ${showStreamRow ? gradeMates.length : streamMates.length}` : classPos.position === null ? '—' : `${ordinal(classPos.position)} out of ${classPos.outOf}`}</div>
+        ${showStreamRow ? `<div><span class="k">Position in stream:</span>${streamPos.position === 'Z' ? `${UI.badge(Grading.MISSING_BAND)} — marks pending, ranked last of ${streamMates.length}` : streamPos.position === null ? '—' : `${ordinal(streamPos.position)} out of ${streamPos.outOf}`}</div>` : ''}
+      </div>
+      <table class="ledger-table" style="width:100%;">
+        <thead><tr><th>Subject</th>${typesToShow.map(t => `<th>${UI.esc(t)}</th>`).join('')}${isSingle ? '' : '<th>Average</th>'}</tr></thead>
+        <tbody>${rowsHtml || `<tr><td colspan="${colCount}" class="row-index">No subjects added yet.</td></tr>`}</tbody>
+      </table>
+      ${buildTrendChartSVG(trendPoints)}
+      <div class="report-footer">
+        <div>
+          <p class="stat-sub" style="margin:0 0 6px 0;"><strong>Average performance:</strong> ${!overallComplete ? "Didn't finish exam (Z)" : `${overallAvg.toFixed(1)}%`}</p>
+          <p class="stat-sub" style="margin:0;"><strong>Points:</strong> ${overallPoints === null ? '—' : overallPoints}</p>
+        </div>
+        <div class="stamp badge-${overallBand.code}" style="color:inherit;">${overallBand.code}</div>
+      </div>
+      <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--paper-line); font-size:13.5px; color:var(--ink); line-height:1.6;">
+        <p style="margin:0 0 8px 0;"><strong>Class Teacher's comment:</strong> ${UI.esc(teacherComment)}</p>
+        <p style="margin:0;"><strong>Head of Institution's comment:</strong> ${UI.esc(headComment)}</p>
+      </div>
+      <div class="report-footer">
+        <div class="signature-line">${classTeacherName ? `<strong>${UI.esc(classTeacherName)}</strong><br>` : ''}Class Teacher</div>
+        <div class="signature-line">${headName ? `<strong>${UI.esc(headName)}</strong><br>` : ''}Head of Institution</div>
+      </div>
+      ${buildPrintFooterHTML()}
+    </div>
+  `;
+}
+
+// A student's own overall percentage for a given sitting/term, using the
+// exact same formula as the report card itself — used both for that
+// student's headline average and for ranking everyone else for position.
+function overallAvgFor(st, studentId, klass, term, year, examType, isSingle) {
+  const g = Grading.buildStudentTermGrid(st, studentId, term, year);
+  const avg = isSingle
+    ? Grading.average(g.map(r => (r.cells[examType] ? r.cells[examType].pct : null)).filter(v => v !== null))
+    : Grading.average(g.map(r => r.average).filter(v => v !== null));
+  // Complete = a mark recorded for every subject exam that actually
+  // exists for THIS student's own class/stream in this sitting — not
+  // just some of them. Missing even one means the student didn't
+  // finish the exam, so they're treated the same as "no marks at
+  // all" for ranking/averaging purposes below, rather than being
+  // scored (and possibly outranking a classmate) off a partial record.
+  const relevantExams = st.exams.filter(e => e.klass === klass && e.term === term && String(e.year) === String(year) && (!isSingle || e.type === examType));
+  const complete = relevantExams.length > 0 && relevantExams.every(e => st.results.some(r => r.examId === e.id && r.studentId === studentId));
+  return { avg, complete };
+}
+
+// Ranks `students` by overall average (highest first, ties share a
+// position) and returns { position, outOf } for `studentId`. A
+// student who didn't finish the exam (missing at least one subject)
+// is never ranked ahead of a student who did, no matter how high
+// their partial average looks — they sort below everyone complete
+// and get position 'Z', same convention as the Broadsheet.
+function positionOf(st, studentId, students, term, year, examType, isSingle) {
+  const scored = students.map(s => ({ id: s.id, ...overallAvgFor(st, s.id, s.klass, term, year, examType, isSingle) }));
+  const outOf = scored.filter(s => s.complete).length;
+  const ranked = [...scored].sort((a, b) => {
+    if (!a.complete && !b.complete) return 0;
+    if (!a.complete) return 1;
+    if (!b.complete) return -1;
+    return (b.avg ?? -1) - (a.avg ?? -1);
+  });
+  let rank = 0, lastAvg = null, seen = 0, position = null;
+  ranked.forEach(r => {
+    seen++;
+    if (!r.complete) { if (r.id === studentId) position = 'Z'; return; }
+    if (r.avg !== lastAvg) { rank = seen; lastAvg = r.avg; }
+    if (r.id === studentId) position = rank;
+  });
+  return { position, outOf };
+}
+
+function ordinal(n) {
+  if (n === null || n === undefined) return '—';
+  const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+// Small inline line-chart (no library) plotting the student's overall
+// average for each exam type in order, e.g. Opener -> Midterm -> Endterm,
+// so a parent can see the trend across the term at a glance.
+function buildTrendChartSVG(points) {
+  if (points.length < 2) return '';
+  const w = 560, h = 160, padL = 32, padR = 14, padT = 16, padB = 26;
+  const innerW = w - padL - padR, innerH = h - padT - padB;
+  const xStep = innerW / (points.length - 1);
+  const yFor = (pct) => padT + innerH - (Math.max(0, Math.min(100, pct)) / 100) * innerH;
+  const coords = points.map((p, i) => ({ x: padL + i * xStep, y: yFor(p.avg), ...p }));
+  const path = coords.map((c, i) => `${i === 0 ? 'M' : 'L'} ${c.x.toFixed(1)} ${c.y.toFixed(1)}`).join(' ');
+  const gridLines = [0, 25, 50, 75, 100].map(v =>
+    `<line x1="${padL}" y1="${yFor(v).toFixed(1)}" x2="${w - padR}" y2="${yFor(v).toFixed(1)}" stroke="var(--paper-line)" stroke-width="1"/>` +
+    `<text x="${padL - 6}" y="${(yFor(v) + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--ink-faint)">${v}</text>`
+  ).join('');
+  const dots = coords.map(c =>
+    `<circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="3.5" fill="var(--primary)"/>` +
+    `<text x="${c.x.toFixed(1)}" y="${(c.y - 9).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="var(--ink)">${c.avg.toFixed(0)}%</text>`
+  ).join('');
+  const labels = coords.map(c =>
+    `<text x="${c.x.toFixed(1)}" y="${h - 6}" text-anchor="middle" font-size="10" fill="var(--ink-soft)">${UI.esc(c.type)}</text>`
+  ).join('');
+  return `
+    <div style="margin:18px 0 4px 0;">
+      <p class="stat-sub" style="margin:0 0 8px 0;"><strong>Performance trend this term</strong></p>
+      <svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="width:100%; max-width:520px; height:auto; display:block;">
+        ${gridLines}
+        <path d="${path}" fill="none" stroke="var(--primary)" stroke-width="2.5"/>
+        ${dots}
+        ${labels}
+      </svg>
+    </div>`;
+}
+
+// Same idea as gradeSection(), but starting from a student's klass
+// LABEL (name + stream, e.g. "Grade 7 East") rather than a class's
+// grade name. Looks up the matching Classes/Streams row for the real
+// grade name where one exists; falls back to parsing the label itself
+// for schools still using free-text class names.
+function sectionForKlassLabel(st, klassLabel) {
+  const classEntry = (st.classes || []).find(c => c.label === klassLabel);
+  return gradeSection(classEntry ? classEntry.name : klassLabel);
+}
+
+// Lower Primary, Upper Primary, Junior Secondary and Senior School
+// genuinely offer different subjects (e.g. Chemistry doesn't exist
+// below Senior School; Pre-Technical Studies is Junior Secondary only;
+// Grade 1-3 runs a narrower Lower Primary list than Grade 4-6) — a
+// subject with section:'' is shared across every level (the default, so
+// nothing already set up disappears); anything else only shows up for
+// classes in that band. A subject scoped to 'primary' still shows for
+// both Lower and Upper Primary, so existing Primary-scoped subjects
+// keep working untouched. Used everywhere a subject picker is scoped to
+// an already-chosen class (exam creation, results entry).
+function subjectsForKlass(st, klassLabel) {
+  if (!klassLabel) return st.subjects;
+  const section = sectionForKlassLabel(st, klassLabel);
+  if (!section) return st.subjects;
+  return st.subjects.filter(s => sectionCovers(s.section || '', section.key));
+}
+
+// Same idea as subjectsForKlass(), but strict — used ONLY for exam
+// creation. subjectsForKlass() treats a legacy unscoped subject
+// (section: '', created before Subjects became level-independent —
+// see Views.subjects) as "covers every level", which is exactly
+// right for things like the Subjects/Manage-subjects screens where a
+// genuinely shared subject should still show up everywhere. But for
+// creating an EXAM it means one old unscoped "Mathematics" row would
+// be offered for a Junior Secondary exam AND a Lower Primary exam AND
+// every level in between — the cross-level leak this whole project
+// has been closing. This function only counts a subject as belonging
+// to a level if it's ACTUALLY been given that level (or the shared
+// 'primary' parent) — never the empty/legacy case.
+//
+// This never changes any subject's own data — a legacy subject still
+// works everywhere else exactly as before (Subjects page's "All
+// levels (legacy)" tab, Manage Subjects, etc.); it just isn't offered
+// when creating a NEW exam until an admin gives it one real level.
+// Falls back to the broader subjectsForKlass() only if a level has NO
+// properly-scoped subjects at all yet, so exam creation isn't fully
+// blocked before old subjects have been re-tagged.
+function levelScopedSubjectsForExam(st, klassLabel) {
+  if (!klassLabel) return st.subjects;
+  const section = sectionForKlassLabel(st, klassLabel);
+  if (!section) return st.subjects;
+  const strict = st.subjects.filter(s => !!s.section && sectionCovers(s.section, section.key));
+  return strict.length ? strict : subjectsForKlass(st, klassLabel);
+}
+
+// Narrower than subjectsForKlass(): subjects a real teacher is
+// actually assigned to teach IN THIS SPECIFIC CLASS (via
+// teacher_subject_classes — "Manage subjects" on the Users page, per
+// sql/026_teacher_subject_per_class.sql), not merely subjects that
+// COULD apply at that class's level. Used when creating an exam, so
+// the subject picker never offers something nobody teaches there —
+// e.g. French being scoped to "Junior Secondary" in general doesn't
+// mean this particular Grade 7 class has anyone teaching it. Falls
+// back to the full level list (subjectsForKlass) when nobody has been
+// assigned ANY subject for this class yet, so a brand-new school
+// setting up exams before assigning teachers isn't blocked.
+function subjectsTaughtInKlass(st, klassLabel) {
+  const levelSubjects = levelScopedSubjectsForExam(st, klassLabel);
+  const cls = (st.classes || []).find(c => c.label === klassLabel);
+  if (!cls) return levelSubjects;
+  const assignedIds = new Set((st.teacherSubjectClasses || []).filter(tsc => tsc.classId === cls.id).map(tsc => tsc.subjectId));
+  if (assignedIds.size === 0) return levelSubjects;
+  const taught = levelSubjects.filter(s => assignedIds.has(s.id));
+  return taught.length ? taught : levelSubjects;
+}
+
+// Shared by the teacher-facing screens (My Classes, Learners,
+// Assessments, Gradebook, Attendance, Competency Assessment): works
+// out which classes/subjects a "user" (teacher) login is scoped to.
+// Admins/superadmins are never restricted, so this returns null sets
+// for them (meaning "everything").
+//
+// Two DIFFERENT kinds of scope, kept separate on purpose:
+//
+//   1. homeroomClassLabels — the class(es) this teacher IS THE CLASS
+//      TEACHER of (classes.classTeacherId — one specific person per
+//      class, set via "Manage classes" on the Users page), or every
+//      class in their Section. This is what "class teacher" means
+//      across the app: only THE class teacher (or admin) may add a
+//      learner or take attendance for a class — see js/teacher.js
+//      (Learners) and js/attendance.js, and
+//      sql/027_single_class_teacher.sql for why this had to be a
+//      single owner rather than "any teacher linked to this class".
+//
+//   2. subjectsByClass — a per-class map of exactly which subject(s)
+//      this teacher teaches IN THAT CLASS (via teacher_subject_classes
+//      / "Manage subjects", per sql/026_teacher_subject_per_class.sql,
+//      or every subject in their Section for a class inside that
+//      Section). This is what governs Marks Entry, Gradebook,
+//      Competency Assessment and Broadsheet column-editing. It's a
+//      real (subject, class) pairing rather than two independently
+//      unioned lists — a subject id can be shared across levels (one
+//      "Mathematics" row used by both Grade 1 and Grade 7), so a flat
+//      subjectIds set intersected with a flat classLabels set would
+//      still wrongly allow, say, Science marks in a Junior class the
+//      teacher never actually teaches there, as long as they teach
+//      SOME subject in that class and Science somewhere else. See the
+//      migration notes for the exact bug this replaced.
+//
+// `classLabels`/`classIds`/`classes` below are the UNION of the two,
+// for screens that just need "everything this teacher can see" (e.g.
+// the Dashboard's class cards) — but anything that shows or edits an
+// EXAM, RESULT or COMPETENCY RATING must key off subjectsByClass, and
+// anything that adds a learner or takes ATTENDANCE must key off
+// homeroomClassLabels, never this union — using the union for either
+// re-opens the exact leaks this was written to close.
+function teacherScope(st, user) {
+  const isTeacher = !!user && user.role === 'user';
+  if (!isTeacher) {
+    return {
+      isTeacher: false, subjectIds: null, classIds: null, classLabels: null,
+      subjectsByClass: null, homeroomClassLabels: null
+    };
+  }
+
+  const sectionScope = user.section_scope || '';
+
+  // ---- 1. Homeroom classes ("THE class teacher" of) ----
+  // A class has exactly ONE class teacher (classes.classTeacherId —
+  // see sql/027_single_class_teacher.sql), not "any teacher ticked in
+  // Manage classes for this class" — that distinction is what makes
+  // Attendance and Add Learner strictly class-teacher-only.
+  let homeroomClasses = st.classes.filter(c => c.classTeacherId === user.id);
+  if (sectionScope) {
+    const inScope = st.classes.filter(c => {
+      const band = gradeSection(c.name);
+      return band && sectionCovers(sectionScope, band.key);
+    });
+    const already = new Set(homeroomClasses.map(c => c.id));
+    inScope.forEach(c => { if (!already.has(c.id)) { homeroomClasses.push(c); already.add(c.id); } });
+  }
+  const homeroomClassLabels = new Set(homeroomClasses.map(c => c.label));
+
+  // ---- 2. Per-class subject grants ----
+  const subjectsByClass = new Map(); // classLabel -> Set(subjectId)
+  const grant = (klassLabel, subjectId) => {
+    if (!subjectsByClass.has(klassLabel)) subjectsByClass.set(klassLabel, new Set());
+    subjectsByClass.get(klassLabel).add(subjectId);
+  };
+  (st.teacherSubjectClasses || []).filter(tsc => tsc.teacherId === user.id).forEach(tsc => {
+    const cls = st.classes.find(c => c.id === tsc.classId);
+    if (cls) grant(cls.label, tsc.subjectId);
+  });
+  if (sectionScope) {
+    const bandSubjects = st.subjects.filter(s => sectionsOverlap(s.section || '', sectionScope));
+    const bandClasses = st.classes.filter(c => {
+      const band = gradeSection(c.name);
+      return band && sectionCovers(sectionScope, band.key);
+    });
+    bandClasses.forEach(c => bandSubjects.forEach(s => grant(c.label, s.id)));
+  }
+
+  const subjectIds = new Set();
+  subjectsByClass.forEach(set => set.forEach(id => subjectIds.add(id)));
+  const subjectClassLabels = new Set(subjectsByClass.keys());
+
+  // ---- Union, for "everything this teacher can see" screens ----
+  const allClasses = st.classes.filter(c => homeroomClassLabels.has(c.label) || subjectClassLabels.has(c.label));
+
+  return {
+    isTeacher: true,
+    subjectIds,
+    subjectsByClass,
+    homeroomClassLabels,
+    classIds: new Set(allClasses.map(c => c.id)),
+    classLabels: new Set(allClasses.map(c => c.label)),
+    classes: allClasses
+  };
+}
+
+function showLoading() {
+  document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">Loading…</div></div>`;
+}
+
+Views._charts = {}; // Chart.js instances, keyed by canvas id — destroyed/recreated on every render
+
+function destroyDashboardCharts() {
+  Object.values(Views._charts).forEach(c => { try { c.destroy(); } catch (e) {} });
+  Views._charts = {};
+}
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#999';
+}
+
+function showDashboardSkeleton() {
+  document.getElementById('content').innerHTML = `
+    <div class="grid grid-4 section-block">
+      ${Array.from({ length: 4 }).map(() => `<div class="skeleton skeleton-stat"></div>`).join('')}
+    </div>
+    <div class="chart-grid section-block">
+      <div class="skeleton skeleton-chart" style="grid-column:1/-1;"></div>
+      <div class="skeleton skeleton-chart"></div>
+      <div class="skeleton skeleton-chart"></div>
+    </div>
+    <div class="class-card-grid section-block">
+      ${Array.from({ length: 3 }).map(() => `<div class="skeleton skeleton-card"></div>`).join('')}
+    </div>
+  `;
+}
+
+/* ------------------------- DASHBOARD ------------------------- */
+
+Views.dashboard = async function () {
+  setTopbarActions('');
+  showDashboardSkeleton();
+  const st = await Store.current();
+  const user = Auth.currentUser();
+  const scope = teacherScope(st, user);
+  const isTeacher = scope.isTeacher;
+  const allowed = Auth.allowedRoutes();
+  const canGo = (route) => allowed.includes(route);
+
+  // ---- header quick-action buttons (only routes this user can reach) ----
+  const headerActions = [
+    canGo('students') ? `<button class="btn" id="qaAddStudent"><i class="fa-solid fa-user-plus"></i> Add Student</button>` : '',
+    canGo('results') ? `<button class="btn" id="qaEnterMarks"><i class="fa-solid fa-pen"></i> Enter Marks</button>` : '',
+    canGo('reports') ? `<button class="btn" id="qaReports"><i class="fa-solid fa-file-lines"></i> Reports</button>` : '',
+    canGo('broadsheet') ? `<button class="btn btn-primary" id="qaExport"><i class="fa-solid fa-table-list"></i> Broadsheet</button>` : ''
+  ].join('');  setTopbarActions(headerActions);
+
+  // ---- derived data (all real — nothing fabricated) ----
+  // Everything below is scoped to the active level filter (see
+  // effectiveLevel()/levelAllows() above the switcher), so the whole
+  // dashboard — not just the class cards — updates when the person
+  // switches Primary / Junior Secondary / Senior School.
+  // A teacher's dashboard shows THEIR classes/subjects/students only —
+  // the same scope every other teacher screen uses (teacherScope()) —
+  // never whole-school totals. Admins are unrestricted, as before.
+  const classes = isTeacher ? [...scope.classLabels].sort() : classOptionLabels(st);
+  const students = st.students.filter(s => levelAllows(s.klass) && (!isTeacher || scope.classLabels.has(s.klass)));
+  // The exam's class AND subject must form an actual (subject, class)
+  // pair the teacher is assigned — see teacherScope()'s subjectsByClass
+  // above for why intersecting two flat sets isn't enough.
+  const exams = st.exams.filter(e => levelAllows(e.klass) && (!isTeacher || !!scope.subjectsByClass.get(e.klass)?.has(e.subjectId)));
+  const examIdsInLevel = new Set(exams.map(e => e.id));
+  const results = st.results.filter(r => examIdsInLevel.has(r.examId));
+  const subjectIdsInLevel = new Set(exams.map(e => e.subjectId));
+  const subjects = st.subjects.filter(s => subjectIdsInLevel.has(s.id));
+
+  const totalStudents = students.length;
+  const totalSubjects = subjects.length;
+  const totalExams = exams.length;
+  const totalResults = results.length;
+  const bands = st.settings.gradingBands || [];
+
+  function pctsFor(examList) {
+    const pcts = [];
+    const examIds = new Set(examList.map(e => e.id));
+    results.filter(r => examIds.has(r.examId)).forEach(r => {
+      const exam = examList.find(e => e.id === r.examId);
+      if (exam) pcts.push(Grading.percent(r.marks, exam.totalMarks));
+    });
+    return pcts;
+  }
+
+  const overallAvg = Grading.average(pctsFor(exams));
+
+  // Per-class stats (also drives the class comparison chart + class cards)
+  const classStats = classes.map(klass => {
+    const studentsInClass = students.filter(s => s.klass === klass);
+    const examsForClass = exams.filter(e => e.klass === klass);
+    const pcts = pctsFor(examsForClass);
+    const avg = Grading.average(pcts);
+    const band = avg === null ? null : Grading.levelForMarks(avg, 100, bands);
+    const expected = examsForClass.reduce((sum, e) => sum + studentsInClass.length, 0);
+    const entered = examsForClass.reduce((sum, e) => sum + results.filter(r => r.examId === e.id).length, 0);
+    return {
+      klass, students: studentsInClass.length, exams: examsForClass.length,
+      avg, band, high: pcts.length ? Math.max(...pcts) : null, low: pcts.length ? Math.min(...pcts) : null,
+      completion: expected > 0 ? (entered / expected) * 100 : null
+    };
+  });
+
+  // Per-subject stats (drives subject performance chart + "lowest subject" insight)
+  const subjectStats = subjects.map(subj => {
+    const examsForSubj = exams.filter(e => e.subjectId === subj.id);
+    const avg = Grading.average(pctsFor(examsForSubj));
+    return { subject: subj, avg };
+  });
+
+  // Overall completion: marks entered vs. marks expected across every exam
+  const expectedTotal = exams.reduce((sum, e) => sum + students.filter(s => s.klass === e.klass).length, 0);
+  const completionPct = expectedTotal > 0 ? Math.min(100, (totalResults / expectedTotal) * 100) : null;
+
+  const topClass = classStats.filter(c => c.avg !== null).sort((a, b) => b.avg - a.avg)[0] || null;
+  const lowestSubject = subjectStats.filter(s => s.avg !== null).sort((a, b) => a.avg - b.avg)[0] || null;
+
+  // Per-student averages (drives leaderboard + intervention list)
+  const studentAverages = students.map(s => {
+    const pcts = [];
+    results.filter(r => r.studentId === s.id).forEach(r => {
+      const exam = exams.find(e => e.id === r.examId);
+      if (exam) pcts.push(Grading.percent(r.marks, exam.totalMarks));
+    });
+    const avg = Grading.average(pcts);
+    const band = avg === null ? null : Grading.levelForMarks(avg, 100, bands);
+    return { ...s, avg, band, pcts };
+  }).filter(s => s.avg !== null);
+
+  const topStudents = [...studentAverages].sort((a, b) => b.avg - a.avg).slice(0, 5);
+  const atRisk = [...studentAverages].filter(s => s.avg < 50).sort((a, b) => a.avg - b.avg).slice(0, 6);
+
+  // Subjects each at-risk student is struggling in (their own pct < 50)
+  function weakSubjectsFor(student) {
+    const weak = [];
+    results.filter(r => r.studentId === student.id).forEach(r => {
+      const exam = exams.find(e => e.id === r.examId);
+      if (!exam) return;
+      const pct = Grading.percent(r.marks, exam.totalMarks);
+      if (pct !== null && pct < 50) {
+        const subj = st.subjects.find(s => s.id === exam.subjectId);
+        if (subj && !weak.includes(subj.name)) weak.push(subj.name);
+      }
+    });
+    return weak.slice(0, 3);
+  }
+
+  // CBC competency distribution across every individual result entered
+  const bandCounts = {};
+  bands.forEach(b => { bandCounts[b.code] = 0; });
+  results.forEach(r => {
+    const exam = exams.find(e => e.id === r.examId);
+    if (!exam) return;
+    const band = Grading.levelForMarks(r.marks, exam.totalMarks, bands);
+    if (band) bandCounts[band.code] = (bandCounts[band.code] || 0) + 1;
+  });
+
+  // Recent exams as a lightweight, real activity feed (no fabricated log)
+  const recentExams = [...exams].filter(e => e.date).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 6);
+
+  // Performance trend across exam types for the current term/year
+  const examTypeOrder = Grading.examTypeNames(st);
+  const trendPoints = examTypeOrder.map(type => {
+    const examsOfType = exams.filter(e => e.type === type && e.term === st.settings.term && String(e.year) === String(st.settings.year));
+    return { type, avg: Grading.average(pctsFor(examsOfType)) };
+  });
+
+  // ---- AI insights, computed from the numbers above only ----
+  const insights = [];
+  if (lowestSubject) insights.push(`<strong>${UI.esc(lowestSubject.subject.name)}</strong> has the lowest average of any subject, at ${lowestSubject.avg.toFixed(1)}%.`);
+  if (topClass) insights.push(`<strong>${UI.esc(topClass.klass)}</strong> is the top performing class, averaging ${topClass.avg.toFixed(1)}%.`);
+  if (atRisk.length) insights.push(`<strong>${atRisk.length}</strong> learner${atRisk.length === 1 ? '' : 's'} ${atRisk.length === 1 ? 'is' : 'are'} averaging below 50% and may need extra support.`);
+  if (completionPct !== null) insights.push(`<strong>${completionPct.toFixed(0)}%</strong> of expected marks have been entered so far this term.`);
+  if (!insights.length) insights.push('Add students, subjects and exam results to start seeing insights here.');
+
+  const gradeCards = classStats.length === 0 ? '' : classStats.map(c => `
+    <div class="class-card">
+      <div class="class-card-head">
+        <h4>${UI.esc(c.klass)}</h4>
+        ${c.band ? UI.badge(c.band) : '<span class="badge badge-none">—</span>'}
+      </div>
+      <div class="class-card-stats">
+        <div><span class="v">${c.students}</span><span class="k">Learners</span></div>
+        <div><span class="v">${c.high !== null ? c.high.toFixed(0) + '%' : '—'}</span><span class="k">Highest</span></div>
+        <div><span class="v">${c.low !== null ? c.low.toFixed(0) + '%' : '—'}</span><span class="k">Lowest</span></div>
+      </div>
+      <div>
+        <div class="progress-label"><span>Average</span><span>${c.avg !== null ? c.avg.toFixed(1) + '%' : 'no data'}</span></div>
+        <div class="progress-track"><div class="progress-fill ${c.avg !== null && c.avg < 30 ? 'danger' : c.avg !== null && c.avg < 50 ? 'warning' : 'success'}" style="width:${c.avg !== null ? c.avg.toFixed(1) : 0}%"></div></div>
+      </div>
+      <div>
+        <div class="progress-label"><span>Completion</span><span>${c.completion !== null ? c.completion.toFixed(0) + '%' : '—'}</span></div>
+        <div class="progress-track"><div class="progress-fill" style="width:${c.completion !== null ? Math.min(100, c.completion).toFixed(0) : 0}%"></div></div>
+      </div>
+      <button class="btn btn-sm btn-ghost view-class-btn" data-klass="${UI.esc(c.klass)}" style="align-self:flex-start;">View details &rarr;</button>
+    </div>
+  `).join('');
+
+  const html = `
+    <div class="grid grid-4 section-block">
+      <div class="card stat-card grad-indigo">
+        <i class="fa-solid fa-user-graduate stat-icon"></i>
+        <p class="stat-label">Students</p>
+        <p class="stat-value" id="cStudents">0</p>
+        <p class="stat-sub">across ${classes.length} class${classes.length === 1 ? '' : 'es'}</p>
+      </div>
+      <div class="card stat-card grad-teal">
+        <i class="fa-solid fa-book stat-icon"></i>
+        <p class="stat-label">Subjects</p>
+        <p class="stat-value" id="cSubjects">0</p>
+        <p class="stat-sub">&nbsp;</p>
+      </div>
+      <div class="card stat-card grad-slate">
+        <i class="fa-solid fa-file-pen stat-icon"></i>
+        <p class="stat-label">Exams recorded</p>
+        <p class="stat-value" id="cExams">0</p>
+        <p class="stat-sub">${UI.esc(st.settings.term)} · ${UI.esc(String(st.settings.year))}</p>
+      </div>
+      <div class="card stat-card ${overallAvg !== null && overallAvg < 50 ? 'grad-danger' : 'grad-success'}">
+        <i class="fa-solid fa-chart-line stat-icon"></i>
+        <p class="stat-label">Average score</p>
+        <p class="stat-value" id="cAvg">0%</p>
+        <p class="stat-sub">${totalResults} marks entered</p>
+      </div>
+    </div>
+
+    <div class="grid grid-4 section-block">
+      <div class="card stat-card plain hoverable">
+        <i class="fa-solid fa-trophy stat-icon"></i>
+        <p class="stat-label">Top class</p>
+        <p class="stat-value" style="font-size:20px;">${topClass ? UI.esc(topClass.klass) : '—'}</p>
+        <p class="stat-sub">${topClass ? topClass.avg.toFixed(1) + '% average' : 'no data yet'}</p>
+      </div>
+      <div class="card stat-card plain hoverable">
+        <i class="fa-solid fa-triangle-exclamation stat-icon"></i>
+        <p class="stat-label">Needs focus</p>
+        <p class="stat-value" style="font-size:20px;">${lowestSubject ? UI.esc(lowestSubject.subject.name) : '—'}</p>
+        <p class="stat-sub">${lowestSubject ? lowestSubject.avg.toFixed(1) + '% average' : 'no data yet'}</p>
+      </div>
+      <div class="card stat-card plain hoverable">
+        <i class="fa-solid fa-list-check stat-icon"></i>
+        <p class="stat-label">Completion</p>
+        <p class="stat-value" id="cCompletion">0%</p>
+        <p class="stat-sub">of expected marks entered</p>
+      </div>
+      <div class="card stat-card plain hoverable">
+        <i class="fa-solid fa-hand-holding-heart stat-icon"></i>
+        <p class="stat-label">Needing intervention</p>
+        <p class="stat-value" id="cAtRisk">0</p>
+        <p class="stat-sub">learners below 50%</p>
+      </div>
+    </div>
+
+    <div class="section-block">
+      <div class="section-title">Analytics</div>
+      <div class="chart-grid">
+        <div class="chart-card span-2">
+          <div class="chart-card-head"><h3>Overall performance trend</h3><span class="chart-icon"><i class="fa-solid fa-chart-line"></i></span></div>
+          <div class="chart-canvas-wrap"><canvas id="chartTrend"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-head"><h3>Subject performance</h3><span class="chart-icon"><i class="fa-solid fa-bars-progress"></i></span></div>
+          <div class="chart-canvas-wrap"><canvas id="chartSubjects"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-head"><h3>Class comparison</h3><span class="chart-icon"><i class="fa-solid fa-chart-column"></i></span></div>
+          <div class="chart-canvas-wrap"><canvas id="chartClasses"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-head"><h3>CBC competency distribution</h3><span class="chart-icon"><i class="fa-solid fa-chart-pie"></i></span></div>
+          <div class="chart-canvas-wrap short"><canvas id="chartBands"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-head"><h3>Marks entry progress</h3><span class="chart-icon"><i class="fa-solid fa-gauge"></i></span></div>
+          <div class="chart-canvas-wrap short" style="position:relative;">
+            <canvas id="chartProgress"></canvas>
+            <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; pointer-events:none;">
+              <span style="font-family:var(--font-display); font-weight:700; font-size:26px;">${completionPct !== null ? completionPct.toFixed(0) + '%' : '—'}</span>
+              <span style="font-size:11px; color:var(--ink-soft);">entered</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-block">
+      <div class="section-title">Class performance overview</div>
+      ${classStats.length === 0
+        ? `<div class="empty"><div class="empty-title">No classes yet</div><p>Add students to see class performance cards here.</p></div>`
+        : `<div class="class-card-grid">${gradeCards}</div>`}
+    </div>
+
+    <div class="grid grid-2 section-block">
+      <div>
+        <div class="section-title">Top students</div>
+        <div class="leaderboard">
+          ${topStudents.length === 0 ? `<div class="dropdown-empty" style="padding:24px;">No results recorded yet.</div>` : topStudents.map((s, i) => `
+            <div class="leaderboard-item">
+              <span class="rank-badge ${i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : ''}">${i + 1}</span>
+              <span class="avatar">${UI.initials(s.name)}</span>
+              <span>
+                <span class="lb-name">${UI.esc(s.name)}</span><br>
+                <span class="lb-sub">${UI.esc(s.klass)} · ${UI.esc(s.admissionNo) || 'no adm. no.'}</span>
+              </span>
+              <span class="lb-score">
+                <span class="v">${s.avg.toFixed(1)}%</span><br>
+                ${s.band ? UI.badge(s.band) : ''}
+              </span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      <div>
+        <div class="section-title">Learners needing support</div>
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          ${atRisk.length === 0 ? `<div class="card" style="text-align:center; color:var(--ink-soft);">No learners currently flagged — nice work.</div>` : atRisk.map(s => `
+            <div class="intervention-card">
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <strong>${UI.esc(s.name)}</strong>
+               <span class="badge badge-BE">${s.avg.toFixed(1)}%</span>
+              </div>
+              <div class="lb-sub">${UI.esc(s.klass)}</div>
+              <div class="lb-sub">Needs support in: ${weakSubjectsFor(s).map(UI.esc).join(', ') || 'general revision'}</div>
+              <button class="btn btn-sm btn-danger intervention-btn" data-id="${s.id}" style="align-self:flex-start; margin-top:4px;">Plan intervention</button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-2 section-block">
+      <div class="insight-card">
+        <div class="section-title"><span><i class="fa-solid fa-wand-magic-sparkles"></i> AI Insights</span></div>
+        <ul class="insight-list">
+          ${insights.map(i => `<li class="insight-item"><i class="fa-solid fa-circle-dot"></i><span>${i}</span></li>`).join('')}
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="section-title">Recent activity</div>
+        <div class="activity-feed">
+          ${recentExams.length === 0 ? `<p class="stat-sub">Exam dates will show up here once you set them on the Exams page.</p>` : recentExams.map(e => {
+            const subj = st.subjects.find(s => s.id === e.subjectId);
+            return `<div class="activity-item">
+              <span class="activity-dot"><i class="fa-solid fa-file-pen"></i></span>
+              <div>
+                <div class="a-title">${UI.esc(e.type)} · ${UI.esc(subj ? subj.name : 'Subject')} — ${UI.esc(e.klass)}</div>
+                <div class="a-time">${UI.esc(e.date)}</div>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+    </div>
+
+    <div class="section-block">
+      <div class="section-title">Quick actions</div>
+      <div class="quick-action-grid">
+        ${canGo('results') ? `<button class="quick-action-btn" id="qaGridMarks"><i class="fa-solid fa-pen"></i> Enter Marks</button>` : ''}
+        ${canGo('reports') ? `<button class="quick-action-btn" id="qaGridReports"><i class="fa-solid fa-file-lines"></i> Report Cards</button>` : ''}
+        ${canGo('broadsheet') ? `<button class="quick-action-btn" id="qaGridBroadsheet"><i class="fa-solid fa-table-list"></i> Broadsheet</button>` : ''}
+        ${canGo('analysis') ? `<button class="quick-action-btn" id="qaGridAnalysis"><i class="fa-solid fa-chart-column"></i> Published Results</button>` : ''}
+        ${canGo('students') ? `<button class="quick-action-btn" id="qaGridStudents"><i class="fa-solid fa-user-graduate"></i> Manage Students</button>` : ''}
+        ${canGo('subjects') ? `<button class="quick-action-btn" id="qaGridSubjects"><i class="fa-solid fa-book"></i> Manage Subjects</button>` : ''}
+        ${canGo('exams') ? `<button class="quick-action-btn" id="qaGridExams"><i class="fa-solid fa-file-pen"></i> Manage Exams</button>` : ''}
+        ${canGo('users') ? `<button class="quick-action-btn" id="qaGridUsers"><i class="fa-solid fa-users-gear"></i> Manage Users</button>` : ''}
+      </div>
+    </div>
+
+    ${totalStudents === 0 ? `
+    <div class="card" style="text-align:center; padding:36px;">
+      <p class="section-title" style="margin-bottom:8px; justify-content:center;">Get started</p>
+      <p class="stat-sub" style="margin-bottom:16px;">Add your students and subjects first, then create exams for whichever sittings your school uses.</p>
+      <button class="btn btn-primary" id="goStudents">Add students</button>
+    </div>` : ''}
+
+    <div class="app-footer">
+      <span>&copy; ${new Date().getFullYear()} B~CBE Analytics. All rights reserved.</span>
+      <span>${UI.esc(st.settings.schoolName || '')}</span>
+      <span>${new Date().toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
+      <span><a href="javascript:void(0)" id="footerTermsLink" class="no-print" style="color:inherit; text-decoration:underline;">Terms &amp; Copyright</a></span>
+    </div>
+  `;
+
+  document.getElementById('content').innerHTML = html;
+
+  // ---- wire up quick actions ----
+  const go = (route) => () => App.navigate(route);
+  ['qaAddStudent'].forEach(id => { const el = document.getElementById(id); if (el) el.onclick = go('students'); });
+  ['qaEnterMarks', 'qaGridMarks'].forEach(id => { const el = document.getElementById(id); if (el) el.onclick = go('results'); });
+  ['qaReports', 'qaGridReports'].forEach(id => { const el = document.getElementById(id); if (el) el.onclick = go('reports'); });
+  ['qaExport', 'qaGridBroadsheet'].forEach(id => { const el = document.getElementById(id); if (el) el.onclick = go('broadsheet'); });
+  const qaAnalysis = document.getElementById('qaGridAnalysis'); if (qaAnalysis) qaAnalysis.onclick = go('analysis');
+  const qaStudents = document.getElementById('qaGridStudents'); if (qaStudents) qaStudents.onclick = go('students');
+  const qaSubjects = document.getElementById('qaGridSubjects'); if (qaSubjects) qaSubjects.onclick = go('subjects');
+  const qaExams = document.getElementById('qaGridExams'); if (qaExams) qaExams.onclick = go('exams');
+  const qaUsers = document.getElementById('qaGridUsers'); if (qaUsers) qaUsers.onclick = go('users');
+  const goBtn = document.getElementById('goStudents');
+  if (goBtn) goBtn.onclick = go('students');
+  const termsLink = document.getElementById('footerTermsLink');
+  if (termsLink) termsLink.onclick = () => UI.showTerms();
+  document.querySelectorAll('.view-class-btn').forEach(btn => {
+    btn.onclick = () => App.navigate(canGo('broadsheet') ? 'broadsheet' : 'results');
+  });
+  document.querySelectorAll('.intervention-btn').forEach(btn => {
+    btn.onclick = () => App.navigate(canGo('reports') ? 'reports' : 'results');
+  });
+
+  // ---- animated counters ----
+  UI.animateCount(document.getElementById('cStudents'), totalStudents);
+  UI.animateCount(document.getElementById('cSubjects'), totalSubjects);
+  UI.animateCount(document.getElementById('cExams'), totalExams);
+  UI.animateCount(document.getElementById('cAvg'), overallAvg || 0, { decimals: 1, suffix: '%' });
+  UI.animateCount(document.getElementById('cCompletion'), completionPct || 0, { decimals: 0, suffix: '%' });
+  UI.animateCount(document.getElementById('cAtRisk'), atRisk.length);
+
+  // ---- charts ----
+  if (typeof Chart === 'undefined') return; // CDN blocked/offline — dashboard still fully usable without charts
+  destroyDashboardCharts();
+  const gridColor = cssVar('--paper-line-soft');
+  const inkSoft = cssVar('--ink-soft');
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+  Chart.defaults.color = inkSoft;
+
+  const trendCanvas = document.getElementById('chartTrend');
+  if (trendCanvas) {
+    Views._charts.trend = new Chart(trendCanvas, {
+      type: 'line',
+      data: {
+        labels: trendPoints.map(p => p.type),
+        datasets: [{
+          label: 'Average %', data: trendPoints.map(p => p.avg === null ? null : Number(p.avg.toFixed(1))),
+          borderColor: cssVar('--primary'), backgroundColor: 'rgba(79,70,229,0.12)',
+          fill: true, tension: 0.35, spanGaps: true, pointRadius: 4, pointBackgroundColor: cssVar('--primary')
+        }]
+      },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true, max: 100, grid: { color: gridColor } }, x: { grid: { display: false } } } }
+    });
+  }
+
+  const subjCanvas = document.getElementById('chartSubjects');
+  if (subjCanvas) {
+    const withData = subjectStats.filter(s => s.avg !== null);
+    Views._charts.subjects = new Chart(subjCanvas, {
+      type: 'bar',
+      data: {
+        labels: withData.map(s => s.subject.name),
+        datasets: [{ label: 'Average %', data: withData.map(s => Number(s.avg.toFixed(1))), backgroundColor: cssVar('--primary-soft'), borderRadius: 6 }]
+      },
+      options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+        scales: { x: { beginAtZero: true, max: 100, grid: { color: gridColor } }, y: { grid: { display: false } } } }
+    });
+  }
+
+  const classCanvas = document.getElementById('chartClasses');
+  if (classCanvas) {
+    const withData = classStats.filter(c => c.avg !== null);
+    Views._charts.classes = new Chart(classCanvas, {
+      type: 'bar',
+      data: {
+        labels: withData.map(c => c.klass),
+        datasets: [{ label: 'Average %', data: withData.map(c => Number(c.avg.toFixed(1))), backgroundColor: cssVar('--brass'), borderRadius: 6 }]
+      },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true, max: 100, grid: { color: gridColor } }, x: { grid: { display: false } } } }
+    });
+  }
+
+  const bandsCanvas = document.getElementById('chartBands');
+  if (bandsCanvas) {
+    const bandColors = { EE: cssVar('--band-ee'), ME: cssVar('--band-me'), AE: cssVar('--band-ae'), BE: cssVar('--band-be') };
+    const labels = bands.map(b => b.code);
+    Views._charts.bands = new Chart(bandsCanvas, {
+      type: 'doughnut',
+      data: { labels, datasets: [{ data: labels.map(c => bandCounts[c] || 0), backgroundColor: labels.map(c => bandColors[c] || '#999'), borderWidth: 0 }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, padding: 12 } } }, cutout: '62%' }
+    });
+  }
+
+  const progressCanvas = document.getElementById('chartProgress');
+  if (progressCanvas) {
+    const val = completionPct || 0;
+    Views._charts.progress = new Chart(progressCanvas, {
+      type: 'doughnut',
+      data: { labels: ['Entered', 'Remaining'], datasets: [{ data: [val, Math.max(0, 100 - val)], backgroundColor: [cssVar('--success'), gridColor], borderWidth: 0 }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { enabled: false } }, cutout: '74%', rotation: -90, circumference: 360 }
+    });
+  }
+};
+
+/* ------------------------- STUDENTS ------------------------- */
+
+Views.students = async function () {
+  setTopbarActions(`
+    <button class="btn" id="importStudentsBtn">Import from Excel/CSV</button>
+    <button class="btn btn-primary" id="addStudentBtn">+ Add student</button>
+  `);
+  showLoading();
+  const st = await Store.current();
+
+  const classes = classesFromStudents(st.students).filter(levelAllows);
+  const filterHtml = `
+    <div class="filter-row">
+      <select id="sectionFilter">
+        <option value="">All sections</option>
+        <option value="primary">Primary (Grade 1&ndash;6)</option>
+        <option value="lower-primary">Lower Primary (Grade 1&ndash;3)</option>
+        <option value="upper-primary">Upper Primary (Grade 4&ndash;6)</option>
+        <option value="junior-secondary">Junior Secondary (Grade 7&ndash;9)</option>
+        <option value="senior-school">Senior School (Grade 10&ndash;12)</option>
+      </select>
+      <select id="classFilter">
+        <option value="">All classes</option>
+        ${classes.map(c => `<option value="${UI.esc(c)}">${UI.esc(c)}</option>`).join('')}
+      </select>
+      <select id="genderFilter">
+        <option value="all">All genders</option>
+        <option value="M">Male</option>
+        <option value="F">Female</option>
+        <option value="none">Not specified</option>
+      </select>
+      <input type="text" id="searchBox" placeholder="Search by name or admission no." style="min-width:220px;">
+      <button class="btn" id="studentsCsvBtn"><i class="fa-solid fa-download"></i> Download CSV</button>
+      <button class="btn" id="studentsPdfBtn"><i class="fa-solid fa-file-pdf"></i> Download PDF</button>
+    </div>
+  `;
+
+  function sectionBadge(s) {
+    const section = sectionForKlassLabel(st, s.klass);
+    if (!section) return '<span class="row-index">—</span>';
+    return `<span class="badge badge-${sectionBadgeClass(section.key)}">${UI.esc(section.label)}</span>`;
+  }
+
+  function genderBadge(s) {
+    if (s.gender === 'M') return '<span class="badge badge-ME">Male</span>';
+    if (s.gender === 'F') return '<span class="badge badge-AE">Female</span>';
+    return '<span class="row-index">—</span>';
+  }
+
+  function renderTable(filterClass, search, filterSection, filterGender) {
+    let rows = st.students.filter(s => levelAllows(s.klass));
+    if (filterClass) rows = rows.filter(s => s.klass === filterClass);
+    if (filterSection) rows = rows.filter(s => { const sec = sectionForKlassLabel(st, s.klass); return sec && sectionCovers(filterSection, sec.key); });
+    if (filterGender && filterGender !== 'all') rows = rows.filter(s => (s.gender || '') === (filterGender === 'none' ? '' : filterGender));
+    if (search) {
+      const q = search.toLowerCase();
+      rows = rows.filter(s => s.name.toLowerCase().includes(q) || (s.admissionNo || '').toLowerCase().includes(q));
+    }
+    rows = [...rows].sort(admissionNoCompare);
+
+    if (rows.length === 0) {
+      return `<div class="empty"><div class="empty-title">No students found</div><p>Try a different search, or add a new student.</p></div>`;
+    }
+
+    return `
+      <div class="ledger" id="studentsPrintArea">
+        <div style="padding:16px 16px 0 16px;">${buildStudentListMastheadHTML(st, filterClass, filterSection, filterGender)}</div>
+        <div class="ledger-scroll">
+          <table class="ledger-table">
+            <thead><tr><th>#</th><th>Name</th><th>Admission No.</th><th>Class</th><th>Gender</th><th>Section</th><th>Parent Contact</th><th class="no-print"></th></tr></thead>
+            <tbody>
+              ${rows.map((s, i) => `
+                <tr>
+                  <td class="row-index">${i + 1}</td>
+                  <td>${UI.esc(s.name)}</td>
+                  <td class="num">${UI.esc(s.admissionNo) || '—'}</td>
+                  <td>${UI.esc(s.klass)}</td>
+                  <td>${genderBadge(s)}</td>
+                  <td>${sectionBadge(s)}</td>
+                  <td>${UI.esc(s.parentPhone) || UI.esc(s.parentEmail) || '<span class="row-index">—</span>'}</td>
+                  <td class="no-print">
+                    <button class="btn btn-sm btn-ghost" data-edit="${s.id}">Edit</button>
+                    <button class="btn btn-sm btn-danger" data-del="${s.id}">Delete</button>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+        ${buildPrintFooterHTML()}
+      </div>
+    `;
+  }
+
+  function filteredRows(filterClass, search, filterSection, filterGender) {
+    let rows = st.students.filter(s => levelAllows(s.klass));
+    if (filterClass) rows = rows.filter(s => s.klass === filterClass);
+    if (filterSection) rows = rows.filter(s => { const sec = sectionForKlassLabel(st, s.klass); return sec && sectionCovers(filterSection, sec.key); });
+    if (filterGender && filterGender !== 'all') rows = rows.filter(s => (s.gender || '') === (filterGender === 'none' ? '' : filterGender));
+    if (search) {
+      const q = search.toLowerCase();
+      rows = rows.filter(s => s.name.toLowerCase().includes(q) || (s.admissionNo || '').toLowerCase().includes(q));
+    }
+    return [...rows].sort(admissionNoCompare);
+  }
+
+  function paint() {
+    const filterClass = document.getElementById('classFilter')?.value || '';
+    const filterSection = document.getElementById('sectionFilter')?.value || '';
+    const filterGender = document.getElementById('genderFilter')?.value || 'all';
+    const search = document.getElementById('searchBox')?.value || '';
+    document.getElementById('studentsTableWrap').innerHTML = renderTable(filterClass, search, filterSection, filterGender);
+    wireRowActions();
+    document.getElementById('studentsCsvBtn').onclick = () => {
+      const rows = filteredRows(filterClass, search, filterSection, filterGender);
+      if (rows.length === 0) { UI.toast('No students to download'); return; }
+      const header = ['Name', 'Admission No.', 'Class', 'Gender', 'Parent name', 'Parent phone', 'Parent email'];
+      const csvRows = rows.map(s => [s.name, s.admissionNo || '', s.klass, s.gender || '', s.parentName || '', s.parentPhone || '', s.parentEmail || '']);
+      UI.downloadCSV(`class-list-${filterClass || 'all-classes'}`.replace(/\s+/g, '_'), header, csvRows);
+    };
+    document.getElementById('studentsPdfBtn').onclick = (e) => {
+      const rows = filteredRows(filterClass, search, filterSection, filterGender);
+      if (rows.length === 0) { UI.toast('No students to download'); return; }
+      const el = document.getElementById('studentsPrintArea');
+      UI.downloadPDF(el, `class-list-${filterClass || 'all-classes'}`.replace(/\s+/g, '_'), e.currentTarget, { orientation: 'landscape' });
+    };
+  }
+
+  function wireRowActions() {
+    document.querySelectorAll('[data-edit]').forEach(btn => {
+      btn.onclick = () => openStudentForm(st.students.find(s => s.id === btn.dataset.edit));
+    });
+    document.querySelectorAll('[data-del]').forEach(btn => {
+      btn.onclick = () => {
+        const s = st.students.find(s => s.id === btn.dataset.del);
+        UI.confirmAction(`Delete ${s.name}? This also removes their recorded results.`, async () => {
+          await Store.deleteStudent(s.id);
+          UI.toast('Student deleted');
+          Views.students();
+        });
+      };
+    });
+  }
+
+  function openStudentForm(existing) {
+    const isEdit = !!existing;
+    const classOpts = classOptionLabels(st);
+    const classField = classOpts.length
+      ? `<select id="f_klass">
+           <option value="">Select class</option>
+           ${classOpts.map(c => `<option value="${UI.esc(c)}" ${isEdit && existing.klass === c ? 'selected' : ''}>${UI.esc(c)}</option>`).join('')}
+         </select>
+         <p class="field-hint">Don't see the class you need? Add it on the <a href="#classes">Classes</a> page.</p>`
+      : `<input type="text" id="f_klass" value="${isEdit ? UI.esc(existing.klass) : ''}" placeholder="e.g. Grade 7">
+         <p class="field-hint">Tip: set up classes/streams on the <a href="#classes">Classes</a> page for a dropdown here instead.</p>`;
+    UI.openModal(`
+      <h2>${isEdit ? 'Edit student' : 'Add student'}</h2>
+      <div class="form-grid">
+        <div class="field full">
+          <label>Full name</label>
+          <input type="text" id="f_name" value="${isEdit ? UI.esc(existing.name) : ''}" placeholder="e.g. Amina Wanjiru">
+        </div>
+        <div class="field">
+          <label>Admission number</label>
+          <input type="text" id="f_admno" value="${isEdit ? UI.esc(existing.admissionNo) : ''}" placeholder="e.g. 2025-014">
+        </div>
+        <div class="field">
+          <label>Class / Grade</label>
+          ${classField}
+        </div>
+        <div class="field">
+          <label>Gender</label>
+          <select id="f_gender">
+            <option value="" ${isEdit && !existing.gender ? 'selected' : ''}>Not specified</option>
+            <option value="M" ${isEdit && existing.gender === 'M' ? 'selected' : ''}>Male</option>
+            <option value="F" ${isEdit && existing.gender === 'F' ? 'selected' : ''}>Female</option>
+          </select>
+        </div>
+        <div class="field full" style="margin-top:4px; border-top:1px solid var(--paper-line); padding-top:14px;">
+          <label style="font-weight:600;">Parent / guardian contact <span class="field-hint" style="font-weight:400;">(optional — used to send results)</span></label>
+        </div>
+        <div class="field">
+          <label>Parent / guardian name</label>
+          <input type="text" id="f_parentname" value="${isEdit ? UI.esc(existing.parentName) : ''}" placeholder="e.g. Mary Wanjiru">
+        </div>
+        <div class="field">
+          <label>Parent phone (WhatsApp/SMS)</label>
+          <input type="text" id="f_parentphone" value="${isEdit ? UI.esc(existing.parentPhone) : ''}" placeholder="e.g. +254712345678">
+        </div>
+        <div class="field">
+          <label>Parent email</label>
+          <input type="email" id="f_parentemail" value="${isEdit ? UI.esc(existing.parentEmail) : ''}" placeholder="e.g. parent@example.com">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
+        <button class="btn btn-primary" id="saveBtn">${isEdit ? 'Save changes' : 'Add student'}</button>
+      </div>
+    `, (root) => {
+      root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
+      root.querySelector('#saveBtn').onclick = async () => {
+        const name = root.querySelector('#f_name').value.trim();
+        const admissionNo = root.querySelector('#f_admno').value.trim();
+        const klass = root.querySelector('#f_klass').value.trim();
+        const gender = root.querySelector('#f_gender').value;
+        const parentName = root.querySelector('#f_parentname').value.trim();
+        const parentPhone = root.querySelector('#f_parentphone').value.trim();
+        const parentEmail = root.querySelector('#f_parentemail').value.trim();
+        if (!name || !klass) { UI.toast('Name and class are required'); return; }
+        try {
+          if (isEdit) {
+            await Store.updateStudent(existing.id, { name, admissionNo, klass, gender, parentName, parentPhone, parentEmail });
+            UI.toast('Student updated');
+          } else {
+            await Store.addStudent({ name, admissionNo, klass, gender, parentName, parentPhone, parentEmail });
+            UI.toast('Student added');
+          }
+          UI.closeModal();
+          Views.students();
+        } catch (err) {
+          UI.toast('Could not save: ' + err.message);
+        }
+      };
+    });
+  }
+
+  document.getElementById('content').innerHTML = `
+    ${filterHtml}
+    <div id="studentsTableWrap">${renderTable('', '', '')}</div>
+  `;
+  document.getElementById('addStudentBtn').onclick = () => openStudentForm(null);
+  document.getElementById('importStudentsBtn').onclick = () => Importer.openImportModal(() => Views.students());
+  document.getElementById('classFilter').onchange = paint;
+  document.getElementById('sectionFilter').onchange = paint;
+  document.getElementById('genderFilter').onchange = paint;
+  document.getElementById('searchBox').oninput = paint;
+  document.getElementById('studentsCsvBtn').onclick = () => {
+    const rows = filteredRows(document.getElementById('classFilter').value, document.getElementById('searchBox').value, document.getElementById('sectionFilter').value, document.getElementById('genderFilter').value);
+    if (rows.length === 0) { UI.toast('No students to download'); return; }
+    const header = ['Name', 'Admission No.', 'Class', 'Gender', 'Parent name', 'Parent phone', 'Parent email'];
+    const csvRows = rows.map(s => [s.name, s.admissionNo || '', s.klass, s.gender || '', s.parentName || '', s.parentPhone || '', s.parentEmail || '']);
+    UI.downloadCSV(`class-list-${document.getElementById('classFilter').value || 'all-classes'}`.replace(/\s+/g, '_'), header, csvRows);
+  };
+  // If the topbar search sent us here (App.navigate('students') after
+  // Enter in #globalSearch), pick up the pending term once and clear it.
+  if (App._pendingStudentSearch) {
+    document.getElementById('searchBox').value = App._pendingStudentSearch;
+    App._pendingStudentSearch = '';
+    paint();
+  }
+  wireRowActions();
+};
+
+/* ------------------------- SUBJECTS ------------------------- */
+
+// The four bands a subject can be created for. Deliberately NOT
+// offering "All levels" (section: '') or the combined "Primary"
+// (section: 'primary') as choices when ADDING a subject any more —
+// those are what let one "Mathematics" row silently apply to every
+// level, which is exactly the cross-level leak this app spent several
+// rounds of fixes closing (subjectsForKlass, teacher_subject_classes,
+// exam creation, report cards...). Subject creation is now
+// independent PER LEVEL: adding a subject from the Upper Primary tab
+// can only ever create an Upper Primary subject, full stop — even if
+// a same-named subject already exists under Lower Primary or Junior
+// Secondary, they are two separate rows with two separate ids and
+// never share exams, marks or teacher assignments.
+//
+// Existing subjects created before this change with section '' or
+// 'primary' still work exactly as before (nothing is deleted or
+// silently reassigned) — they just surface under a special "All
+// levels (legacy)" tab so an admin can migrate each one, at their own
+// pace, to a specific level via Edit.
+const SUBJECT_LEVEL_TABS = ['lower-primary', 'upper-primary', 'junior-secondary', 'senior-school'];
+
+Views.subjects = async function () {
+  setTopbarActions(`<button class="btn btn-primary" id="addSubjectBtn">+ Add subject</button>`);
+  showLoading();
+  const st = await Store.current();
+
+  const hasLegacy = st.subjects.some(s => !SUBJECT_LEVEL_TABS.includes(s.section || ''));
+  const tabs = hasLegacy ? [...SUBJECT_LEVEL_TABS, 'legacy'] : SUBJECT_LEVEL_TABS;
+
+  function sectionBadge(s) {
+    const key = s.section || '';
+    return `<span class="badge badge-${sectionBadgeClass(key)}">${UI.esc(sectionLabel(key))}</span>`;
+  }
+
+  function tabLabel(tab) {
+    return tab === 'legacy' ? 'All levels (legacy)' : sectionLabel(tab);
+  }
+
+  // Strict for a real level tab (exactly that band, nothing shared in
+  // or out) — independence means Lower Primary's list is Lower
+  // Primary's list, not "anything that covers Lower Primary". The
+  // "legacy" tab is the one exception: it's specifically where
+  // pre-existing '' / 'primary' subjects (created before this change)
+  // surface for cleanup.
+  function rowsForTab(tab) {
+    if (tab === 'legacy') return st.subjects.filter(s => !SUBJECT_LEVEL_TABS.includes(s.section || ''));
+    return st.subjects.filter(s => (s.section || '') === tab);
+  }
+
+  function renderTable(tab) {
+    if (st.subjects.length === 0) {
+      return `<div class="empty"><div class="empty-title">No subjects yet</div><p>Add subjects like Mathematics, English, Integrated Science — starting with whichever level you're setting up.</p></div>`;
+    }
+    const rows = [...rowsForTab(tab)].sort((a, b) => a.name.localeCompare(b.name));
+    if (rows.length === 0) {
+      return `<div class="empty"><div class="empty-title">No subjects for ${UI.esc(tabLabel(tab))} yet</div><p>${tab === 'legacy' ? '' : `Add one below — it'll only ever apply to ${UI.esc(tabLabel(tab))}.`}</p></div>`;
+    }
+    return `
+      <div class="ledger">
+        <div class="ledger-scroll">
+          <table class="ledger-table">
+            <thead><tr><th>#</th><th>Subject</th><th>Code</th>${tab === 'legacy' ? '<th>Level</th>' : ''}<th>Exams recorded</th><th></th></tr></thead>
+            <tbody>
+              ${rows.map((s, i) => {
+                const examCount = st.exams.filter(e => e.subjectId === s.id).length;
+                return `<tr>
+                  <td class="row-index">${i + 1}</td>
+                  <td>${UI.esc(s.name)}</td>
+                  <td class="num">${UI.esc(s.code) || '—'}</td>
+                  ${tab === 'legacy' ? `<td>${sectionBadge(s)}</td>` : ''}
+                  <td class="num">${examCount}</td>
+                  <td>
+                    <button class="btn btn-sm btn-ghost" data-edit="${s.id}">Edit</button>
+                    <button class="btn btn-sm btn-danger" data-del="${s.id}">Delete</button>
+                  </td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  function wireRowActions() {
+    document.querySelectorAll('[data-edit]').forEach(btn => {
+      btn.onclick = () => openForm(st.subjects.find(s => s.id === btn.dataset.edit));
+    });
+    document.querySelectorAll('[data-del]').forEach(btn => {
+      btn.onclick = () => {
+        const s = st.subjects.find(s => s.id === btn.dataset.del);
+        UI.confirmAction(`Delete ${s.name}? This also removes exams and results recorded under it.`, async () => {
+          await Store.deleteSubject(s.id);
+          UI.toast('Subject deleted');
+          Views.subjects();
+        });
+      };
+    });
+  }
+
+  function suggestCode(name) {
+    return name.replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase();
+  }
+
+  // Adding a subject: the level is LOCKED to whichever tab you're on —
+  // there's no dropdown, so it's impossible to create a subject that
+  // spans multiple levels by accident. Editing an existing subject
+  // lets you move it to a different (single) level if you got it
+  // wrong, and — only for a pre-existing legacy '' / 'primary' subject
+  // — offers its current legacy value too, clearly labelled, so the
+  // dropdown isn't left showing something that isn't in the list.
+  function openForm(existing, lockedLevel) {
+    const isEdit = !!existing;
+    const currentSection = isEdit ? (existing.section || '') : lockedLevel;
+    const isLegacyCurrent = isEdit && !SUBJECT_LEVEL_TABS.includes(currentSection);
+    const levelField = (!isEdit && lockedLevel)
+      ? `<p style="margin:0;"><strong>${UI.esc(sectionLabel(lockedLevel))}</strong></p><p class="field-hint">This subject will only ever apply to ${UI.esc(sectionLabel(lockedLevel))} — add it again separately under another level's tab if the same subject is also taught there, so each level keeps its own independent record, exams and teacher assignments.</p>`
+      : `<select id="f_section">
+          ${isLegacyCurrent ? `<option value="${UI.esc(currentSection)}" selected>${UI.esc(sectionLabel(currentSection))} (legacy — please move to one level below)</option>` : ''}
+          ${SUBJECT_LEVEL_TABS.map(k => `<option value="${k}" ${currentSection === k ? 'selected' : ''}>${UI.esc(sectionLabel(k))}</option>`).join('')}
+        </select>
+        <p class="field-hint">${isLegacyCurrent ? 'This subject currently applies to more than one level. Pick a single level to make it independent — its exams and marks stay exactly as they are, only future exams/assignments will be scoped to the level you choose.' : 'Each subject belongs to exactly one level — add the same subject again under a different level\'s tab if it\'s genuinely taught in both.'}</p>`;
+    UI.openModal(`
+      <h2>${isEdit ? 'Edit subject' : 'Add subject'}</h2>
+      <div class="form-grid">
+        <div class="field full">
+          <label>Subject name</label>
+          <input type="text" id="f_name" value="${isEdit ? UI.esc(existing.name) : ''}" placeholder="e.g. Mathematics">
+        </div>
+        <div class="field">
+          <label>Subject code</label>
+          <input type="text" id="f_code" maxlength="6" style="text-transform:uppercase;" value="${isEdit ? UI.esc(existing.code) : ''}" placeholder="e.g. MAT">
+          <p class="field-hint">Short code used on the broadsheet so more subjects fit the printable page.</p>
+        </div>
+        <div class="field">
+          <label>Level</label>
+          ${levelField}
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
+        <button class="btn btn-primary" id="saveBtn">${isEdit ? 'Save changes' : 'Add subject'}</button>
+      </div>
+    `, (root) => {
+      const nameInput = root.querySelector('#f_name');
+      const codeInput = root.querySelector('#f_code');
+      // Auto-fill the code from the name as the admin types, but stop
+      // auto-filling the moment they touch the code field themselves.
+      let codeTouched = isEdit && !!existing.code;
+      codeInput.addEventListener('input', () => { codeTouched = true; });
+      nameInput.addEventListener('input', () => {
+        if (!codeTouched) codeInput.value = suggestCode(nameInput.value);
+      });
+      root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
+      root.querySelector('#saveBtn').onclick = async () => {
+        const name = nameInput.value.trim();
+        let code = codeInput.value.trim().toUpperCase();
+        const sectionField = root.querySelector('#f_section');
+        const section = sectionField ? sectionField.value : lockedLevel;
+        if (!name) { UI.toast('Subject name is required'); return; }
+        if (!code) code = suggestCode(name);
+        try {
+          if (isEdit) { await Store.updateSubject(existing.id, { name, code, section }); UI.toast('Subject updated'); }
+          else { await Store.addSubject({ name, code, section }); UI.toast('Subject added'); }
+          UI.closeModal();
+          Views.subjects();
+        } catch (err) {
+          UI.toast('Could not save: ' + err.message);
+        }
+      };
+    });
+  }
+
+  let activeTab = tabs[0];
+
+  function renderTabs() {
+    return `
+      <div class="filter-row" style="flex-wrap:wrap;">
+        ${tabs.map(t => `<button class="btn btn-sm ${t === activeTab ? 'btn-primary' : 'btn-ghost'}" data-tab="${UI.esc(t)}">${UI.esc(tabLabel(t))} (${rowsForTab(t).length})</button>`).join('')}
+      </div>
+      ${activeTab === 'legacy' ? `<p class="field-hint" style="margin-bottom:12px;">These were created before subjects became level-independent, so they still apply to more than one level. Edit each one to move it to a single level when you get a chance — nothing here is broken in the meantime.</p>` : ''}
+    `;
+  }
+
+  function paint() {
+    document.getElementById('content').innerHTML = `
+      <div id="tabsWrap">${renderTabs()}</div>
+      <div id="wrap">${renderTable(activeTab)}</div>
+    `;
+    document.getElementById('addSubjectBtn').onclick = () => openForm(null, activeTab === 'legacy' ? SUBJECT_LEVEL_TABS[0] : activeTab);
+    document.querySelectorAll('[data-tab]').forEach(btn => {
+      btn.onclick = () => { activeTab = btn.dataset.tab; paint(); };
+    });
+    wireRowActions();
+  }
+
+  paint();
+};
+
+/* ------------------------- EXAMS ------------------------- */
+
+// Skeleton shown while Store.current() resolves — mirrors the real
+// layout (stat row -> filter toolbar -> table) instead of a blank
+// screen, per the loading-state requirement.
+function showExamsSkeleton() {
+  document.getElementById('content').innerHTML = `
+    <div class="grid grid-4 section-block">
+      ${[0, 1, 2, 3].map(() => `<div class="skeleton skeleton-stat"></div>`).join('')}
+    </div>
+    <div class="skeleton skeleton-line" style="width:70%; height:44px; border-radius:10px; margin-bottom:18px;"></div>
+    <div class="skeleton skeleton-card" style="height:320px;"></div>
+  `;
+}
+
+Views.exams = async function () {
+  showExamsSkeleton();
+  const st = await Store.current();
+
+  function subjectName(id) {
+    return st.subjects.find(s => s.id === id)?.name || '—';
+  }
+
+  // A sitting (class/type/term/year) that's been published is locked
+  // for marks editing everywhere else in the app (see Views.results) —
+  // surfaced here too, purely as a status indicator.
+  function isLockedExam(e) {
+    return !!(st.published || []).find(p => p.klass === e.klass && p.type === e.type && p.term === e.term && String(p.year) === String(e.year));
+  }
+
+  // ---- augmented rows: one per exam, with real, calculated stats ----
+  function buildRows() {
+    const rows = [...st.exams].filter(e => levelAllows(e.klass)).map(e => {
+      const studentCount = st.students.filter(s => s.klass === e.klass).length;
+      const entries = st.results.filter(r => r.examId === e.id).length;
+      const pct = studentCount > 0 ? Math.round((entries / studentCount) * 100) : 0;
+      const status = entries === 0 ? 'not-started' : (studentCount > 0 && entries >= studentCount ? 'complete' : 'in-progress');
+      return { exam: e, studentCount, entries, pct, status, locked: isLockedExam(e) };
+    });
+    // Flag likely duplicate sittings: same class/type/term/year with a
+    // subject of the SAME NAME but a DIFFERENT subject id — almost
+    // always two separate subject records (e.g. an old, unscoped
+    // subject and its new level-specific replacement — see Views.
+    // subjects) that look identical in this table but are unrelated
+    // underneath. This is the #1 cause of "I entered marks but this
+    // exam still shows 0" — the marks were saved fine, just under the
+    // OTHER row. Flagging both rows here instead of silently merging
+    // them, since only an admin who knows which subject is current
+    // should decide what to do with the old one (Delete, or Import
+    // Marks across if it turns out to be the wrong one).
+    const bySittingAndName = new Map();
+    rows.forEach(r => {
+      const key = `${r.exam.klass}|${r.exam.type}|${r.exam.term}|${r.exam.year}|${subjectName(r.exam.subjectId).trim().toLowerCase()}`;
+      if (!bySittingAndName.has(key)) bySittingAndName.set(key, []);
+      bySittingAndName.get(key).push(r);
+    });
+    bySittingAndName.forEach(group => {
+      if (group.length < 2) return;
+      const distinctSubjectIds = new Set(group.map(r => r.exam.subjectId));
+      if (distinctSubjectIds.size > 1) group.forEach(r => { r.duplicateSuspect = true; });
+    });
+    return rows.sort((a, b) => (b.exam.year - a.exam.year) || a.exam.term.localeCompare(b.exam.term) || a.exam.klass.localeCompare(b.exam.klass));
+  }
+
+  const allRows = buildRows();
+
+  const PAGE_SIZE = 10;
+  const filters = { search: '', term: '', year: '', klass: '', type: '', subject: '', status: '' };
+  let page = 1;
+
+  // ---- dropdown option sources ----
+  const termOptions = ['Term 1', 'Term 2', 'Term 3'];
+  const yearOptions = [...new Set(allRows.map(r => String(r.exam.year)))].sort((a, b) => b - a);
+  const klassOptions = classOptionLabels(st).length ? classOptionLabels(st) : [...new Set(allRows.map(r => r.exam.klass))].sort();
+  const typeOptions = st.examTypes.length ? st.examTypes.map(t => t.name) : [...new Set(allRows.map(r => r.exam.type))].sort();
+
+  function applyFilters(rows) {
+    const q = filters.search.trim().toLowerCase();
+    return rows.filter(r => {
+      const e = r.exam;
+      if (q) {
+        const hay = `${e.type} ${e.klass} ${subjectName(e.subjectId)}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      if (filters.term && e.term !== filters.term) return false;
+      if (filters.year && String(e.year) !== filters.year) return false;
+      if (filters.klass && e.klass !== filters.klass) return false;
+      if (filters.type && e.type !== filters.type) return false;
+      if (filters.subject && e.subjectId !== filters.subject) return false;
+      if (filters.status && r.status !== filters.status) return false;
+      return true;
+    });
+  }
+
+  function examTypeBadge(type) {
+    const t = (type || '').toLowerCase();
+    const cls = t.includes('open') ? 'et-opener' : t.includes('mid') ? 'et-midterm' : t.includes('end') ? 'et-endterm' : 'et-other';
+    return `<span class="examtype-badge ${cls}">${UI.esc((type || '—').toUpperCase())}</span>`;
+  }
+
+  function statusPill(status) {
+    if (status === 'complete') return `<span class="status-pill status-complete"><i class="fa-solid fa-circle-check"></i> Complete</span>`;
+    if (status === 'in-progress') return `<span class="status-pill status-progress"><i class="fa-solid fa-circle-dot"></i> In Progress</span>`;
+    return `<span class="status-pill status-none"><i class="fa-regular fa-circle"></i> Not Started</span>`;
+  }
+
+  function entriesCellHTML(r) {
+    const fillClass = r.status === 'complete' ? 'success' : r.status === 'in-progress' ? 'warning' : '';
+    return `
+      <div class="entries-cell">
+        <span class="entries-count">${r.entries} / ${r.studentCount}</span>
+        <div class="progress-track sm"><div class="progress-fill ${fillClass}" style="width:${r.pct}%;"></div></div>
+      </div>
+    `;
+  }
+
+  // ---- Exam Summary stat cards (calculated from the full, unfiltered
+  // level-scoped set, so they always reflect the whole picture) ----
+  function renderStatCards() {
+    const total = allRows.length;
+    const active = allRows.filter(r => r.status === 'in-progress').length;
+    const completed = allRows.filter(r => r.status === 'complete').length;
+    const pending = allRows.filter(r => r.status === 'not-started').length;
+    return `
+      <div class="grid grid-4 section-block">
+        <div class="card stat-card-compact plain">
+          <i class="fa-solid fa-file-pen stat-icon"></i>
+          <p class="stat-label">Total Exams</p>
+          <p class="stat-value">${total}</p>
+          <p class="stat-sub">currently configured</p>
+        </div>
+        <div class="card stat-card-compact plain">
+          <i class="fa-solid fa-circle-dot stat-icon" style="color:var(--warning);"></i>
+          <p class="stat-label">Active Exams</p>
+          <p class="stat-value">${active}</p>
+          <p class="stat-sub">accepting marks now</p>
+        </div>
+        <div class="card stat-card-compact plain">
+          <i class="fa-solid fa-circle-check stat-icon" style="color:var(--success);"></i>
+          <p class="stat-label">Completed Exams</p>
+          <p class="stat-value">${completed}</p>
+          <p class="stat-sub">marks entry complete</p>
+        </div>
+        <div class="card stat-card-compact plain">
+          <i class="fa-solid fa-triangle-exclamation stat-icon" style="color:var(--danger);"></i>
+          <p class="stat-label">Pending Marks</p>
+          <p class="stat-value">${pending}</p>
+          <p class="stat-sub">not started yet</p>
+        </div>
+      </div>
+    `;
+  }
+
+  function opt(value, label, current) {
+    return `<option value="${UI.esc(value)}" ${value === current ? 'selected' : ''}>${UI.esc(label)}</option>`;
+  }
+
+  function renderFilterBar() {
+    return `
+      <div class="exam-filters" id="examsFilterBar">
+        <div class="toolbar-search">
+          <i class="fa-solid fa-magnifying-glass"></i>
+          <input type="text" id="examSearch" placeholder="Search type, class, subject…" value="${UI.esc(filters.search)}">
+          <button class="clear-btn" id="examSearchClear" style="${filters.search ? '' : 'display:none;'}" aria-label="Clear search"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <button class="btn btn-ghost exam-filters-toggle" id="examFiltersToggle"><i class="fa-solid fa-sliders"></i> Filters</button>
+        <div class="exam-filters-fields" id="examFiltersFields">
+          <select id="fTerm"><option value="">All terms</option>${termOptions.map(t => opt(t, t, filters.term)).join('')}</select>
+          <select id="fYear"><option value="">All years</option>${yearOptions.map(y => opt(y, y, filters.year)).join('')}</select>
+          <select id="fKlass"><option value="">All classes</option>${klassOptions.map(k => opt(k, k, filters.klass)).join('')}</select>
+          <select id="fType"><option value="">All exam types</option>${typeOptions.map(t => opt(t, t, filters.type)).join('')}</select>
+          <select id="fSubject"><option value="">All subjects</option>${st.subjects.map(s => opt(s.id, s.name, filters.subject)).join('')}</select>
+          <select id="fStatus">
+            <option value="">All statuses</option>
+            <option value="not-started" ${filters.status === 'not-started' ? 'selected' : ''}>Not Started</option>
+            <option value="in-progress" ${filters.status === 'in-progress' ? 'selected' : ''}>In Progress</option>
+            <option value="complete" ${filters.status === 'complete' ? 'selected' : ''}>Complete</option>
+          </select>
+          <button class="btn btn-sm btn-ghost" id="fReset">Reset filters</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderPaginationHTML(totalItems) {
+    const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+    if (page > totalPages) page = totalPages;
+    if (totalItems === 0) return '';
+    const start = (page - 1) * PAGE_SIZE + 1;
+    const end = Math.min(totalItems, page * PAGE_SIZE);
+    const pages = [];
+    for (let p = 1; p <= totalPages; p++) pages.push(p);
+    return `
+      <div class="pagination">
+        <span class="pagination-count">Showing ${start}–${end} of ${totalItems} examination${totalItems === 1 ? '' : 's'}</span>
+        <div class="pagination-btns">
+          <button class="page-btn" id="pagePrev" ${page === 1 ? 'disabled' : ''}>Previous</button>
+          ${pages.map(p => `<button class="page-btn ${p === page ? 'active' : ''}" data-page="${p}">${p}</button>`).join('')}
+          <button class="page-btn" id="pageNext" ${page === totalPages ? 'disabled' : ''}>Next</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderTableArea() {
+    if (allRows.length === 0) {
+      return `<div class="empty"><div class="empty-title">No examinations yet</div><p>Create your first examination to start entering learner marks.</p><button class="btn btn-primary" id="emptyCreateBtn" ${st.subjects.length === 0 ? 'disabled' : ''}>+ Create Examination</button></div>`;
+    }
+    const filtered = applyFilters(allRows);
+    if (filtered.length === 0) {
+      return `<div class="empty"><div class="empty-title">No exams match your filters</div><p>Try widening your search or resetting the filters below.</p><button class="btn btn-ghost" id="noMatchResetBtn">Reset filters</button></div>`;
+    }
+    const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+    if (page > totalPages) page = totalPages;
+    const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+    return `
+      <div class="ledger">
+        <div class="ledger-scroll">
+          <table class="ledger-table sticky-head">
+            <thead><tr>
+              <th>#</th><th>Exam Type</th><th>Term</th><th>Year</th><th>Class</th><th>Subject</th>
+              <th>Total Marks</th><th>Entries</th><th>Completion</th><th></th>
+            </tr></thead>
+            <tbody>
+              ${paged.map((r, i) => {
+                const e = r.exam;
+                return `<tr>
+                  <td class="row-index">${(page - 1) * PAGE_SIZE + i + 1}</td>
+                  <td>${examTypeBadge(e.type)}</td>
+                  <td>${UI.esc(e.term)}</td>
+                  <td class="num">${UI.esc(e.year)}</td>
+                  <td>
+                    <div class="class-cell">${UI.esc(e.klass)}</div>
+                    ${r.studentCount ? `<div class="class-cell-sub">${r.studentCount} learner${r.studentCount === 1 ? '' : 's'}</div>` : ''}
+                  </td>
+                  <td>${UI.esc(subjectName(e.subjectId))}${r.duplicateSuspect ? ` <i class="fa-solid fa-triangle-exclamation" style="color:var(--danger);" title="Another exam exists for this exact class/type/term/year with a subject of the same name but a DIFFERENT subject record. Marks entered against one won't show on the other — see the notice above."></i>` : ''}</td>
+                  <td class="num">${UI.esc(e.totalMarks)}</td>
+                  <td>${entriesCellHTML(r)}</td>
+                  <td>${statusPill(r.status)}${r.locked ? ' <i class="fa-solid fa-lock locked-flag" title="Published & locked"></i>' : ''}</td>
+                  <td>
+                    <div class="row-actions">
+                      <button class="btn btn-sm btn-primary" data-enter="${e.id}">Enter Marks</button>
+                      <button class="icon-btn icon-btn-sm" data-more="${e.id}" aria-label="More actions" title="More actions"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+                    </div>
+                  </td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      ${renderPaginationHTML(filtered.length)}
+    `;
+  }
+
+  // ---- row-level "more actions" (action sheet, not a floating
+  // dropdown — see UI.openActionSheet for why) ----
+  function openRowActions(r) {
+    const e = r.exam;
+    const items = [
+      { label: 'View Results', icon: 'fa-chart-simple', onClick: () => { App.state.selectedExamId = e.id; App.navigate('analysis'); } },
+      { label: 'Edit Exam', icon: 'fa-pen', onClick: () => openForm(e) },
+      {
+        label: 'Duplicate Exam', icon: 'fa-clone', onClick: async () => {
+          try {
+            await Store.addExam({ type: e.type, term: e.term, year: e.year, klass: e.klass, subjectId: e.subjectId, totalMarks: e.totalMarks, date: e.date });
+            UI.toast('Exam duplicated');
+            Views.exams();
+          } catch (err) { UI.toast('Could not duplicate: ' + err.message); }
+        }
+      },
+      { label: 'Import Marks', icon: 'fa-file-import', onClick: () => Importer.openImportMarksModal(e, subjectName(e.subjectId), () => Views.exams()) },
+      { label: 'Export Marks', icon: 'fa-file-export', onClick: () => exportExamMarksCSV(e) },
+      { label: 'Delete Exam', icon: 'fa-trash', danger: true, onClick: () => {
+          UI.confirmAction(`Delete this ${e.type} exam? Recorded marks for it will also be removed.`, async () => {
+            await Store.deleteExam(e.id);
+            UI.toast('Exam deleted');
+            Views.exams();
+          });
+        }
+      }
+    ];
+    UI.openActionSheet(`${e.type} · ${e.klass}`, items);
+  }
+
+  function exportExamMarksCSV(e) {
+    const students = st.students.filter(s => s.klass === e.klass).sort((a, b) => a.name.localeCompare(b.name));
+    const rows = students.map(s => {
+      const res = st.results.find(x => x.examId === e.id && x.studentId === s.id);
+      const pct = res ? Grading.percent(res.marks, e.totalMarks) : null;
+      const band = res ? Grading.levelForMarks(res.marks, e.totalMarks, st.settings.gradingBands) : null;
+      return [s.admissionNo || '', s.name, res ? res.marks : '', pct === null ? '' : pct.toFixed(1) + '%', band ? band.code : ''];
+    });
+    UI.downloadCSV(`${e.type}-${e.klass}-${subjectName(e.subjectId)}-marks`, ['Admission No.', 'Name', 'Marks', 'Percentage', 'Level'], rows);
+  }
+
+  function exportExamsCSV() {
+    const filtered = applyFilters(allRows);
+    const rows = filtered.map((r, i) => [i + 1, r.exam.type, r.exam.term, r.exam.year, r.exam.klass, subjectName(r.exam.subjectId), r.exam.totalMarks, `${r.entries}/${r.studentCount}`, `${r.pct}%`, r.status]);
+    UI.downloadCSV('exams-export', ['#', 'Exam Type', 'Term', 'Year', 'Class', 'Subject', 'Total Marks', 'Entries', 'Completion %', 'Status'], rows);
+  }
+
+  function downloadMarksTemplate() {
+    UI.downloadCSV('marks-import-template', ['Admission No.', 'Name', 'Marks'], [['e.g. 1234', 'e.g. Jane Doe', 'e.g. 78']]);
+  }
+
+  function openMoreActions() {
+    UI.openActionSheet('More actions', [
+      { label: 'Import Marks', icon: 'fa-file-import', onClick: () => openImportPicker() },
+      { label: 'Export Exams', icon: 'fa-file-export', onClick: () => exportExamsCSV() },
+      { label: 'Download Template', icon: 'fa-file-arrow-down', onClick: () => downloadMarksTemplate() },
+      { label: 'Examination Settings', icon: 'fa-gear', onClick: () => App.navigate('settings') }
+    ]);
+  }
+
+  // Picking which exam to bulk-import marks for, from the page-level
+  // "More actions" menu (the per-row menu already knows its exam).
+  function openImportPicker() {
+    if (allRows.length === 0) { UI.toast('Create an exam first'); return; }
+    UI.openModal(`
+      <h2>Import marks — choose an exam</h2>
+      <div class="field full">
+        <label>Exam</label>
+        <select id="importExamSelect">
+          ${allRows.map(r => `<option value="${r.exam.id}">${UI.esc(r.exam.type)} · ${UI.esc(r.exam.klass)} · ${UI.esc(subjectName(r.exam.subjectId))} · ${UI.esc(r.exam.term)} ${UI.esc(r.exam.year)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
+        <button class="btn btn-primary" id="continueBtn">Continue</button>
+      </div>
+    `, (root) => {
+      root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
+      root.querySelector('#continueBtn').onclick = () => {
+        const examId = root.querySelector('#importExamSelect').value;
+        const r = allRows.find(x => x.exam.id === examId);
+        UI.closeModal();
+        if (r) Importer.openImportMarksModal(r.exam, subjectName(r.exam.subjectId), () => Views.exams());
+      };
+    });
+  }
+
+  function wireRowActions() {
+    document.querySelectorAll('[data-enter]').forEach(btn => {
+      btn.onclick = () => { App.state.selectedExamId = btn.dataset.enter; App.navigate('results'); };
+    });
+    document.querySelectorAll('[data-more]').forEach(btn => {
+      btn.onclick = () => {
+        const r = allRows.find(x => x.exam.id === btn.dataset.more);
+        if (r) openRowActions(r);
+      };
+    });
+    const emptyBtn = document.getElementById('emptyCreateBtn');
+    if (emptyBtn) emptyBtn.onclick = () => openAllSubjectsForm();
+    const noMatchBtn = document.getElementById('noMatchResetBtn');
+    if (noMatchBtn) noMatchBtn.onclick = () => { resetFilters(); };
+  }
+
+  function wirePagination() {
+    const prev = document.getElementById('pagePrev');
+    const next = document.getElementById('pageNext');
+    if (prev) prev.onclick = () => { page--; repaintTable(); };
+    if (next) next.onclick = () => { page++; repaintTable(); };
+    document.querySelectorAll('.page-btn[data-page]').forEach(btn => {
+      btn.onclick = () => { page = Number(btn.dataset.page); repaintTable(); };
+    });
+  }
+
+  function repaintTable() {
+    document.getElementById('examsTableArea').innerHTML = renderTableArea();
+    wireRowActions();
+    wirePagination();
+  }
+
+  function resetFilters() {
+    filters.search = ''; filters.term = ''; filters.year = ''; filters.klass = ''; filters.type = ''; filters.subject = ''; filters.status = '';
+    page = 1;
+    document.getElementById('examsFilterBar').outerHTML = renderFilterBar();
+    wireFilterBar();
+    repaintTable();
+  }
+
+  function wireFilterBar() {
+    const searchInput = document.getElementById('examSearch');
+    const clearBtn = document.getElementById('examSearchClear');
+    searchInput.addEventListener('input', () => {
+      filters.search = searchInput.value;
+      clearBtn.style.display = filters.search ? '' : 'none';
+      page = 1;
+      repaintTable();
+    });
+    clearBtn.onclick = () => { searchInput.value = ''; filters.search = ''; clearBtn.style.display = 'none'; page = 1; repaintTable(); searchInput.focus(); };
+
+    const bind = (id, key) => {
+      const el = document.getElementById(id);
+      el.addEventListener('change', () => { filters[key] = el.value; page = 1; repaintTable(); });
+    };
+    bind('fTerm', 'term'); bind('fYear', 'year'); bind('fKlass', 'klass'); bind('fType', 'type'); bind('fSubject', 'subject'); bind('fStatus', 'status');
+
+    document.getElementById('fReset').onclick = () => resetFilters();
+
+    const toggle = document.getElementById('examFiltersToggle');
+    const fields = document.getElementById('examFiltersFields');
+    if (toggle) toggle.onclick = () => fields.classList.toggle('expanded');
+  }
+
+  setTopbarActions(`
+    <button class="btn" id="addExamSingleBtn" ${st.subjects.length === 0 ? 'disabled' : ''}>+ Add Subject Exam</button>
+    <button class="btn btn-primary" id="addExamAllBtn" ${st.subjects.length === 0 ? 'disabled' : ''}>+ New Examination</button>
+    <button class="icon-btn" id="examsMoreBtn" aria-label="More actions" title="More actions"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+  `);
+
+  document.getElementById('content').innerHTML = `
+    <p class="page-intro">Manage examinations, subjects and learner assessments.</p>
+    ${allRows.some(r => r.duplicateSuspect) ? `
+      <div class="field-hint" style="background:var(--warn-bg, #fff3cd); border:1px solid var(--warn-border, #ffe69c); border-radius:6px; padding:10px 12px; margin-bottom:14px;">
+        <strong>⚠ Possible duplicate exams found.</strong> Some rows below (flagged with ⚠ next to the subject) share the exact same class/type/term/year but point to two DIFFERENT subject records with the same name — almost always an old subject and its newer replacement (see the Subjects page). Marks entered against one won't show on the other. Open "More actions" on whichever one has the marks and use "Export Marks", then "Import Marks" that same file into the correct one, then Delete the wrong exam.
+      </div>` : ''}
+    ${renderStatCards()}
+    ${renderFilterBar()}
+    <div id="examsTableArea">${renderTableArea()}</div>
+  `;
+
+  const addBtn = document.getElementById('addExamSingleBtn');
+  if (addBtn) addBtn.onclick = () => openForm(null);
+  const addAllBtn = document.getElementById('addExamAllBtn');
+  if (addAllBtn) addAllBtn.onclick = () => openAllSubjectsForm();
+  const moreBtn = document.getElementById('examsMoreBtn');
+  if (moreBtn) moreBtn.onclick = () => openMoreActions();
+
+  wireFilterBar();
+  wireRowActions();
+  wirePagination();
+
+  function openForm(existing) {
+    const isEdit = !!existing;
+    if (st.subjects.length === 0) { UI.toast('Add a subject first'); return; }
+    if (st.examTypes.length === 0) { UI.toast('Add an exam type first, from Settings -> Exam types'); return; }
+    const classOpts = classOptionLabels(st);
+    const classField = classOpts.length
+      ? `<select id="f_klass">
+           <option value="">Select class</option>
+           ${classOpts.map(c => `<option value="${UI.esc(c)}" ${isEdit && existing.klass === c ? 'selected' : ''}>${UI.esc(c)}</option>`).join('')}
+         </select>`
+      : `<input type="text" id="f_klass" value="${isEdit ? UI.esc(existing.klass) : ''}" placeholder="e.g. Grade 7">
+         <p class="field-hint">Tip: set up classes on the <a href="#classes">Classes</a> page for a dropdown here.</p>`;
+    UI.openModal(`
+      <h2>${isEdit ? 'Edit exam' : 'New exam'}</h2>
+      <div class="form-grid">
+        <div class="field">
+          <label>Exam type</label>
+          <select id="f_type">
+            ${st.examTypes.map(t => `<option value="${UI.esc(t.name)}" ${isEdit && existing.type === t.name ? 'selected' : ''}>${UI.esc(t.name)}</option>`).join('')}
+          </select>
+          <p class="field-hint">Manage the list of exam types from <a href="#settings">Settings</a>.</p>
+        </div>
+        <div class="field">
+          <label>Term</label>
+          <select id="f_term">
+            ${['Term 1', 'Term 2', 'Term 3'].map(t => `<option value="${t}" ${isEdit ? existing.term === t ? 'selected' : '' : st.settings.term === t ? 'selected' : ''}>${t}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>Year</label>
+          <input type="number" id="f_year" value="${isEdit ? existing.year : st.settings.year}">
+        </div>
+        <div class="field">
+          <label>Class / Grade</label>
+          ${classField}
+        </div>
+        <div class="field">
+          <label>Subject</label>
+          <select id="f_subject"></select>
+          <p class="field-hint" id="f_subject_hint"></p>
+        </div>
+        <div class="field">
+          <label>Total marks</label>
+          <input type="number" id="f_total" value="${isEdit ? existing.totalMarks : 100}">
+        </div>
+        <div class="field">
+          <label>Date (optional)</label>
+          <input type="date" id="f_date" value="${isEdit ? existing.date : ''}">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
+        <button class="btn btn-primary" id="saveBtn">${isEdit ? 'Save changes' : 'Create exam'}</button>
+      </div>
+    `, (root) => {
+      const klassField = root.querySelector('#f_klass');
+      const subjectField = root.querySelector('#f_subject');
+      const subjectHint = root.querySelector('#f_subject_hint');
+      // Primary/Junior Secondary/Senior School offer different subjects —
+      // only show the ones actually available for whichever class is
+      // picked, but always keep an exam's existing subject selectable
+      // when editing even if it's outside that section (so editing
+      // never silently swaps the subject out from under you).
+      function refreshSubjectOptions() {
+        const klass = klassField.value.trim();
+        let options = subjectsTaughtInKlass(st, klass);
+        if (isEdit && !options.some(s => s.id === existing.subjectId)) {
+          const forced = st.subjects.find(s => s.id === existing.subjectId);
+          if (forced) options = [forced, ...options];
+        }
+        const prevValue = subjectField.value;
+        subjectField.innerHTML = options.map(s => `<option value="${s.id}">${UI.esc(s.name)}</option>`).join('');
+        const keep = isEdit && !subjectField.dataset.touched ? existing.subjectId : prevValue;
+        if (options.some(s => s.id === keep)) subjectField.value = keep;
+        const section = klass ? sectionForKlassLabel(st, klass) : null;
+        const levelCount = klass ? levelScopedSubjectsForExam(st, klass).length : st.subjects.length;
+        subjectHint.textContent = section
+          ? (options.length !== levelCount
+              ? `Showing subjects actually assigned to a teacher for ${UI.esc(klass)} (${options.length} of ${levelCount} ${section.label} subjects).`
+              : `Showing subjects for ${section.label}${options.length !== st.subjects.length ? ` (${options.length} of ${st.subjects.length} total)` : ''}.`)
+          : 'Pick a class to narrow this list to its level.';
+      }
+      subjectField.addEventListener('change', () => { subjectField.dataset.touched = '1'; });
+      klassField.addEventListener('change', refreshSubjectOptions);
+      klassField.addEventListener('input', refreshSubjectOptions);
+      refreshSubjectOptions();
+
+      root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
+      root.querySelector('#saveBtn').onclick = async () => {
+        const payload = {
+          type: root.querySelector('#f_type').value,
+          term: root.querySelector('#f_term').value,
+          year: Number(root.querySelector('#f_year').value),
+          klass: root.querySelector('#f_klass').value.trim(),
+          subjectId: root.querySelector('#f_subject').value,
+          totalMarks: Number(root.querySelector('#f_total').value) || 100,
+          date: root.querySelector('#f_date').value
+        };
+        if (!payload.klass) { UI.toast('Class is required'); return; }
+        try {
+          if (isEdit) { await Store.updateExam(existing.id, payload); UI.toast('Exam updated'); }
+          else { await Store.addExam(payload); UI.toast('Exam created'); }
+          UI.closeModal();
+          Views.exams();
+        } catch (err) {
+          UI.toast('Could not save: ' + err.message);
+        }
+      };
+    });
+  }
+
+  function openAllSubjectsForm() {
+    if (st.subjects.length === 0) { UI.toast('Add a subject first'); return; }
+    if (st.examTypes.length === 0) { UI.toast('Add an exam type first, from Settings -> Exam types'); return; }
+    const classOpts = classOptionLabels(st);
+    const classField = classOpts.length
+      ? `<select id="f_klass">
+           <option value="">Select class</option>
+           ${classOpts.map(c => `<option value="${UI.esc(c)}">${UI.esc(c)}</option>`).join('')}
+         </select>`
+      : `<input type="text" id="f_klass" placeholder="e.g. Grade 7">
+         <p class="field-hint">Tip: set up classes on the <a href="#classes">Classes</a> page for a dropdown here.</p>`;
+    UI.openModal(`
+      <h2>New exam — all subjects</h2>
+      <p class="field-hint" style="margin-bottom:14px;">
+        Creates this exam for every subject at once (defaulting to 100 marks each).
+        Each subject teacher can set their own "out of how many" when they go to
+        enter marks — no need to know every paper's total right now.
+      </p>
+      <div class="form-grid">
+        <div class="field">
+          <label>Exam type</label>
+          <select id="f_type">
+            ${st.examTypes.map(t => `<option value="${UI.esc(t.name)}">${UI.esc(t.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>Term</label>
+          <select id="f_term">
+            ${['Term 1', 'Term 2', 'Term 3'].map(t => `<option value="${t}" ${st.settings.term === t ? 'selected' : ''}>${t}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>Year</label>
+          <input type="number" id="f_year" value="${st.settings.year}">
+        </div>
+        <div class="field">
+          <label>Class / Grade</label>
+          ${classField}
+        </div>
+        <div class="field">
+          <label>Date (optional)</label>
+          <input type="date" id="f_date">
+        </div>
+      </div>
+      <div class="field-hint" id="f_allsubjects_hint" style="margin-top:14px;"></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
+        <button class="btn btn-primary" id="saveBtn">Create exams</button>
+      </div>
+    `, (root) => {
+      const klassField = root.querySelector('#f_klass');
+      const hintEl = root.querySelector('#f_allsubjects_hint');
+      const saveBtn = root.querySelector('#saveBtn');
+      // Same scoping as the single-subject form — a class only gets
+      // exams for subjects actually assigned to a teacher there (never
+      // subjects merely eligible for that level but nobody teaches).
+      function scopedSubjects() { return subjectsTaughtInKlass(st, klassField.value.trim()); }
+      function refreshHint() {
+        const subs = scopedSubjects();
+        const klass = klassField.value.trim();
+        const section = klass ? sectionForKlassLabel(st, klass) : null;
+        const levelCount = klass ? levelScopedSubjectsForExam(st, klass).length : st.subjects.length;
+        hintEl.textContent = subs.length
+          ? `Will create exam entries for: ${subs.map(s => s.name).join(', ')}${section && subs.length !== levelCount ? ` (assigned to a teacher for ${klass} — ${subs.length} of ${levelCount} ${section.label} subjects)` : ''}`
+          : (klass ? `No subjects are set up for ${section ? section.label : klass} yet — add one on the Subjects page.` : 'Pick a class to see which subjects this will create exams for.');
+        saveBtn.textContent = `Create for ${subs.length} subject${subs.length === 1 ? '' : 's'}`;
+        saveBtn.disabled = subs.length === 0;
+      }
+      klassField.addEventListener('change', refreshHint);
+      klassField.addEventListener('input', refreshHint);
+      refreshHint();
+
+      root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
+      saveBtn.onclick = async () => {
+        const type = root.querySelector('#f_type').value;
+        const term = root.querySelector('#f_term').value;
+        const year = Number(root.querySelector('#f_year').value);
+        const klass = klassField.value.trim();
+        const date = root.querySelector('#f_date').value;
+        if (!klass) { UI.toast('Class is required'); return; }
+        const subjectsToUse = scopedSubjects();
+        if (subjectsToUse.length === 0) { UI.toast('No subjects are set up for this class\u2019s level'); return; }
+
+        let created = 0, skipped = 0;
+        for (const subj of subjectsToUse) {
+          const exists = st.exams.some(e => e.type === type && e.term === term && String(e.year) === String(year) && e.klass === klass && e.subjectId === subj.id);
+          if (exists) { skipped++; continue; }
+          try {
+            await Store.addExam({ type, term, year, klass, subjectId: subj.id, totalMarks: 100, date });
+            created++;
+          } catch (err) {
+            UI.toast(`Could not create exam for ${subj.name}: ${err.message}`);
+          }
+        }
+        UI.closeModal();
+        UI.toast(`Created ${created} exam${created === 1 ? '' : 's'}${skipped ? `, skipped ${skipped} that already existed` : ''}`);
+        Views.exams();
+      };
+    });
+  }
+};
+
+/* ------------------------- RESULTS ENTRY ------------------------- */
+
+Views.results = async function () {
+  showLoading();
+  setTopbarActions('');
+  const st = await Store.current();
+  const user = Auth.currentUser();
+
+  // Teachers ("user" role) only see/edit exams for subjects they're
+  // scoped to — via teacherScope(), the same rule every other teacher
+  // screen uses (explicit "Manage subjects" picks, UNION their Section
+  // if one is set). Admins/superadmins see everything in their section
+  // — levelAllows applies the section-scope lock for a restricted admin
+  // (or whatever the level switcher is set to for everyone else), same
+  // as the Exams list page already does.
+  const scope = teacherScope(st, user);
+  const isRestrictedTeacher = scope.isTeacher;
+  const allowedSubjectIds = isRestrictedTeacher ? scope.subjectIds : null;
+  // A teacher may only enter marks for an exam whose (subject, class)
+  // is an actual pair they're assigned — via "Manage subjects" (now
+  // per class/level, not global) or their Section. Checking the
+  // subject alone would let a subject id shared across levels (e.g.
+  // one "Mathematics" row used by both Grade 1 and Grade 7) leak
+  // another level's exam through. See teacherScope() in views.js.
+  let visibleExams = isRestrictedTeacher
+    ? st.exams.filter(e => !!scope.subjectsByClass.get(e.klass)?.has(e.subjectId))
+    : st.exams;
+  visibleExams = visibleExams.filter(e => levelAllows(e.klass));
+  st.exams = visibleExams;
+
+  if (isRestrictedTeacher && allowedSubjectIds.size === 0) {
+    document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">No subjects assigned to you yet</div><p>Ask your administrator to assign your subjects from the Users page.</p></div>`;
+    return;
+  }
+
+  if (st.exams.length === 0) {
+    document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">No exams to enter marks for</div><p>${isRestrictedTeacher ? 'No exams have been created yet for your assigned subjects.' : 'Create an exam first from the Exams page.'}</p></div>`;
+    return;
+  }
+
+  function subjectName(id) { return st.subjects.find(s => s.id === id)?.name || '—'; }
+
+  // Exams are organized as "folders" — Class -> Exam type -> Term -> Year —
+  // and the last picker narrows down to a single subject's exam to enter
+  // marks for. This keeps the pickers short even with many exams.
+  const startExam = App.state.selectedExamId && st.exams.find(e => e.id === App.state.selectedExamId)
+    ? st.exams.find(e => e.id === App.state.selectedExamId)
+    : [...st.exams].sort((a, b) => (b.year - a.year) || a.term.localeCompare(b.term))[0];
+
+  let picked = { klass: startExam.klass, type: startExam.type, term: startExam.term, year: String(startExam.year) };
+  let selectedId = startExam.id;
+
+  function distinctSorted(arr) { return [...new Set(arr)].sort(); }
+  function examsMatching(filter) {
+    return st.exams.filter(e =>
+      (filter.klass === undefined || e.klass === filter.klass) &&
+      (filter.type === undefined || e.type === filter.type) &&
+      (filter.term === undefined || e.term === filter.term) &&
+      (filter.year === undefined || String(e.year) === filter.year)
+    );
+  }
+
+  function renderPicker() {
+    const klasses = distinctSorted(st.exams.map(e => e.klass));
+    const types = distinctSorted(examsMatching({ klass: picked.klass }).map(e => e.type));
+    const terms = distinctSorted(examsMatching({ klass: picked.klass, type: picked.type }).map(e => e.term));
+    const years = distinctSorted(examsMatching({ klass: picked.klass, type: picked.type, term: picked.term }).map(e => String(e.year)));
+    const subjectExams = examsMatching(picked).sort((a, b) => subjectName(a.subjectId).localeCompare(subjectName(b.subjectId)));
+
+    return `
+      <div class="filter-row">
+        <select id="folderKlass">
+          ${klasses.map(k => `<option value="${UI.esc(k)}" ${k === picked.klass ? 'selected' : ''}>${UI.esc(k)}</option>`).join('')}
+        </select>
+        <select id="folderType">
+          ${types.map(t => `<option value="${UI.esc(t)}" ${t === picked.type ? 'selected' : ''}>${UI.esc(t)}</option>`).join('')}
+        </select>
+        <select id="folderTerm">
+          ${terms.map(t => `<option value="${UI.esc(t)}" ${t === picked.term ? 'selected' : ''}>${UI.esc(t)}</option>`).join('')}
+        </select>
+        <select id="folderYear">
+          ${years.map(y => `<option value="${UI.esc(y)}" ${y === picked.year ? 'selected' : ''}>${UI.esc(y)}</option>`).join('')}
+        </select>
+        <select id="examPicker">
+          ${subjectExams.map(e => `<option value="${e.id}" ${e.id === selectedId ? 'selected' : ''}>${UI.esc(subjectName(e.subjectId))}</option>`).join('')}
+        </select>
+      </div>
+      <p class="field-hint" style="margin-bottom:14px;">
+        Open the class, exam type, term and year for this sitting, then pick the subject to enter marks for.
+      </p>
+    `;
+  }
+
+  function wirePicker() {
+    const klassSel = document.getElementById('folderKlass');
+    const typeSel = document.getElementById('folderType');
+    const termSel = document.getElementById('folderTerm');
+    const yearSel = document.getElementById('folderYear');
+    const examSel = document.getElementById('examPicker');
+
+    klassSel.onchange = () => { picked = { klass: klassSel.value, type: undefined, term: undefined, year: undefined }; syncAndRepaint(); };
+    typeSel.onchange = () => { picked = { klass: picked.klass, type: typeSel.value, term: undefined, year: undefined }; syncAndRepaint(); };
+    termSel.onchange = () => { picked = { klass: picked.klass, type: picked.type, term: termSel.value, year: undefined }; syncAndRepaint(); };
+    yearSel.onchange = () => { picked = { klass: picked.klass, type: picked.type, term: picked.term, year: yearSel.value }; syncAndRepaint(); };
+    examSel.onchange = () => {
+      selectedId = examSel.value;
+      App.state.selectedExamId = selectedId;
+      paint(selectedId);
+    };
+
+    function syncAndRepaint() {
+      // Fill in any undefined lower levels with the first available option
+      // for the newly narrowed folder, then re-render the whole row.
+      const types = distinctSorted(examsMatching({ klass: picked.klass }).map(e => e.type));
+      if (picked.type === undefined) picked.type = types[0];
+      const terms = distinctSorted(examsMatching({ klass: picked.klass, type: picked.type }).map(e => e.term));
+      if (picked.term === undefined) picked.term = terms[0];
+      const years = distinctSorted(examsMatching({ klass: picked.klass, type: picked.type, term: picked.term }).map(e => String(e.year)));
+      if (picked.year === undefined) picked.year = years[0];
+      const subjectExams = examsMatching(picked);
+      selectedId = subjectExams[0]?.id;
+      App.state.selectedExamId = selectedId;
+
+      const filterRow = document.querySelector('.filter-row');
+      const hint = filterRow.nextElementSibling;
+      filterRow.outerHTML = renderPicker();
+      // renderPicker() also re-adds its own hint paragraph, so drop the
+      // now-duplicated old one.
+      if (hint && hint.classList.contains('field-hint')) hint.remove();
+      wirePicker();
+      if (selectedId) paint(selectedId);
+    }
+  }
+
+  // A sitting (class/type/term/year) that has been published is locked
+  // for editing everywhere — marks entry, total marks — until an admin
+  // unpublishes it from the Analysis page. Prevents a teacher quietly
+  // changing marks parents have already been shown.
+  function isLocked(exam) {
+    return !!(st.published || []).find(p => p.klass === exam.klass && p.type === exam.type && p.term === exam.term && String(p.year) === String(exam.year));
+  }
+
+  function renderTotalMarksBar(examId) {
+    const exam = st.exams.find(e => e.id === examId);
+    const locked = isLocked(exam);
+    return `
+      ${locked ? `<div class="card" style="margin-bottom:16px; border-color:var(--warn, #c77b1a);"><strong><i class="fa-solid fa-lock"></i> This sitting is published and locked.</strong> <span class="field-hint" style="margin:0;">Marks can't be changed while results are published — unpublish this sitting from the Analysis page first if you need to correct something.</span></div>` : ''}
+      <div class="card total-marks-bar">
+        <div class="total-marks-icon"><i class="fa-solid fa-clipboard-check"></i></div>
+        <div class="field" style="margin:0;">
+          <label>Total marks for this subject (out of)</label>
+          <input type="number" min="1" id="totalMarksInput" class="mark-input" style="width:100px;" value="${exam.totalMarks}" ${locked ? 'disabled' : ''}>
+        </div>
+        <p class="field-hint" style="margin:0; flex:1; min-width:220px;">
+          Set this to whatever this paper was marked out of — the system converts every mark
+          entered below into a percentage and performance level automatically.
+        </p>
+      </div>
+    `;
+  }
+
+  // Looks up locally from the results we already fetched — no network
+  // call needed per row, keeps the grid fast to render.
+  function findResult(examId, studentId) {
+    return st.results.find(r => r.examId === examId && r.studentId === studentId) || null;
+  }
+
+  function renderGrid(examId) {
+    const exam = st.exams.find(e => e.id === examId);
+    const locked = isLocked(exam);
+    const students = st.students.filter(s => s.klass === exam.klass).sort(admissionNoCompare);
+    if (students.length === 0) {
+      return `<div class="empty"><div class="empty-title">No students in ${UI.esc(exam.klass)}</div><p>Add students to this class first.</p></div>`;
+    }
+    return `
+      <div class="ledger">
+        <div class="ledger-scroll">
+          <table class="ledger-table">
+            <thead><tr><th>#</th><th>Name</th><th>ADM NO.</th><th style="text-align:center;">Marks (/${exam.totalMarks})</th><th style="text-align:center;">Level</th></tr></thead>
+            <tbody>
+              ${students.map((s, i) => {
+                const res = findResult(exam.id, s.id);
+                const marks = res ? res.marks : '';
+                const band = res ? Grading.levelForMarks(res.marks, exam.totalMarks, st.settings.gradingBands) : null;
+                return `<tr>
+                  <td class="row-index">${i + 1}</td>
+                  <td>${UI.esc(s.name)}</td>
+                  <td class="num">${UI.esc(s.admissionNo) || '—'}</td>
+                  <td style="text-align:center;"><input type="number" class="mark-input${marks !== '' ? ' filled' : ''}" min="0" max="${exam.totalMarks}" data-student="${s.id}" value="${marks}" placeholder="—" ${locked ? 'disabled' : ''}></td>
+                  <td class="levelCell" data-level-for="${s.id}">${UI.badge(band)}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  function wireGrid(examId) {
+    const exam = st.exams.find(e => e.id === examId);
+    if (isLocked(exam)) return; // locked — inputs are disabled, nothing to wire
+    document.querySelectorAll('.mark-input[data-student]').forEach(input => {
+      input.addEventListener('change', () => {
+        let v = input.value;
+        if (v !== '') {
+          v = Math.max(0, Math.min(Number(exam.totalMarks), Number(v)));
+          input.value = v;
+        }
+        input.classList.toggle('filled', v !== '');
+        const studentId = input.dataset.student;
+
+        // Remember exactly what was here before, so a failed save can
+        // be rolled back — both the in-memory st.results (which other
+        // screens read from) and what's drawn on screen. Without this,
+        // a save that's rejected (e.g. a teacher no longer assigned to
+        // this subject/class — see teacher_subject_classes) still LOOKS
+        // like it worked: the input stays filled and graded even though
+        // nothing was actually written, and the mark quietly vanishes
+        // next time this page loads.
+        const existingIdx = st.results.findIndex(r => r.examId === exam.id && r.studentId === studentId);
+        const previous = existingIdx !== -1 ? { ...st.results[existingIdx] } : null;
+
+        // Optimistic UI: show the new badge immediately from the value
+        // just typed, and update our local cache — don't wait on the
+        // network round-trip, so rapid entry across many rows stays
+        // smooth. Rolled back below if the save actually fails.
+        const band = v === '' ? null : Grading.levelForMarks(v, exam.totalMarks, st.settings.gradingBands);
+        document.querySelector(`[data-level-for="${studentId}"]`).innerHTML = UI.badge(band);
+        if (v === '') {
+          if (existingIdx !== -1) st.results.splice(existingIdx, 1);
+        } else if (existingIdx !== -1) {
+          st.results[existingIdx].marks = Number(v);
+        } else {
+          st.results.push({ id: 'pending', examId: exam.id, studentId, marks: Number(v) });
+        }
+
+        Store.setResult(exam.id, studentId, v === '' ? '' : v).catch(err => {
+          // Roll back the optimistic change so the screen matches what's
+          // actually saved, then explain why — this is almost always
+          // either the exam being locked/published, or (for a teacher
+          // login) no longer being assigned this subject for this class
+          // under "Manage subjects" on the Users page.
+          const idx = st.results.findIndex(r => r.examId === exam.id && r.studentId === studentId);
+          if (idx !== -1) st.results.splice(idx, 1);
+          if (previous) st.results.push(previous);
+          const revertedMarks = previous ? previous.marks : '';
+          const revertedBand = previous ? Grading.levelForMarks(previous.marks, exam.totalMarks, st.settings.gradingBands) : null;
+          input.value = revertedMarks;
+          input.classList.toggle('filled', revertedMarks !== '');
+          const levelCell = document.querySelector(`[data-level-for="${studentId}"]`);
+          if (levelCell) levelCell.innerHTML = UI.badge(revertedBand);
+          UI.toast('Could not save that mark — it has NOT been recorded: ' + err.message);
+        });
+      });
+    });
+  }
+
+  function wireTotalMarksBar(examId) {
+    const input = document.getElementById('totalMarksInput');
+    const exam = st.exams.find(e => e.id === examId);
+    if (isLocked(exam)) return; // locked — input is disabled, nothing to wire
+    input.addEventListener('change', async () => {
+      const newTotal = Math.max(1, Number(input.value) || 100);
+      input.value = newTotal;
+      try {
+        await Store.updateExam(examId, { totalMarks: newTotal });
+        const exam = st.exams.find(e => e.id === examId);
+        exam.totalMarks = newTotal; // keep local cache in sync
+        UI.toast('Total marks updated — percentages recalculated');
+        paint(examId);
+      } catch (err) {
+        UI.toast('Could not update total marks: ' + err.message);
+      }
+    });
+  }
+
+  function paint(examId) {
+    document.getElementById('totalMarksBarWrap').innerHTML = renderTotalMarksBar(examId);
+    document.getElementById('gridWrap').innerHTML = renderGrid(examId);
+    wireTotalMarksBar(examId);
+    wireGrid(examId);
+  }
+
+  App.state.selectedExamId = selectedId;
+  document.getElementById('content').innerHTML = `
+    <div class="marks-entry">
+      ${renderPicker()}
+      <div id="totalMarksBarWrap">${renderTotalMarksBar(selectedId)}</div>
+      <p class="field-hint" style="margin-bottom:14px;">Marks save automatically as you type. Leave blank for a student who did not sit the exam.</p>
+      <div id="gridWrap">${renderGrid(selectedId)}</div>
+    </div>
+  `;
+
+  wirePicker();
+  wireTotalMarksBar(selectedId);
+  wireGrid(selectedId);
+};
+
+/* ------------------------- REPORTS ------------------------- */
+
+Views.reports = async function (mode) {
+  showLoading();
+  setTopbarActions('');
+  const st = await Store.current();
+  const user = Auth.currentUser();
+  // Teachers only ever see report data for classes assigned to them —
+  // a subject/class teacher's "own data" — never the whole school's.
+  // Admins (scope.isTeacher === false) are unrestricted, as before.
+  const scope = teacherScope(st, user);
+
+  if (st.students.length === 0) {
+    document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">No students yet</div><p>Add students to generate report cards.</p></div>`;
+    return;
+  }
+  if (scope.isTeacher && scope.classLabels.size === 0) {
+    document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">No classes assigned to you yet</div><p>Ask your administrator to assign your class(es) or subject(s) from the Users page.</p></div>`;
+    return;
+  }
+
+  const activeMode = (mode === 'exam' || mode === 'classes') ? mode : 'card';
+
+  const tabsHtml = `
+    <div class="filter-row no-print" style="margin-bottom:6px;">
+      <button class="btn ${activeMode === 'card' ? 'btn-primary' : ''}" id="tabCard">Student report card</button>
+      <button class="btn ${activeMode === 'exam' ? 'btn-primary' : ''}" id="tabExam">Single exam report</button>
+      <button class="btn ${activeMode === 'classes' ? 'btn-primary' : ''}" id="tabClasses">Class / stream performance</button>
+    </div>
+  `;
+
+  document.getElementById('content').innerHTML = `<div id="tabsWrap">${tabsHtml}</div><div id="modeWrap"></div>`;
+  document.getElementById('tabCard').onclick = () => Views.reports('card');
+  document.getElementById('tabExam').onclick = () => Views.reports('exam');
+  document.getElementById('tabClasses').onclick = () => Views.reports('classes');
+
+  if (activeMode === 'exam') { renderSingleExamReport(st, scope); return; }
+  if (activeMode === 'classes') { renderClassPerformanceReport(st, scope); return; }
+  renderStudentReportCard(st, scope);
+};
+
+/* ---- Mode: merged term report card (Opener + Midterm + Endterm per subject) ---- */
+function renderStudentReportCard(st, scope) {
+  const classes = scope && scope.isTeacher ? [...scope.classLabels].sort() : classesFromStudents(st.students).filter(levelAllows);
+
+  const html = `
+    <div class="filter-row no-print">
+      <select id="classSel">
+        <option value="">Select class</option>
+        ${classes.map(c => `<option value="${UI.esc(c)}">${UI.esc(c)}</option>`).join('')}
+      </select>
+      <select id="studentSel"><option value="">Select student</option></select>
+      <select id="termSel">
+        ${['Term 1', 'Term 2', 'Term 3'].map(t => `<option value="${t}" ${st.settings.term === t ? 'selected' : ''}>${t}</option>`).join('')}
+      </select>
+      <input type="number" id="yearSel" value="${st.settings.year}" style="width:90px;">
+      <select id="examTypeSel" title="Choose one sitting for an independent report, or All for the merged term report card">
+        <option value="">All exam types (merged)</option>
+        ${Grading.examTypeNames(st).map(t => `<option value="${UI.esc(t)}">${UI.esc(t)} report</option>`).join('')}
+      </select>
+      <button class="btn" id="printAllBtn" disabled>Whole class — print all</button>
+      <button class="btn" id="downloadCsvBtn" disabled><i class="fa-solid fa-download"></i> Download CSV</button>
+      <button class="btn btn-brass" id="printBtn">Print / Save as PDF</button>
+      <button class="btn btn-brass" id="downloadPdfBtn" disabled><i class="fa-solid fa-file-pdf"></i> Download PDF</button>
+    </div>
+    <div id="reportWrap"></div>
+  `;
+  document.getElementById('modeWrap').innerHTML = html;
+
+  const classSel = document.getElementById('classSel');
+  const studentSel = document.getElementById('studentSel');
+  const termSel = document.getElementById('termSel');
+  const yearSel = document.getElementById('yearSel');
+  const examTypeSel = document.getElementById('examTypeSel');
+  const printAllBtn = document.getElementById('printAllBtn');
+  const downloadCsvBtn = document.getElementById('downloadCsvBtn');
+  const downloadPdfBtn = document.getElementById('downloadPdfBtn');
+
+  classSel.onchange = () => {
+    const klass = classSel.value;
+    const students = st.students.filter(s => s.klass === klass).sort((a, b) => a.name.localeCompare(b.name));
+    studentSel.innerHTML = `<option value="">Select student</option>` + students.map(s => `<option value="${s.id}">${UI.esc(s.name)}</option>`).join('');
+    printAllBtn.disabled = !klass;
+    downloadCsvBtn.disabled = !klass;
+    downloadPdfBtn.disabled = true; // re-enabled once a report card is actually on screen (single or whole-class)
+    document.getElementById('reportWrap').innerHTML = '';
+  };
+
+  [studentSel, termSel, yearSel, examTypeSel].forEach(el => el.onchange = renderReport);
+
+  function renderReport() {
+    const studentId = studentSel.value;
+    if (!studentId) { document.getElementById('reportWrap').innerHTML = ''; downloadPdfBtn.disabled = true; return; }
+    const student = st.students.find(s => s.id === studentId);
+    const term = termSel.value;
+    const year = yearSel.value;
+    const examType = examTypeSel.value;
+    document.getElementById('reportWrap').innerHTML = buildReportCardHTML(st, student, term, year, examType);
+    downloadPdfBtn.disabled = false;
+    downloadPdfBtn.dataset.filename = `report-card-${student.name}-${term}-${year}`.replace(/\s+/g, '_');
+  }
+
+  printAllBtn.onclick = () => {
+    const klass = classSel.value;
+    if (!klass) { UI.toast('Select a class first'); return; }
+    const term = termSel.value;
+    const year = yearSel.value;
+    const examType = examTypeSel.value;
+    const students = st.students.filter(s => s.klass === klass).sort((a, b) => a.name.localeCompare(b.name));
+    if (students.length === 0) { UI.toast('No students in this class'); return; }
+    studentSel.value = '';
+    document.getElementById('reportWrap').innerHTML =
+      `<p class="field-hint no-print" style="margin-bottom:14px;">${students.length} report cards for ${UI.esc(klass)} — ${UI.esc(term)} ${UI.esc(year)}${examType ? ' · ' + UI.esc(examType) : ' · merged'}. Each prints on its own page.</p>` +
+      students.map(s => buildReportCardHTML(st, s, term, year, examType)).join('');
+    downloadPdfBtn.disabled = false;
+    downloadPdfBtn.dataset.filename = `report-cards-${klass}-${term}-${year}`.replace(/\s+/g, '_');
+  };
+
+  downloadPdfBtn.onclick = () => {
+    const cards = document.querySelectorAll('#reportWrap .report-card');
+    if (!cards.length) { UI.toast('Nothing to download yet.'); return; }
+    UI.downloadPDF(cards, downloadPdfBtn.dataset.filename || 'report-card', downloadPdfBtn);
+  };
+
+  downloadCsvBtn.onclick = () => {
+    const klass = classSel.value;
+    if (!klass) { UI.toast('Select a class first'); return; }
+    const term = termSel.value;
+    const year = yearSel.value;
+    const examType = examTypeSel.value;
+    const students = st.students.filter(s => s.klass === klass).sort((a, b) => a.name.localeCompare(b.name));
+    if (students.length === 0) { UI.toast('No students in this class'); return; }
+    const allTypeNames = Grading.examTypeNames(st);
+    const isSingle = !!examType;
+    const typesToShow = isSingle ? [examType] : allTypeNames;
+    const subjectNames = [...new Set(st.subjects.filter(s => st.exams.some(e => e.subjectId === s.id && e.klass === klass)).map(s => s.name))].sort();
+    const header = ['Name', 'Admission No.', 'Class', ...typesToShow.map(t => `${t} %`), isSingle ? 'Level' : 'Average %', isSingle ? '' : 'Level'].filter(Boolean);
+    const rows = students.map(s => {
+      const grid = Grading.buildStudentTermGrid(st, s.id, term, year);
+      const avg = isSingle
+        ? Grading.average(grid.map(r => (r.cells[examType] ? r.cells[examType].pct : null)).filter(v => v !== null))
+        : Grading.average(grid.map(r => r.average).filter(v => v !== null));
+      const band = avg === null ? Grading.MISSING_BAND : Grading.levelForMarks(avg, 100, st.settings.gradingBands);
+      const typeCols = typesToShow.map(t => {
+        const vals = grid.map(r => (r.cells[t] ? r.cells[t].pct : null)).filter(v => v !== null);
+        const a = Grading.average(vals);
+        return a === null ? '' : a.toFixed(1);
+      });
+      return [s.name, s.admissionNo || '', s.klass, ...typeCols, avg === null ? 'Z' : avg.toFixed(1), band.code];
+    });
+    UI.downloadCSV(`report-cards-${klass}-${term}-${year}`.replace(/\s+/g, '_'), header, rows);
+  };
+
+  document.getElementById('printBtn').onclick = () => window.print();
+}
+
+/* ---- Mode: single exam report — one specific sitting (class + type +
+   term + year + subject), independent of the merged term report card
+   above. Shows every student's mark, percentage, level and class
+   position for just that one exam. ---- */
+function renderSingleExamReport(st, scope) {
+  // (subject, class) must be an actual assigned pair — see the note in
+  // Views.results above about a subject id being shared across levels.
+  const examsInScope = (scope && scope.isTeacher
+    ? st.exams.filter(e => !!scope.subjectsByClass.get(e.klass)?.has(e.subjectId))
+    : st.exams
+  ).filter(e => levelAllows(e.klass));
+  if (examsInScope.length === 0) {
+    document.getElementById('modeWrap').innerHTML = `<div class="empty"><div class="empty-title">No exams yet</div><p>${scope && scope.isTeacher ? 'No assessments recorded yet for your subject(s).' : 'Create an exam first from the Exams page.'}</p></div>`;
+    return;
+  }
+
+  function subjectName(id) { return st.subjects.find(s => s.id === id)?.name || '—'; }
+  function distinctSorted(arr) { return [...new Set(arr)].sort(); }
+  function examsMatching(filter) {
+    return examsInScope.filter(e =>
+      (filter.klass === undefined || e.klass === filter.klass) &&
+      (filter.type === undefined || e.type === filter.type) &&
+      (filter.term === undefined || e.term === filter.term) &&
+      (filter.year === undefined || String(e.year) === filter.year)
+    );
+  }
+
+  const startExam = [...examsInScope].sort((a, b) => (b.year - a.year) || a.term.localeCompare(b.term))[0];
+  let picked = { klass: startExam.klass, type: startExam.type, term: startExam.term, year: String(startExam.year) };
+  let selectedId = startExam.id;
+
+  function renderPicker() {
+    const klasses = distinctSorted(examsInScope.map(e => e.klass));
+    const types = distinctSorted(examsMatching({ klass: picked.klass }).map(e => e.type));
+    const terms = distinctSorted(examsMatching({ klass: picked.klass, type: picked.type }).map(e => e.term));
+    const years = distinctSorted(examsMatching({ klass: picked.klass, type: picked.type, term: picked.term }).map(e => String(e.year)));
+    const subjectExams = examsMatching(picked).sort((a, b) => subjectName(a.subjectId).localeCompare(subjectName(b.subjectId)));
+
+    return `
+      <div class="filter-row no-print">
+        <select id="esKlass">${klasses.map(k => `<option value="${UI.esc(k)}" ${k === picked.klass ? 'selected' : ''}>${UI.esc(k)}</option>`).join('')}</select>
+        <select id="esType">${types.map(t => `<option value="${UI.esc(t)}" ${t === picked.type ? 'selected' : ''}>${UI.esc(t)}</option>`).join('')}</select>
+        <select id="esTerm">${terms.map(t => `<option value="${UI.esc(t)}" ${t === picked.term ? 'selected' : ''}>${UI.esc(t)}</option>`).join('')}</select>
+        <select id="esYear">${years.map(y => `<option value="${UI.esc(y)}" ${y === picked.year ? 'selected' : ''}>${UI.esc(y)}</option>`).join('')}</select>
+        <select id="esSubject">${subjectExams.map(e => `<option value="${e.id}" ${e.id === selectedId ? 'selected' : ''}>${UI.esc(subjectName(e.subjectId))}</option>`).join('')}</select>
+        <button class="btn" id="esCsvBtn"><i class="fa-solid fa-download"></i> Download CSV</button>
+        <button class="btn btn-brass" id="esPrintBtn">Print / Save as PDF</button>
+        <button class="btn btn-brass" id="esPdfBtn"><i class="fa-solid fa-file-pdf"></i> Download PDF</button>
+      </div>
+    `;
+  }
+
+  function buildExamReportHTML(examId) {
+    const exam = st.exams.find(e => e.id === examId);
+    if (!exam) return '';
+    const students = st.students.filter(s => s.klass === exam.klass).sort((a, b) => a.name.localeCompare(b.name));
+    const rows = students.map(s => {
+      const res = st.results.find(r => r.examId === exam.id && r.studentId === s.id) || null;
+      const pct = res ? Grading.percent(res.marks, exam.totalMarks) : null;
+      const band = res ? Grading.levelForMarks(res.marks, exam.totalMarks, st.settings.gradingBands) : null;
+      return { student: s, marks: res ? res.marks : null, pct, band };
+    });
+
+    // Rank by percentage, ties share a position
+    const ranked = [...rows].sort((a, b) => (b.pct ?? -1) - (a.pct ?? -1));
+    let rank = 0, lastPct = null, seen = 0;
+    const rankMap = new Map();
+    ranked.forEach(r => {
+      seen++;
+      if (r.pct === null) { rankMap.set(r.student.id, '—'); return; }
+      if (r.pct !== lastPct) { rank = seen; lastPct = r.pct; }
+      rankMap.set(r.student.id, rank);
+    });
+
+    const validPcts = rows.map(r => r.pct).filter(v => v !== null);
+    const meanPct = Grading.average(validPcts);
+    const highPct = validPcts.length ? Math.max(...validPcts) : null;
+    const lowPct = validPcts.length ? Math.min(...validPcts) : null;
+    const enteredCount = validPcts.length;
+
+    const examClassEntry = st.classes.find(c => c.label === exam.klass);
+    const examSection = gradeSection(examClassEntry ? examClassEntry.name : exam.klass);
+    const examTitleBandText = examSection ? examSection.title : 'Learner Report Card';
+
+    return `
+      <div class="report-card" id="esPrintArea">
+        ${buildReportMastheadHTML(st, examTitleBandText, 'Single Exam Report', exam.term, exam.year)}
+        <div class="report-meta-grid">
+          <div><span class="k">Class:</span>${UI.esc(exam.klass)}</div>
+          <div><span class="k">Subject:</span>${UI.esc(subjectName(exam.subjectId))}</div>
+          <div><span class="k">Out of:</span>${UI.esc(exam.totalMarks)}</div>
+          <div><span class="k">Entries:</span>${enteredCount} / ${students.length}</div>
+        </div>
+        <table class="ledger-table" style="width:100%;">
+          <thead><tr><th>Pos.</th><th>Name</th><th>Adm. No.</th><th>Marks</th><th>%</th><th>Level</th></tr></thead>
+          <tbody>
+            ${ranked.map(r => `<tr>
+              <td class="num">${rankMap.get(r.student.id)}</td>
+              <td>${UI.esc(r.student.name)}</td>
+              <td class="num">${UI.esc(r.student.admissionNo) || '—'}</td>
+              <td class="num">${r.marks === null ? '—' : `${r.marks}\u00A0/\u00A0${exam.totalMarks}`}</td>
+              <td class="num">${r.pct === null ? '—' : r.pct.toFixed(1) + '%'}</td>
+              <td>${UI.badge(r.band)}</td>
+            </tr>`).join('') || `<tr><td colspan="6" class="row-index">No students in this class.</td></tr>`}
+          </tbody>
+        </table>
+        <div class="report-footer">
+          <div>
+            <p class="stat-sub" style="margin:0 0 4px 0;"><strong>Subject mean:</strong> ${meanPct === null ? '—' : meanPct.toFixed(1) + '%'}</p>
+            <p class="stat-sub" style="margin:0 0 4px 0;"><strong>Highest:</strong> ${highPct === null ? '—' : highPct.toFixed(1) + '%'} &nbsp; <strong>Lowest:</strong> ${lowPct === null ? '—' : lowPct.toFixed(1) + '%'}</p>
+          </div>
+        </div>
+        <div class="report-footer">
+          <div class="signature-line">Subject Teacher</div>
+          <div class="signature-line">Head of Institution</div>
+        </div>
+        ${buildPrintFooterHTML()}
+      </div>
+    `;
+  }
+
+  function paint() {
+    document.getElementById('esReportWrap').innerHTML = buildExamReportHTML(selectedId);
+  }
+
+  function wirePicker() {
+    const klassSel = document.getElementById('esKlass');
+    const typeSel = document.getElementById('esType');
+    const termSel = document.getElementById('esTerm');
+    const yearSel = document.getElementById('esYear');
+    const subjectSel = document.getElementById('esSubject');
+    document.getElementById('esPrintBtn').onclick = () => window.print();
+    document.getElementById('esPdfBtn').onclick = (e) => {
+      const el = document.getElementById('esPrintArea');
+      if (!el) { UI.toast('Nothing to download yet.'); return; }
+      const exam = st.exams.find(x => x.id === selectedId);
+      const fname = exam ? `exam-report-${exam.klass}-${exam.type}-${exam.term}-${exam.year}`.replace(/\s+/g, '_') : 'exam-report';
+      UI.downloadPDF(el, fname, e.currentTarget);
+    };
+    document.getElementById('esCsvBtn').onclick = () => {
+      const exam = st.exams.find(e => e.id === selectedId);
+      if (!exam) return;
+      const students = st.students.filter(s => s.klass === exam.klass).sort((a, b) => a.name.localeCompare(b.name));
+      const header = ['Name', 'Admission No.', 'Marks', 'Out of', 'Percentage', 'Level'];
+      const rows = students.map(s => {
+        const res = st.results.find(r => r.examId === exam.id && r.studentId === s.id) || null;
+        const pct = res ? Grading.percent(res.marks, exam.totalMarks) : null;
+        const band = res ? Grading.levelForMarks(res.marks, exam.totalMarks, st.settings.gradingBands) : null;
+        return [s.name, s.admissionNo || '', res ? res.marks : '', exam.totalMarks, pct === null ? '' : pct.toFixed(1), band ? band.code : ''];
+      });
+      UI.downloadCSV(`exam-report-${exam.klass}-${exam.type}-${exam.term}-${exam.year}`.replace(/\s+/g, '_'), header, rows);
+    };
+
+    function syncAndRepaint() {
+      const types = distinctSorted(examsMatching({ klass: picked.klass }).map(e => e.type));
+      if (picked.type === undefined) picked.type = types[0];
+      const terms = distinctSorted(examsMatching({ klass: picked.klass, type: picked.type }).map(e => e.term));
+      if (picked.term === undefined) picked.term = terms[0];
+      const years = distinctSorted(examsMatching({ klass: picked.klass, type: picked.type, term: picked.term }).map(e => String(e.year)));
+      if (picked.year === undefined) picked.year = years[0];
+      selectedId = examsMatching(picked)[0]?.id;
+
+      document.getElementById('esPickerWrap').innerHTML = renderPicker();
+      wirePicker();
+      if (selectedId) paint();
+    }
+
+    klassSel.onchange = () => { picked = { klass: klassSel.value, type: undefined, term: undefined, year: undefined }; syncAndRepaint(); };
+    typeSel.onchange = () => { picked = { klass: picked.klass, type: typeSel.value, term: undefined, year: undefined }; syncAndRepaint(); };
+    termSel.onchange = () => { picked = { klass: picked.klass, type: picked.type, term: termSel.value, year: undefined }; syncAndRepaint(); };
+    yearSel.onchange = () => { picked = { klass: picked.klass, type: picked.type, term: picked.term, year: yearSel.value }; syncAndRepaint(); };
+    subjectSel.onchange = () => { selectedId = subjectSel.value; paint(); };
+  }
+
+  document.getElementById('modeWrap').innerHTML = `
+    <div id="esPickerWrap">${renderPicker()}</div>
+    <div id="esReportWrap"></div>
+  `;
+  wirePicker();
+  paint();
+}
+
+/* ---- Mode: class / stream performance — one row per class (which
+   already includes the stream, e.g. "Grade 7 East"), so admins and
+   teachers can compare how classes/streams stack up against each
+   other for a given term/year (and optionally one exam type). ---- */
+function renderClassPerformanceReport(st, scope) {
+  if (st.students.length === 0) {
+    document.getElementById('modeWrap').innerHTML = `<div class="empty"><div class="empty-title">No students yet</div><p>Add students to see class/stream performance here.</p></div>`;
+    return;
+  }
+
+  const classes = scope && scope.isTeacher ? [...scope.classLabels].sort() : classOptionLabels(st);
+  let picked = { term: st.settings.term, year: String(st.settings.year), type: '' };
+
+  function renderFilterRow() {
+    return `
+      <div class="filter-row no-print">
+        <select id="cpTerm">
+          ${['Term 1', 'Term 2', 'Term 3'].map(t => `<option value="${t}" ${picked.term === t ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+        <input type="number" id="cpYear" value="${UI.esc(picked.year)}" style="width:90px;">
+        <select id="cpType">
+          <option value="" ${picked.type === '' ? 'selected' : ''}>All exam types</option>
+          ${st.examTypes.map(t => `<option value="${UI.esc(t.name)}" ${picked.type === t.name ? 'selected' : ''}>${UI.esc(t.name)}</option>`).join('')}
+        </select>
+        <button class="btn" id="cpCsvBtn"><i class="fa-solid fa-download"></i> Download CSV</button>
+        <button class="btn btn-brass" id="cpPrintBtn">Print / Save as PDF</button>
+        <button class="btn btn-brass" id="cpPdfBtn"><i class="fa-solid fa-file-pdf"></i> Download PDF</button>
+      </div>
+      <p class="field-hint no-print" style="margin-bottom:14px;">Compares every class/stream for the chosen term, year and (optionally) one exam type — leave "All exam types" selected for the whole term's picture.</p>
+    `;
+  }
+
+  function computeClassStats() {
+    const bands = st.settings.gradingBands || [];
+    return classes.map(klass => {
+      const studentsInClass = st.students.filter(s => s.klass === klass);
+      const examsForClass = st.exams.filter(e =>
+        e.klass === klass && e.term === picked.term && String(e.year) === picked.year &&
+        (picked.type === '' || e.type === picked.type)
+      );
+      const pcts = [];
+      examsForClass.forEach(exam => {
+        st.results.filter(r => r.examId === exam.id).forEach(r => pcts.push(Grading.percent(r.marks, exam.totalMarks)));
+      });
+      const avg = Grading.average(pcts);
+      const band = avg === null ? null : Grading.levelForMarks(avg, 100, bands);
+      const expected = examsForClass.length * studentsInClass.length;
+      const entered = examsForClass.reduce((sum, e) => sum + st.results.filter(r => r.examId === e.id).length, 0);
+      const bandCounts = {};
+      bands.forEach(b => { bandCounts[b.code] = 0; });
+      pcts.forEach(p => {
+        const b = Grading.levelForMarks(p, 100, bands);
+        if (b) bandCounts[b.code] = (bandCounts[b.code] || 0) + 1;
+      });
+      return {
+        klass, students: studentsInClass.length, examCount: examsForClass.length,
+        avg, band, high: pcts.length ? Math.max(...pcts) : null, low: pcts.length ? Math.min(...pcts) : null,
+        completion: expected > 0 ? (entered / expected) * 100 : null, bandCounts
+      };
+    });
+  }
+
+  function buildReportHTML() {
+    const bands = st.settings.gradingBands || [];
+    const stats = computeClassStats();
+    const ranked = [...stats].sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
+    const schoolMean = Grading.average(stats.map(c => c.avg).filter(v => v !== null));
+    const maxAvg = Math.max(1, ...stats.map(c => c.avg || 0));
+
+    return `
+      <div class="report-card" id="cpPrintArea">
+        ${buildReportMastheadHTML(st, `${activeLevelTitlePrefix()}Class / Stream Performance Report`, picked.type || 'All sittings', picked.term, picked.year)}
+        <div class="report-meta-grid">
+          <div><span class="k">Classes/streams:</span>${stats.length}</div>
+          <div><span class="k">School mean:</span>${schoolMean === null ? '—' : schoolMean.toFixed(1) + '%'}</div>
+        </div>
+        <table class="ledger-table" style="width:100%;">
+          <thead><tr>
+            <th>Rank</th><th>Class / Stream</th><th>Learners</th><th>Entries</th>
+            <th>Mean %</th><th>Highest %</th><th>Lowest %</th><th>Level</th>
+            <th style="min-width:140px;">Comparison</th>
+          </tr></thead>
+          <tbody>
+            ${ranked.map((c, i) => `<tr>
+              <td class="num">${c.avg === null ? '—' : i + 1}</td>
+              <td>${UI.esc(c.klass)}</td>
+              <td class="num">${c.students}</td>
+              <td class="num">${c.completion === null ? '—' : c.completion.toFixed(0) + '%'}</td>
+              <td class="num">${c.avg === null ? '—' : c.avg.toFixed(1) + '%'}</td>
+              <td class="num">${c.high === null ? '—' : c.high.toFixed(1) + '%'}</td>
+              <td class="num">${c.low === null ? '—' : c.low.toFixed(1) + '%'}</td>
+              <td>${UI.badge(c.band)}</td>
+              <td>
+                <div class="progress-track" style="margin:0;">
+                  <div class="progress-fill ${c.avg !== null && c.avg < 30 ? 'danger' : c.avg !== null && c.avg < 50 ? 'warning' : 'success'}" style="width:${c.avg !== null ? Math.max(4, (c.avg / maxAvg) * 100).toFixed(1) : 0}%;"></div>
+                </div>
+              </td>
+            </tr>`).join('') || `<tr><td colspan="9" class="row-index">No classes to compare yet.</td></tr>`}
+          </tbody>
+        </table>
+
+        <div class="section-title" style="margin-top:18px;">Performance level distribution per class</div>
+        <table class="ledger-table" style="width:100%;">
+          <thead><tr><th>Class / Stream</th>${bands.map(b => `<th>${UI.esc(b.code)}</th>`).join('')}</tr></thead>
+          <tbody>
+            ${ranked.map(c => `<tr>
+              <td>${UI.esc(c.klass)}</td>
+              ${bands.map(b => `<td class="num">${c.bandCounts[b.code] || 0}</td>`).join('')}
+            </tr>`).join('') || `<tr><td colspan="${bands.length + 1}" class="row-index">No data yet.</td></tr>`}
+          </tbody>
+        </table>
+
+        <div class="report-footer">
+          <div class="signature-line">Prepared by</div>
+          <div class="signature-line">Head of Institution</div>
+        </div>
+        ${buildPrintFooterHTML()}
+      </div>
+    `;
+  }
+
+  function wireFilters() {
+    document.getElementById('cpPrintBtn').onclick = () => window.print();
+    document.getElementById('cpPdfBtn').onclick = (e) => {
+      const el = document.getElementById('cpPrintArea');
+      if (!el) { UI.toast('Nothing to download yet.'); return; }
+      UI.downloadPDF(el, `class-performance-${picked.term}-${picked.year}`.replace(/\s+/g, '_'), e.currentTarget);
+    };
+    document.getElementById('cpCsvBtn').onclick = () => {
+      const stats = computeClassStats();
+      const header = ['Class', 'Students', 'Exams', 'Average %', 'Level', 'High %', 'Low %', 'Marks entered %'];
+      const rows = stats.map(c => [c.klass, c.students, c.examCount, c.avg === null ? '' : c.avg.toFixed(1), c.band ? c.band.code : '', c.high === null ? '' : c.high.toFixed(1), c.low === null ? '' : c.low.toFixed(1), c.completion === null ? '' : c.completion.toFixed(0)]);
+      UI.downloadCSV(`class-performance-${picked.term}-${picked.year}`.replace(/\s+/g, '_'), header, rows);
+    };
+    document.getElementById('cpTerm').onchange = (e) => { picked.term = e.target.value; paint(); };
+    document.getElementById('cpYear').onchange = (e) => { picked.year = e.target.value; paint(); };
+    document.getElementById('cpType').onchange = (e) => { picked.type = e.target.value; paint(); };
+  }
+
+  function paint() {
+    document.getElementById('cpReportWrap').innerHTML = buildReportHTML();
+    document.getElementById('cpPrintBtn').onclick = () => window.print();
+    document.getElementById('cpPdfBtn').onclick = (e) => {
+      const el = document.getElementById('cpPrintArea');
+      if (!el) { UI.toast('Nothing to download yet.'); return; }
+      UI.downloadPDF(el, `class-performance-${picked.term}-${picked.year}`.replace(/\s+/g, '_'), e.currentTarget);
+    };
+  }
+
+  document.getElementById('modeWrap').innerHTML = `
+    <div id="cpFilterWrap">${renderFilterRow()}</div>
+    <div id="cpReportWrap"></div>
+  `;
+  wireFilters();
+  paint();
+}
+
+/* ------------------------- SETTINGS ------------------------- */
+
+function renderExamTypeRows(examTypes) {
+  if (examTypes.length === 0) {
+    return `<tr><td colspan="4" class="row-index">No exam types yet — add one below (e.g. Opener).</td></tr>`;
+  }
+  return [...examTypes].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)).map((t, i) => `
+    <tr>
+      <td class="row-index">${i + 1}</td>
+      <td><input type="text" data-et-name="${t.id}" value="${UI.esc(t.name)}"></td>
+      <td><input type="number" class="mark-input" style="width:70px;" data-et-order="${t.id}" value="${t.sortOrder}"></td>
+      <td>
+        <button class="btn btn-sm btn-ghost" data-et-save="${t.id}">Save</button>
+        <button class="btn btn-sm btn-danger" data-et-del="${t.id}">Delete</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+Views.settings = async function () {
+  showLoading();
+  setTopbarActions('');
+  const st = await Store.current();
+  const user = Auth.currentUser();
+
+  function renderBandsRows(bands) {
+    if (!bands.length) {
+      return `<tr><td colspan="6" class="row-index">No grading bands yet — add one below.</td></tr>`;
+    }
+    return bands.map(b => `
+      <tr>
+        <td><input type="text" class="mark-input band-code" style="width:60px;" value="${UI.esc(b.code)}"></td>
+        <td><input type="text" class="band-label" style="width:220px;" value="${UI.esc(b.label)}"></td>
+        <td><input type="number" class="mark-input band-min" value="${b.min}"></td>
+        <td><input type="number" class="mark-input band-max" value="${b.max}"></td>
+        <td><input type="number" class="mark-input band-points" style="width:70px;" value="${b.points ?? ''}" placeholder="auto"></td>
+        <td><button type="button" class="btn btn-sm btn-danger band-remove" title="Remove this band">&times;</button></td>
+      </tr>
+    `).join('');
+  }
+
+  document.getElementById('content').innerHTML = `
+    <div class="section-block">
+      <h2 class="section-title">School details</h2>
+      <div class="card">
+        <div class="form-grid">
+          <div class="field full">
+            <label>School name</label>
+            <input type="text" id="s_name" value="${UI.esc(st.settings.schoolName)}">
+          </div>
+          <div class="field full">
+            <label>School code</label>
+            <input type="text" id="s_code" value="${UI.esc(st.settings.schoolCode || '')}" placeholder="e.g. NEMIS/Ministry code, or your own">
+            <p class="field-hint">Printed alongside the school name on every report card, broadsheet and other printable page.</p>
+          </div>
+          <div class="field full">
+            <label>Motto (optional)</label>
+            <input type="text" id="s_motto" value="${UI.esc(st.settings.motto)}">
+          </div>
+          <div class="field full">
+            <label>Head of Institution</label>
+            <input type="text" id="s_head" value="${UI.esc(st.settings.headName)}" placeholder="e.g. Mr. John Otieno">
+            <p class="field-hint">Printed automatically at the bottom of every report card.</p>
+          </div>
+          <div class="field">
+            <label>Current term</label>
+            <select id="s_term">
+              ${['Term 1', 'Term 2', 'Term 3'].map(t => `<option value="${t}" ${st.settings.term === t ? 'selected' : ''}>${t}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field">
+            <label>Current year</label>
+            <input type="number" id="s_year" value="${st.settings.year}">
+          </div>
+        </div>
+        <div class="modal-actions" style="border-top:none; margin-top:16px;">
+          <button class="btn btn-primary" id="saveSchool">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-block">
+      <h2 class="section-title">Exam types</h2>
+      <p class="field-hint" style="margin-bottom:12px;">The sittings your school records marks for (e.g. Opener, Midterm, Endterm — or your own names). These are the only options offered when creating an exam.</p>
+      <div class="ledger">
+        <div class="ledger-scroll">
+          <table class="ledger-table">
+            <thead><tr><th>#</th><th>Name</th><th>Order</th><th></th></tr></thead>
+            <tbody id="examTypesBody">${renderExamTypeRows(st.examTypes)}</tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-actions" style="border-top:none; margin-top:16px; justify-content:flex-start; gap:10px;">
+        <input type="text" id="newExamTypeName" placeholder="e.g. CAT 1" style="max-width:220px;">
+        <button class="btn btn-primary" id="addExamTypeBtn">+ Add exam type</button>
+      </div>
+    </div>
+
+    <div class="section-block">
+      <h2 class="section-title">Grading bands (performance levels)</h2>
+      <p class="field-hint" style="margin-bottom:12px;">Percentage ranges used to assign a performance level to each mark. Default follows the CBC 4-level scale — adjust as needed. "Points" is optional: set your own points scale (e.g. 1-4, or a KCSE-style 1-12) to show alongside % and Level on report cards and the broadsheet — leave it blank to have points assigned automatically by rank.</p>
+      <div class="ledger">
+        <div class="ledger-scroll">
+          <table class="ledger-table">
+            <thead><tr><th>Code</th><th>Label</th><th>Min %</th><th>Max %</th><th>Points</th><th></th></tr></thead>
+            <tbody id="bandsBody">${renderBandsRows(st.settings.gradingBands)}</tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-actions" style="border-top:none; margin-top:16px; justify-content:flex-start; gap:10px;">
+        <button class="btn" type="button" id="addBandBtn">+ Add band</button>
+        <button class="btn btn-primary" id="saveBands">Save grading bands</button>
+      </div>
+    </div>
+
+    <div class="section-block">
+      <h2 class="section-title">My profile</h2>
+      <div class="card">
+        <div class="form-grid" style="row-gap:14px;">
+          <div class="field full">
+            <label>Name</label>
+            <p style="margin:0;">${UI.esc(user.name)}</p>
+          </div>
+          <div class="field full">
+            <label>Role</label>
+            <p style="margin:0;"><span class="badge badge-${user.role === 'admin' || user.role === 'superadmin' ? 'ME' : 'EE'}">${UI.esc(user.role)}</span></p>
+          </div>
+          <div class="field full">
+            <label>School</label>
+            <p style="margin:0;">${UI.esc(st.settings.schoolName || '—')}</p>
+          </div>
+          ${user.role === 'user' ? `
+          <div class="field full">
+            <label>Assigned subjects, per class</label>
+            <p style="margin:0;">${(() => {
+              const scope = teacherScope(st, user);
+              const lines = [...scope.subjectsByClass.entries()]
+                .map(([klass, subjectIds]) => `${klass}: ${[...subjectIds].map(id => st.subjects.find(s => s.id === id)?.name).filter(Boolean).sort().join(', ')}`)
+                .sort();
+              return lines.length ? UI.esc(lines.join(' • ')) : 'None assigned';
+            })()}</p>
+          </div>
+          <div class="field full">
+            <label>Class teacher (homeroom) for</label>
+            <p style="margin:0;">${(() => { const labels = st.classes.filter(c => c.classTeacherId === user.id).map(c => c.label); return labels.length ? UI.esc(labels.join(', ')) : 'None — not a class teacher for any class'; })()}</p>
+          </div>` : ''}
+        </div>
+      </div>
+    </div>
+
+    <div class="section-block">
+      <h2 class="section-title">My account</h2>
+      <div class="card">
+        <p class="stat-sub" style="margin-bottom:14px;">Logged in as <strong>${UI.esc(user.name)}</strong> (${UI.esc(user.role)})</p>
+        <div class="form-grid">
+          <div class="field">
+            <label>New password</label>
+            <input type="password" id="acc_pw" placeholder="Leave blank to keep current password">
+          </div>
+        </div>
+        <div class="modal-actions" style="border-top:none; margin-top:16px; justify-content:flex-start;">
+          <button class="btn btn-primary" id="saveAccount">Update password</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-block">
+      <h2 class="section-title">Data</h2>
+      <div class="card">
+        <p class="stat-sub" style="margin-bottom:14px;">
+          This school's data lives in the shared database, so it's already backed up server-side.
+          Use this to download a personal copy of everything for this school.
+        </p>
+        <button class="btn" id="exportBtn">Export backup (.json)</button>
+      </div>
+    </div>
+  `;
+
+  function wireExamTypeRows() {
+    document.querySelectorAll('[data-et-save]').forEach(btn => {
+      btn.onclick = async () => {
+        const id = btn.dataset.etSave;
+        const name = document.querySelector(`[data-et-name="${id}"]`).value.trim();
+        const sortOrder = Number(document.querySelector(`[data-et-order="${id}"]`).value) || 0;
+        if (!name) { UI.toast('Exam type name is required'); return; }
+        try {
+          await Store.updateExamType(id, { name, sortOrder });
+          UI.toast('Exam type updated');
+          Views.settings();
+        } catch (err) {
+          UI.toast('Could not save: ' + err.message);
+        }
+      };
+    });
+    document.querySelectorAll('[data-et-del]').forEach(btn => {
+      btn.onclick = () => {
+        UI.confirmAction('Delete this exam type? Exams already created with it are unaffected, but it will no longer appear when creating new exams.', async () => {
+          try {
+            await Store.deleteExamType(btn.dataset.etDel);
+            UI.toast('Exam type deleted');
+            Views.settings();
+          } catch (err) {
+            UI.toast('Could not delete: ' + err.message);
+          }
+        });
+      };
+    });
+  }
+  wireExamTypeRows();
+
+  document.getElementById('addExamTypeBtn').onclick = async () => {
+    const input = document.getElementById('newExamTypeName');
+    const name = input.value.trim();
+    if (!name) { UI.toast('Enter a name for the exam type'); return; }
+    try {
+      await Store.addExamType({ name, sortOrder: st.examTypes.length });
+      UI.toast('Exam type added');
+      Views.settings();
+    } catch (err) {
+      UI.toast('Could not add exam type: ' + err.message);
+    }
+  };
+
+  document.getElementById('saveAccount').onclick = async () => {
+    const pw = document.getElementById('acc_pw').value;
+    if (!pw) { UI.toast('Enter a new password first'); return; }
+    if (pw.length < 6) { UI.toast('Password must be at least 6 characters'); return; }
+    const result = await Auth.updateOwnPassword(pw);
+    if (!result.ok) { UI.toast('Could not update password: ' + result.error); return; }
+    document.getElementById('acc_pw').value = '';
+    UI.toast('Password updated');
+  };
+
+  document.getElementById('saveSchool').onclick = async () => {
+    try {
+      await Store.updateSettings({
+        schoolName: document.getElementById('s_name').value.trim() || 'Your School Name',
+        schoolCode: document.getElementById('s_code').value.trim(),
+        motto: document.getElementById('s_motto').value.trim(),
+        headName: document.getElementById('s_head').value.trim(),
+        term: document.getElementById('s_term').value,
+        year: Number(document.getElementById('s_year').value)
+      });
+      UI.toast('School details saved');
+      App.renderShell();
+    } catch (err) {
+      UI.toast('Could not save: ' + err.message);
+    }
+  };
+
+  function wireBandRowActions() {
+    document.querySelectorAll('.band-remove').forEach(btn => {
+      btn.onclick = () => {
+        const row = btn.closest('tr');
+        row.remove();
+        if (!document.querySelectorAll('#bandsBody tr').length) {
+          document.getElementById('bandsBody').innerHTML = renderBandsRows([]);
+        }
+      };
+    });
+  }
+  wireBandRowActions();
+
+  document.getElementById('addBandBtn').onclick = () => {
+    const emptyRow = document.getElementById('bandsBody').querySelector('td[colspan]');
+    if (emptyRow) document.getElementById('bandsBody').innerHTML = '';
+    document.getElementById('bandsBody').insertAdjacentHTML('beforeend', renderBandsRows([{ code: '', label: '', min: 0, max: 0, points: '' }]));
+    wireBandRowActions();
+  };
+
+  document.getElementById('saveBands').onclick = async () => {
+    const rows = document.querySelectorAll('#bandsBody tr');
+    const bands = Array.from(rows)
+      .filter(row => row.querySelector('.band-code')) // skip the "no bands yet" placeholder row
+      .map(row => {
+        const pointsRaw = row.querySelector('.band-points').value.trim();
+        return {
+          code: row.querySelector('.band-code').value.trim().toUpperCase(),
+          label: row.querySelector('.band-label').value.trim(),
+          min: Number(row.querySelector('.band-min').value),
+          max: Number(row.querySelector('.band-max').value),
+          points: pointsRaw === '' ? null : Number(pointsRaw)
+        };
+      });
+    if (bands.some(b => !b.code || !b.label)) { UI.toast('Every band needs a code and a label'); return; }
+    try {
+      await Store.setGradingBands(bands);
+      UI.toast('Grading bands saved');
+    } catch (err) {
+      UI.toast('Could not save: ' + err.message);
+    }
+  };
+
+  document.getElementById('exportBtn').onclick = async () => {
+    const json = await Store.exportSchoolJSON();
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cbe-exam-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Same fix as UI.downloadCSV: don't revoke the object URL until
+    // the click-triggered download has had a chance to actually start.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+};

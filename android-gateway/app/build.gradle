@@ -1,0 +1,50 @@
+// Copyright (c) 2026 B~CBE Analytics. All rights reserved.
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace "com.bcbe.smsgateway"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.bcbe.smsgateway"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+    buildFeatures {
+        viewBinding true
+    }
+}
+
+dependencies {
+    implementation "androidx.core:core-ktx:1.13.1"
+    implementation "androidx.appcompat:appcompat:1.7.0"
+    implementation "com.google.android.material:material:1.12.0"
+    implementation "androidx.constraintlayout:constraintlayout:2.1.4"
+    // EncryptedSharedPreferences — the device token never sits in plain
+    // SharedPreferences on disk (12. Device Security).
+    implementation "androidx.security:security-crypto:1.1.0-alpha06"
+    // Periodic safety-net poll (survives the OS killing the foreground
+    // service) on top of the main foreground-service loop.
+    implementation "androidx.work:work-runtime-ktx:2.9.1"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"
+}
