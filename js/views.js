@@ -476,7 +476,19 @@ function subjectsForKlass(st, klassLabel) {
   if (!klassLabel) return st.subjects;
   const section = sectionForKlassLabel(st, klassLabel);
   if (!section) return st.subjects;
-  return st.subjects.filter(s => sectionCovers(s.section || '', section.key));
+
+  // New subjects are strictly band-specific. However, an existing exam is
+  // authoritative: if a class already has an exam pointing at a legacy or
+  // shared subject, that subject MUST remain selectable for the class.
+  // Otherwise the independent-subject filter can hide the very subject that
+  // owns the saved marks, making those marks appear to have disappeared.
+  const usedByThisClass = new Set(
+    st.exams.filter(e => e.klass === klassLabel).map(e => e.subjectId)
+  );
+
+  return st.subjects.filter(s =>
+    sectionCovers(s.section || '', section.key) || usedByThisClass.has(s.id)
+  );
 }
 
 // Shared by the teacher-facing screens (My Classes, Learners,
@@ -1346,8 +1358,29 @@ Views.subjects = async function () {
 
   function renderTable(filterSection) {
     let rows = [...st.subjects].sort((a, b) => a.name.localeCompare(b.name));
-    if (filterSection === 'shared') rows = rows.filter(s => !(s.section || ''));
-    else if (filterSection) rows = rows.filter(s => sectionCovers(filterSection, s.section || '') && (s.section || ''));
+
+    // IMPORTANT: subjects are now independent by band, but older exams may
+    // still point at a legacy/shared/Primary subject record. Never hide such
+    // a subject from the band where it already has exams/results — doing so
+    // makes the subject look as if its marks disappeared even though the
+    // exam/results rows are still safely stored under the old subject id.
+    // We therefore show legacy subjects that are actually used by an exam in
+    // the selected band, without changing their database section.
+    const usedSubjectIdsInBand = filterSection && filterSection !== 'shared'
+      ? new Set(st.exams.filter(e => {
+          const band = sectionForKlassLabel(st, e.klass);
+          return band && band.key === filterSection;
+        }).map(e => e.subjectId))
+      : new Set();
+
+    if (filterSection === 'shared') {
+      rows = rows.filter(s => !(s.section || ''));
+    } else if (filterSection) {
+      rows = rows.filter(s => {
+        const section = s.section || '';
+        return section === filterSection || usedSubjectIdsInBand.has(s.id);
+      });
+    }
     if (st.subjects.length === 0) {
       return `<div class="empty"><div class="empty-title">No subjects yet</div><p>Add subjects like Mathematics, English, Integrated Science.</p></div>`;
     }
@@ -1466,24 +1499,22 @@ Views.subjects = async function () {
         if (!name) { UI.toast('Subject name is required'); return; }
         if (!code) code = suggestCode(name);
 
-        // A NEW subject that shares a name (case/space-insensitive) with
-        // one that already exists at an overlapping level creates a
-        // second, unrelated subject row with the same display name.
-        // Nothing downstream treats those two rows as "the same
-        // subject" — an exam and marks recorded against the new row
-        // never show up next to the old row's exams/marks on the
-        // Broadsheet, Report Cards, Marks Analysis, etc. From the
-        // admin's side that reads exactly like "marks aren't saving",
-        // when really they saved fine, just onto a different subject
-        // record than the one already in use. Catch it here, before
-        // the duplicate is created, rather than relying solely on
-        // "Merge duplicates" to clean it up afterward.
-        const dupe = !isEdit && st.subjects.find(s =>
-          s.name.trim().toLowerCase() === name.toLowerCase() && sectionsOverlap(s.section || '', section)
-        );
+        // Same subject names are EXPECTED across independent bands. For
+        // example, Mathematics in Lower Primary and Mathematics in Upper
+        // Primary are deliberately different subject records. Only warn
+        // when the same name is being created in the SAME section (or when
+        // an old unscoped/shared subject already occupies that exact name).
+        // This prevents the independent-subject feature from encouraging
+        // admins to merge subjects that are supposed to remain separate.
+        const normalizedName = name.toLowerCase().replace(/\s+/g, ' ').trim();
+        const dupe = !isEdit && st.subjects.find(s => {
+          const existingName = (s.name || '').toLowerCase().replace(/\s+/g, ' ').trim();
+          const existingSection = s.section || '';
+          return existingName === normalizedName && existingSection === section;
+        });
         if (dupe) {
           UI.confirmAction(
-            `A subject named "${dupe.name}" (${sectionLabel(dupe.section || '')}) already exists. Creating another one with the same name will NOT combine with it — exams and marks entered under the new subject won't show up next to the existing one's. Use the existing subject instead, or continue only if you really mean to create a separate record (you can merge them later from "Merge duplicates").`,
+            `A subject named "${dupe.name}" already exists for ${sectionLabel(section)}. Creating another one would create duplicate exams/marks for the same level. Use the existing subject, or continue only if you intentionally need a separate record.`,
             () => saveSubject(),
             { confirmLabel: 'Create anyway', confirmClass: 'btn-danger' }
           );
