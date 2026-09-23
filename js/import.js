@@ -360,13 +360,19 @@ const Importer = {
         const confirmBtn = root.querySelector('#confirmMarksBtn');
         confirmBtn.disabled = true;
         confirmBtn.textContent = 'Importing…';
-        let ok = 0, failed = 0;
+        let ok = 0, failed = 0, lastErr = null;
         for (const r of valid) {
           try { await Store.setResult(exam.id, r.studentId, r.marks); ok++; }
-          catch (e) { failed++; }
+          catch (e) {
+            failed++; lastErr = e;
+            Store.logClientError('save_result', { examId: exam.id, studentId: r.studentId, klass: exam.klass, subjectId: exam.subjectId }, e);
+          }
         }
         UI.closeModal();
         UI.toast(`Imported ${ok} mark${ok === 1 ? '' : 's'}${failed ? `, ${failed} failed` : ''}`);
+        if (failed && lastErr) {
+          UI.showErrorDetails(`${failed} imported mark${failed === 1 ? '' : 's'} not saved`, lastErr, ['This has been logged for every failed row — see Settings \u2192 Diagnostics for the full list.']);
+        }
         if (onImported) onImported(ok);
       };
     });

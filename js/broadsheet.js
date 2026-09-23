@@ -901,8 +901,8 @@ Views.broadsheet = async function () {
       saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving…';
       const entries = [...pending.entries()];
       const results = await Promise.allSettled(entries.map(([, p]) => Store.setResult(p.examId, p.studentId, p.marks)));
-      const failed = [];
-      results.forEach((res, i) => { if (res.status === 'rejected') failed.push(entries[i]); });
+      const failed = []; // [key, pending, error]
+      results.forEach((res, i) => { if (res.status === 'rejected') failed.push([...entries[i], res.reason]); });
       if (failed.length === 0) {
         UI.toast('Broadsheet marks saved successfully.');
         pending.clear();
@@ -911,7 +911,21 @@ Views.broadsheet = async function () {
         st = await Store.current();
         render();
       } else {
+        failed.forEach(([, p, err]) => {
+          const exam = st.exams.find(e => e.id === p.examId);
+          const subj = exam ? st.subjects.find(s => s.id === exam.subjectId) : null;
+          const student = st.students.find(s => s.id === p.studentId);
+          Store.logClientError('save_result', {
+            examId: p.examId, studentId: p.studentId, klass: exam?.klass, subjectId: exam?.subjectId,
+            subjectName: subj?.name || '', studentName: student?.name || ''
+          }, err);
+        });
         UI.toast(`Unable to save ${failed.length} mark${failed.length === 1 ? '' : 's'}. Please try again.`);
+        UI.showErrorDetails(
+          `${failed.length} mark${failed.length === 1 ? '' : 's'} not saved`,
+          failed[0][2],
+          ['This has been logged for every failed cell — see Settings \u2192 Diagnostics for the full list.']
+        );
         failed.forEach(([key, p]) => pending.set(key, p));
         saveBtn.disabled = false;
         saveBtn.innerHTML = prevLabel;

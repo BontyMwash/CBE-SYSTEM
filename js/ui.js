@@ -743,6 +743,54 @@ const UI = {
     });
   },
 
+  // Persistent, copyable "why did this fail" modal — used wherever a
+  // save failure is important enough that a 2.6s toast isn't enough
+  // to actually read/report it (Marks Entry in particular). `guesses`
+  // is an array of plain-language possible causes computed from
+  // whatever the caller already knows about app state (exam locked?
+  // teacher not assigned?) — shown above the raw database error so a
+  // non-technical admin sees the likely fix first, with the exact
+  // error underneath for anyone who needs to report it further.
+  showErrorDetails(title, err, guesses) {
+    const code = (err && err.code) || '';
+    const message = (err && err.message) || String(err || 'Unknown error');
+    const details = (err && err.details) || '';
+    const hint = (err && err.hint) || '';
+    const guessHtml = (guesses && guesses.length)
+      ? `<div class="field-hint" style="background:var(--warn-bg, #fff3cd); border:1px solid var(--warn-border, #ffe69c); border-radius:6px; padding:10px 12px; margin-bottom:12px;">
+           <strong>Likely reason:</strong>
+           <ul style="margin:6px 0 0 18px; padding:0;">${guesses.map(g => `<li>${UI.esc(g)}</li>`).join('')}</ul>
+         </div>`
+      : '';
+    const rawLines = [
+      `Error: ${message}`,
+      code ? `Code: ${code}` : '',
+      details ? `Details: ${details}` : '',
+      hint ? `Hint: ${hint}` : ''
+    ].filter(Boolean);
+    UI.openModal(`
+      <h2>${UI.esc(title)}</h2>
+      ${guessHtml}
+      <p class="field-hint" style="margin-bottom:6px;">What the database actually said:</p>
+      <pre id="errDetailPre" style="white-space:pre-wrap; word-break:break-word; background:var(--bg-soft, #f4f4f5); border:1px solid var(--border, #e5e7eb); border-radius:6px; padding:10px 12px; font-size:12.5px; margin:0;">${UI.esc(rawLines.join('\n'))}</pre>
+      <p class="field-hint" style="margin-top:10px;">This has also been logged to Settings &rarr; Diagnostics so an admin can look into it later without needing to reproduce it live.</p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="copyErrBtn">Copy details</button>
+        <button class="btn btn-primary" id="closeErrBtn">Close</button>
+      </div>
+    `, (root) => {
+      root.querySelector('#closeErrBtn').onclick = () => UI.closeModal();
+      root.querySelector('#copyErrBtn').onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(rawLines.join('\n'));
+          UI.toast('Copied');
+        } catch (e) {
+          UI.toast('Could not copy — select the text manually');
+        }
+      };
+    });
+  },
+
   confirmAction(message, onConfirm, opts) {
     const confirmLabel = (opts && opts.confirmLabel) || 'Delete';
     const confirmClass = (opts && opts.confirmClass) || 'btn-danger';

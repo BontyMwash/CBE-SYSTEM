@@ -43,8 +43,66 @@ const Store = {
     frozen: !!r.frozen, frozenAt: r.frozen_at || null, frozenReason: r.frozen_reason || '', headName: r.head_name || ''
   }),
 
+  // Builds a real Error from a Supabase/PostgREST error object, but
+  // keeps the raw code/details/hint attached to it (rather than just
+  // flattening everything into .message) so a catch block further up
+  // — e.g. the Marks Entry save handler — can show the ACTUAL reason
+  // a write was rejected (a specific RLS policy, a missing table, a
+  // constraint) instead of a generic "could not save".
   _throwIfError(label, error) {
-    if (error) { console.error(label, error); throw new Error(error.message || label); }
+    if (!error) return;
+    console.error(label, error);
+    const bits = [error.message || label];
+    if (error.code) bits.push(`(code ${error.code})`);
+    const e = new Error(bits.join(' '));
+    e.label = label;
+    e.code = error.code || '';
+    e.details = error.details || '';
+    e.hint = error.hint || '';
+    throw e;
+  },
+
+  // ---- Diagnostics ("why didn't that save?") ----
+  // Fire-and-forget: logs a failed write so an admin can see it later
+  // from Settings -> Diagnostics, even if it happened on a teacher's
+  // device. Never throws — a failure here must never mask or replace
+  // the original error the caller is already handling.
+  async logClientError(action, context, err) {
+    try {
+      const user = Auth.currentUser();
+      if (!user || !this.activeSchoolId) return;
+      await supabase.from('client_error_log').insert({
+        school_id: this.activeSchoolId,
+        user_id: user.id,
+        role: user.role || '',
+        action,
+        context: context || {},
+        error_code: (err && err.code) || '',
+        error_message: (err && err.message) || String(err || ''),
+        error_details: (err && err.details) || '',
+        error_hint: (err && err.hint) || ''
+      });
+    } catch (logErr) {
+      console.error('logClientError failed', logErr);
+    }
+  },
+  async listClientErrors(limit) {
+    const { data, error } = await supabase.from('client_error_log')
+      .select('*, profiles:user_id(name)')
+      .eq('school_id', this.activeSchoolId)
+      .order('created_at', { ascending: false })
+      .limit(limit || 100);
+    this._throwIfError('load error log', error);
+    return (data || []).map(r => ({
+      id: r.id, userId: r.user_id, userName: r.profiles?.name || '', role: r.role || '',
+      action: r.action, context: r.context || {},
+      code: r.error_code || '', message: r.error_message || '', details: r.error_details || '', hint: r.error_hint || '',
+      createdAt: r.created_at
+    }));
+  },
+  async clearClientErrors() {
+    const { error } = await supabase.from('client_error_log').delete().eq('school_id', this.activeSchoolId);
+    this._throwIfError('clear error log', error);
   },
 
   // ---- school-scoped bundle (what every view renders from) ----

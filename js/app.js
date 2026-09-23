@@ -23,7 +23,7 @@ const App = {
     myClasses: 'fa-chalkboard-user', learners: 'fa-people-group', assessments: 'fa-clipboard-list',
     gradebook: 'fa-book-open', attendance: 'fa-calendar-check', competency: 'fa-star-half-stroke',
     reports: 'fa-file-lines', broadsheet: 'fa-table-list', meritList: 'fa-ranking-star', analysis: 'fa-chart-column', notify: 'fa-paper-plane', sms: 'fa-comment-sms', users: 'fa-users-gear',
-    settings: 'fa-gear', schools: 'fa-school'
+    settings: 'fa-gear', schools: 'fa-school', diagnostics: 'fa-triangle-exclamation'
   },
 
   buildNav() {

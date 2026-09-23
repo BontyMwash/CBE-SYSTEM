@@ -51,6 +51,12 @@ project/
 │   ├── 023_section_scope_publish.sql # migration for existing installs — closes a gap in 013: makes "Publish results" respect a section-scoped admin's Section too
 │   ├── 024_primary_bands.sql # migration for existing installs — lets a subject be scoped to Lower Primary (Grade 1–3) or Upper Primary (Grade 4–6), not just "Primary"
 │   ├── 025_teacher_section_scope.sql # migration for existing installs — lets a TEACHER login be given a Section too, so they automatically see only the subjects/classes in their own CBC level
+│   ├── 026_teacher_subject_per_class.sql # ⚠️ RUN THIS — tightens subject assignment to be PER CLASS (teacher_subject_classes) instead of global; without it, "Manage subjects" per-class assignment silently doesn't restrict anything at the database level
+│   ├── 027_single_class_teacher.sql # migration for existing installs — enforces exactly one class teacher per class
+│   ├── 028_merge_subjects.sql # migration for existing installs — adds the "Merge duplicate subjects" tool (Subjects page) that combines two subject records without losing any recorded mark
+│   ├── 029_preview_duplicate_subjects.sql # migration for existing installs — powers the duplicate-subject warning banner on the Exams page
+│   ├── 030_merge_duplicate_subjects.sql # migration for existing installs — companion to 028/029
+│   ├── 031_client_error_log.sql # ⚠️ RUN THIS — adds the "Diagnostics" page (Settings, admin-only) that shows exactly why a save failed (marks, exams, subjects), across every login/device, instead of a toast that's already gone by the time you hear about it
 │   ├── 015_lesson_plans_and_schemes.sql # historical — feature removed, see 017
 │   ├── 016_curriculum_documents.sql # historical — feature removed, see 017
 │   └── 017_remove_lesson_plans_and_schemes.sql # ⚠️ RUN THIS if you ever ran 015/016 — drops the Lesson Plans & Schemes of Work feature

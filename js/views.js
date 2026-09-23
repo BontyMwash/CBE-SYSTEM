@@ -1488,6 +1488,7 @@ Views.subjects = async function () {
             UI.closeModal();
             Views.subjects();
           } catch (err) {
+            Store.logClientError(isEdit ? 'update_subject' : 'add_subject', { subjectId: existing?.id, name, section }, err);
             UI.toast('Could not save: ' + err.message);
           }
         }
@@ -2129,6 +2130,7 @@ Views.exams = async function () {
           UI.closeModal();
           Views.exams();
         } catch (err) {
+          Store.logClientError(isEdit ? 'update_exam' : 'add_exam', { examId: existing?.id, klass: payload.klass, subjectId: payload.subjectId, type: payload.type, term: payload.term, year: payload.year }, err);
           UI.toast('Could not save: ' + err.message);
         }
       };
@@ -2224,6 +2226,7 @@ Views.exams = async function () {
             await Store.addExam({ type, term, year, klass, subjectId: subj.id, totalMarks: 100, date });
             created++;
           } catch (err) {
+            Store.logClientError('add_exam', { klass, subjectId: subj.id, subjectName: subj.name, type, term, year }, err);
             UI.toast(`Could not create exam for ${subj.name}: ${err.message}`);
           }
         }
@@ -2474,10 +2477,7 @@ Views.results = async function () {
 
         Store.setResult(exam.id, studentId, v === '' ? '' : v).catch(err => {
           // Roll back the optimistic change so the screen matches what's
-          // actually saved, then explain why — this is almost always
-          // either the exam being locked/published, or (for a teacher
-          // login) no longer being assigned this subject for this class
-          // under "Manage subjects" on the Users page.
+          // actually saved.
           const idx = st.results.findIndex(r => r.examId === exam.id && r.studentId === studentId);
           if (idx !== -1) st.results.splice(idx, 1);
           if (previous) st.results.push(previous);
@@ -2487,7 +2487,43 @@ Views.results = async function () {
           input.classList.toggle('filled', revertedMarks !== '');
           const levelCell = document.querySelector(`[data-level-for="${studentId}"]`);
           if (levelCell) levelCell.innerHTML = UI.badge(revertedBand);
-          UI.toast('Could not save that mark — it has NOT been recorded: ' + err.message);
+
+          // Work out the likely cause from state we already have,
+          // before falling back on the raw database error — this is
+          // almost always either the exam being locked/published, the
+          // school being frozen, or (for a teacher login) no longer
+          // being assigned this subject for this class under "Manage
+          // subjects" on the Users page.
+          const guesses = [];
+          if (isLocked(exam)) {
+            guesses.push('This sitting is published and locked — unpublish it from the Analysis page first.');
+          }
+          if (st.settings.frozen) {
+            guesses.push('This school is currently frozen (read-only) — contact your administrator.');
+          }
+          if (user.role === 'user') {
+            const s2 = teacherScope(st, user);
+            const stillAssigned = s2.subjectsByClass.get(exam.klass)?.has(exam.subjectId);
+            if (!stillAssigned) {
+              guesses.push('You are no longer assigned this subject for this class — ask an admin to tick it under "Manage subjects" on the Users page.');
+            }
+          }
+          if (!guesses.length && err.code === '42P01') {
+            guesses.push('A required database table is missing — a migration (see sql/) hasn\u2019t been run yet on this school\u2019s database.');
+          }
+          if (!guesses.length && err.code === '42501') {
+            guesses.push('The database rejected this write under Row Level Security — usually a subject/class assignment or a migration gap, not something wrong with the mark itself.');
+          }
+
+          const subj = st.subjects.find(s => s.id === exam.subjectId);
+          const student = st.students.find(s => s.id === studentId);
+          Store.logClientError('save_result', {
+            examId: exam.id, studentId, klass: exam.klass, subjectId: exam.subjectId,
+            subjectName: subj?.name || '', studentName: student?.name || '', type: exam.type, term: exam.term, year: exam.year
+          }, err);
+
+          UI.toast('Could not save that mark — it has NOT been recorded.');
+          UI.showErrorDetails(`Mark not saved${subj ? ` — ${subj.name}` : ''}`, err, guesses);
         });
       });
     });
@@ -3335,5 +3371,97 @@ Views.settings = async function () {
     // Same fix as UI.downloadCSV: don't revoke the object URL until
     // the click-triggered download has had a chance to actually start.
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+};
+
+/* ------------------------- DIAGNOSTICS ------------------------- */
+// "Why isn't X saving?" — a plain list of every failed write logged
+// by Store.logClientError (see js/data.js), across every device/login
+// at this school, newest first. Exists so an admin troubleshooting a
+// report like "marks aren't saving for this subject" can see the
+// EXACT database error a teacher hit, without needing them to
+// reproduce it live or screenshot a toast that's already gone.
+
+Views.diagnostics = async function () {
+  showLoading();
+  setTopbarActions(`<button class="btn" id="refreshDiagBtn">Refresh</button><button class="btn btn-danger" id="clearDiagBtn">Clear log</button>`);
+  const st = await Store.current();
+  let rows;
+  try {
+    rows = await Store.listClientErrors(200);
+  } catch (err) {
+    document.getElementById('content').innerHTML = `<div class="empty"><div class="empty-title">Could not load the error log</div><p>${UI.esc(err.message)}</p><p class="field-hint">If this is a fresh install, run <code>sql/031_client_error_log.sql</code> against your Supabase project first.</p></div>`;
+    return;
+  }
+
+  function actionLabel(a) {
+    return {
+      save_result: 'Save mark', add_exam: 'Create exam', update_exam: 'Update exam',
+      add_subject: 'Add subject', update_subject: 'Update subject'
+    }[a] || a;
+  }
+
+  function contextLine(row) {
+    const c = row.context || {};
+    const bits = [];
+    if (c.subjectName) bits.push(c.subjectName);
+    if (c.klass) bits.push(c.klass);
+    if (c.type) bits.push(c.type);
+    if (c.term) bits.push(c.term);
+    if (c.year) bits.push(String(c.year));
+    if (c.studentName) bits.push(`for ${c.studentName}`);
+    return bits.join(' \u00b7 ');
+  }
+
+  document.getElementById('content').innerHTML = `
+    <p class="page-intro">Every save that failed anywhere in the system, most recent first — what was being saved, who hit it, and exactly what the database said. Cleared entries are gone for good.</p>
+    ${rows.length === 0
+      ? `<div class="empty"><div class="empty-title">No errors logged</div><p>Nothing has failed to save since this log started (or since it was last cleared).</p></div>`
+      : `<div class="ledger">
+          <div class="ledger-scroll">
+            <table class="ledger-table">
+              <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Context</th><th>Error</th><th></th></tr></thead>
+              <tbody>
+                ${rows.map((r, i) => `
+                  <tr>
+                    <td>${UI.esc(new Date(r.createdAt).toLocaleString())}</td>
+                    <td>${UI.esc(r.userName || '\u2014')} <span class="field-hint" style="margin:0;">(${UI.esc(r.role)})</span></td>
+                    <td>${UI.esc(actionLabel(r.action))}</td>
+                    <td>${UI.esc(contextLine(r)) || '\u2014'}</td>
+                    <td style="max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${UI.esc(r.message)}">${UI.esc(r.code ? `[${r.code}] ` : '') + UI.esc(r.message)}</td>
+                    <td><button class="btn btn-sm" data-view="${i}">View</button></td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>`
+    }
+  `;
+
+  document.querySelectorAll('[data-view]').forEach(btn => {
+    btn.onclick = () => {
+      const r = rows[Number(btn.dataset.view)];
+      const err = { code: r.code, message: r.message, details: r.details, hint: r.hint };
+      const ctxLine = contextLine(r);
+      UI.showErrorDetails(
+        `${actionLabel(r.action)}${ctxLine ? ` — ${ctxLine}` : ''}`,
+        err,
+        [`${r.userName || 'Someone'} (${r.role}) \u2014 ${new Date(r.createdAt).toLocaleString()}`]
+      );
+    };
+  });
+
+  document.getElementById('refreshDiagBtn').onclick = () => Views.diagnostics();
+  document.getElementById('clearDiagBtn').onclick = () => {
+    UI.confirmAction('Clear the entire error log? This cannot be undone.', async () => {
+      try {
+        await Store.clearClientErrors();
+        UI.toast('Error log cleared');
+        Views.diagnostics();
+      } catch (err) {
+        UI.toast('Could not clear: ' + err.message);
+      }
+    }, { confirmLabel: 'Clear log', confirmClass: 'btn-danger' });
   };
 };

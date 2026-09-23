@@ -20,7 +20,7 @@ const Auth = {
     admin: [
       'dashboard', 'classes', 'students', 'subjects', 'exams', 'results', 'gradebook',
       'reports', 'attendance', 'competency', 'broadsheet', 'meritList', 'analysis',
-      'notify', 'sms', 'users', 'settings'
+      'notify', 'sms', 'users', 'settings', 'diagnostics'
     ],
     // Teacher section — kept in this order because it's the order the
     // sidebar is meant to walk a teacher through their day:
@@ -60,7 +60,7 @@ const Auth = {
     gradebook: 'Gradebook', attendance: 'Attendance', competency: 'Competency Assessment',
     notify: 'Send Results to Parents',
     sms: 'Bulk SMS',
-    users: 'Users', settings: 'Settings', schools: 'Schools'
+    users: 'Users', settings: 'Settings', schools: 'Schools', diagnostics: 'Diagnostics'
   },
   ROUTE_LABELS: {
     dashboard: 'Dashboard', classes: 'Classes', students: 'Students', subjects: 'Subjects', exams: 'Exams',
@@ -69,7 +69,7 @@ const Auth = {
     gradebook: 'Gradebook', attendance: 'Attendance', competency: 'Competency',
     notify: 'Send to Parents',
     sms: 'SMS',
-    users: 'Users', settings: 'Settings', schools: 'Schools'
+    users: 'Users', settings: 'Settings', schools: 'Schools', diagnostics: 'Diagnostics'
   },
 
   async login(email, password) {
