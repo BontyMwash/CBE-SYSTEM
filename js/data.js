@@ -115,14 +115,19 @@ const Store = {
       };
     }
 
-    const [schoolRes, classesRes, studentsRes, subjectsRes, examTypesRes, examsRes, resultsRes, teacherSubjectsRes, teacherClassesRes, teacherSubjectClassesRes, publishedRes] = await Promise.all([
+    // Load exams first, then load results by exam_id.  Using a nested
+    // `exams!inner(...)` relationship for the results list can be fragile
+    // with PostgREST/RLS changes: a mark may be written successfully but
+    // disappear from the client bundle after a full refresh.  The exams
+    // query is already school-scoped, so using its IDs gives us the same
+    // school boundary without depending on the relationship join.
+    const [schoolRes, classesRes, studentsRes, subjectsRes, examTypesRes, examsRes, teacherSubjectsRes, teacherClassesRes, teacherSubjectClassesRes, publishedRes] = await Promise.all([
       supabase.from('schools').select('*').eq('id', schoolId).single(),
       supabase.from('classes').select('*').eq('school_id', schoolId).order('name').order('stream'),
       supabase.from('students').select('*').eq('school_id', schoolId).order('name'),
       supabase.from('subjects').select('*').eq('school_id', schoolId).order('name'),
       supabase.from('exam_types').select('*').eq('school_id', schoolId).order('sort_order').order('name'),
       supabase.from('exams').select('*').eq('school_id', schoolId),
-      supabase.from('results').select('*, exams!inner(school_id)').eq('exams.school_id', schoolId),
       // Legacy flat list — kept for the one-time migration backfill only.
       // No permission check anywhere in the app or the database reads
       // this anymore; teacherSubjectClasses below is the source of
@@ -152,6 +157,18 @@ const Store = {
     this._throwIfError('load subjects', subjectsRes.error);
     this._throwIfError('load exam types', examTypesRes.error);
     this._throwIfError('load exams', examsRes.error);
+
+    // Fetch results only after the school-scoped exam list is known.
+    // This is deliberately a simple results -> exam_id filter so marks
+    // survive a browser refresh reliably even when nested PostgREST joins
+    // behave differently under RLS.
+    const examIds = (examsRes.data || []).map(e => e.id).filter(Boolean);
+    let resultsRes = { data: [], error: null };
+    if (examIds.length) {
+      resultsRes = await supabase.from('results')
+        .select('*')
+        .in('exam_id', examIds);
+    }
     this._throwIfError('load results', resultsRes.error);
     this._throwIfError('load teacher subjects', teacherSubjectsRes.error);
     this._throwIfError('load teacher classes', teacherClassesRes.error);
@@ -516,11 +533,33 @@ const Store = {
       this._throwIfError('clear result', error);
       return null;
     }
+    const numericMarks = Number(marks);
+    if (!Number.isFinite(numericMarks)) {
+      throw Object.assign(new Error('Marks must be a valid number.'), { label: 'save result' });
+    }
+
     const { data, error } = await supabase.from('results')
-      .upsert({ exam_id: examId, student_id: studentId, marks: Number(marks) }, { onConflict: 'exam_id,student_id' })
-      .select().single();
+      .upsert({ exam_id: examId, student_id: studentId, marks: numericMarks }, { onConflict: 'exam_id,student_id' })
+      .select('id,exam_id,student_id,marks')
+      .single();
     this._throwIfError('save result', error);
-    return this._mapResult(data);
+
+    // Do not report “Saved” until the database can read the exact row back.
+    // This makes the UI status mean “persisted and readable after refresh”,
+    // rather than merely “the write request returned”.
+    const verify = await supabase.from('results')
+      .select('id,exam_id,student_id,marks')
+      .eq('exam_id', examId)
+      .eq('student_id', studentId)
+      .single();
+    this._throwIfError('verify saved result', verify.error);
+    if (!verify.data || Number(verify.data.marks) !== numericMarks) {
+      const e = new Error('The mark was not confirmed in the database after saving.');
+      e.label = 'verify saved result';
+      e.code = 'SAVE_VERIFY_FAILED';
+      throw e;
+    }
+    return this._mapResult(verify.data || data);
   },
 
   // ---- Settings (per school) ----
