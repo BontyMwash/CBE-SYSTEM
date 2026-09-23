@@ -2439,92 +2439,151 @@ Views.results = async function () {
 
   function wireGrid(examId) {
     const exam = st.exams.find(e => e.id === examId);
-    if (isLocked(exam)) return; // locked — inputs are disabled, nothing to wire
-    document.querySelectorAll('.mark-input[data-student]').forEach(input => {
-      input.addEventListener('change', () => {
-        let v = input.value;
-        if (v !== '') {
-          v = Math.max(0, Math.min(Number(exam.totalMarks), Number(v)));
-          input.value = v;
-        }
-        input.classList.toggle('filled', v !== '');
-        const studentId = input.dataset.student;
+    if (isLocked(exam)) return;
 
-        // Remember exactly what was here before, so a failed save can
-        // be rolled back — both the in-memory st.results (which other
-        // screens read from) and what's drawn on screen. Without this,
-        // a save that's rejected (e.g. a teacher no longer assigned to
-        // this subject/class — see teacher_subject_classes) still LOOKS
-        // like it worked: the input stays filled and graded even though
-        // nothing was actually written, and the mark quietly vanishes
-        // next time this page loads.
+    // Each student gets a small save queue. This prevents rapid mark entry
+    // from leaving requests in flight or relying only on the native `change`
+    // event (which does not fire until an input is committed/blurred).
+    const saves = new Map();
+    const SAVE_DELAY = 350;
+
+    const getState = (input) => {
+      const studentId = input.dataset.student;
+      if (!saves.has(studentId)) {
+        saves.set(studentId, { timer: null, chain: Promise.resolve(), lastSaved: undefined, saving: false });
+      }
+      return saves.get(studentId);
+    };
+
+    const setStatus = (input, text, kind) => {
+      const cell = input.closest('td');
+      if (!cell) return;
+      let el = cell.querySelector('.mark-save-status');
+      if (!el) {
+        el = document.createElement('span');
+        el.className = 'mark-save-status';
+        el.style.cssText = 'display:inline-block;margin-left:6px;font-size:11px;min-width:48px;';
+        cell.appendChild(el);
+      }
+      el.textContent = text || '';
+      el.style.opacity = text ? '1' : '0';
+      el.style.color = kind === 'error' ? 'var(--danger,#b42318)' : kind === 'saving' ? 'var(--muted,#777)' : 'var(--success,#16803a)';
+    };
+
+    const updateLocalPreview = (input, value) => {
+      const studentId = input.dataset.student;
+      const v = value === '' ? '' : Math.max(0, Math.min(Number(exam.totalMarks), Number(value)));
+      if (v !== '') input.value = v;
+      input.classList.toggle('filled', v !== '');
+      const band = v === '' ? null : Grading.levelForMarks(v, exam.totalMarks, st.settings.gradingBands);
+      const levelCell = document.querySelector(`[data-level-for="${studentId}"]`);
+      if (levelCell) levelCell.innerHTML = UI.badge(band);
+      return v;
+    };
+
+    const rollback = (input, previous) => {
+      const studentId = input.dataset.student;
+      const idx = st.results.findIndex(r => r.examId === exam.id && r.studentId === studentId);
+      if (idx !== -1) st.results.splice(idx, 1);
+      if (previous) st.results.push(previous);
+      input.value = previous ? previous.marks : '';
+      input.classList.toggle('filled', !!previous);
+      const levelCell = document.querySelector(`[data-level-for="${studentId}"]`);
+      if (levelCell) levelCell.innerHTML = UI.badge(previous ? Grading.levelForMarks(previous.marks, exam.totalMarks, st.settings.gradingBands) : null);
+    };
+
+    const performSave = (input, value) => {
+      const studentId = input.dataset.student;
+      const state = getState(input);
+      const attempted = value === '' ? '' : Number(value);
+
+      state.chain = state.chain.then(async () => {
+        // If a newer value is already waiting, skip this stale snapshot.
+        const current = input.value === '' ? '' : Number(input.value);
+        if (current !== attempted) return;
+
         const existingIdx = st.results.findIndex(r => r.examId === exam.id && r.studentId === studentId);
         const previous = existingIdx !== -1 ? { ...st.results[existingIdx] } : null;
+        state.saving = true;
+        setStatus(input, 'Saving…', 'saving');
 
-        // Optimistic UI: show the new badge immediately from the value
-        // just typed, and update our local cache — don't wait on the
-        // network round-trip, so rapid entry across many rows stays
-        // smooth. Rolled back below if the save actually fails.
-        const band = v === '' ? null : Grading.levelForMarks(v, exam.totalMarks, st.settings.gradingBands);
-        document.querySelector(`[data-level-for="${studentId}"]`).innerHTML = UI.badge(band);
-        if (v === '') {
-          if (existingIdx !== -1) st.results.splice(existingIdx, 1);
-        } else if (existingIdx !== -1) {
-          st.results[existingIdx].marks = Number(v);
-        } else {
-          st.results.push({ id: 'pending', examId: exam.id, studentId, marks: Number(v) });
-        }
+        try {
+          await Store.setResult(exam.id, studentId, attempted);
+          state.lastSaved = attempted;
+          state.saving = false;
+          setStatus(input, '✓ Saved', 'saved');
 
-        Store.setResult(exam.id, studentId, v === '' ? '' : v).catch(err => {
-          // Roll back the optimistic change so the screen matches what's
-          // actually saved.
+          // Keep the in-memory cache synchronized with the confirmed DB value.
           const idx = st.results.findIndex(r => r.examId === exam.id && r.studentId === studentId);
-          if (idx !== -1) st.results.splice(idx, 1);
-          if (previous) st.results.push(previous);
-          const revertedMarks = previous ? previous.marks : '';
-          const revertedBand = previous ? Grading.levelForMarks(previous.marks, exam.totalMarks, st.settings.gradingBands) : null;
-          input.value = revertedMarks;
-          input.classList.toggle('filled', revertedMarks !== '');
-          const levelCell = document.querySelector(`[data-level-for="${studentId}"]`);
-          if (levelCell) levelCell.innerHTML = UI.badge(revertedBand);
+          if (attempted === '') {
+            if (idx !== -1) st.results.splice(idx, 1);
+          } else if (idx !== -1) {
+            st.results[idx].marks = attempted;
+          } else {
+            st.results.push({ id: 'pending', examId: exam.id, studentId, marks: attempted });
+          }
 
-          // Work out the likely cause from state we already have,
-          // before falling back on the raw database error — this is
-          // almost always either the exam being locked/published, the
-          // school being frozen, or (for a teacher login) no longer
-          // being assigned this subject for this class under "Manage
-          // subjects" on the Users page.
-          const guesses = [];
-          if (isLocked(exam)) {
-            guesses.push('This sitting is published and locked — unpublish it from the Analysis page first.');
-          }
-          if (st.settings.frozen) {
-            guesses.push('This school is currently frozen (read-only) — contact your administrator.');
-          }
-          if (user.role === 'user') {
-            const s2 = teacherScope(st, user);
-            const stillAssigned = s2.subjectsByClass.get(exam.klass)?.has(exam.subjectId);
-            if (!stillAssigned) {
-              guesses.push('You are no longer assigned this subject for this class — ask an admin to tick it under "Manage subjects" on the Users page.');
+          // If the user typed again while the request was running, immediately
+          // queue the latest value instead of losing it.
+          const latest = input.value === '' ? '' : Number(input.value);
+          if (latest !== attempted) queueSave(input, true);
+        } catch (err) {
+          state.saving = false;
+          // Only roll back when the failed value is still the value on screen.
+          // If the user has already typed a newer value, keep it and retry that
+          // newer value instead.
+          const latest = input.value === '' ? '' : Number(input.value);
+          if (latest === attempted) {
+            rollback(input, previous);
+            state.lastSaved = previous ? Number(previous.marks) : '';
+            setStatus(input, '✕ Not saved', 'error');
+            const guesses = [];
+            if (isLocked(exam)) guesses.push('This sitting is published and locked — unpublish it from the Analysis page first.');
+            if (st.settings.frozen) guesses.push('This school is currently frozen (read-only) — contact your administrator.');
+            if (user.role === 'user') {
+              const s2 = teacherScope(st, user);
+              const stillAssigned = s2.subjectsByClass.get(exam.klass)?.has(exam.subjectId);
+              if (!stillAssigned) guesses.push('You are not assigned this subject for this class — ask an admin to check Manage subjects.');
             }
+            if (!guesses.length && err.code === '42P01') guesses.push('A required database table is missing — a migration has not been run.');
+            if (!guesses.length && err.code === '42501') guesses.push('The database rejected this write under Row Level Security.');
+            const subj = st.subjects.find(s => s.id === exam.subjectId);
+            const student = st.students.find(s => s.id === studentId);
+            Store.logClientError('save_result', {
+              examId: exam.id, studentId, klass: exam.klass, subjectId: exam.subjectId,
+              subjectName: subj?.name || '', studentName: student?.name || '', type: exam.type, term: exam.term, year: exam.year
+            }, err);
+            UI.toast(`Could not save ${student?.name || 'this mark'} — it has NOT been recorded.`);
+            UI.showErrorDetails(`Mark not saved${subj ? ` — ${subj.name}` : ''}`, err, guesses);
+          } else {
+            setStatus(input, 'Retrying…', 'saving');
+            queueSave(input, true);
           }
-          if (!guesses.length && err.code === '42P01') {
-            guesses.push('A required database table is missing — a migration (see sql/) hasn\u2019t been run yet on this school\u2019s database.');
-          }
-          if (!guesses.length && err.code === '42501') {
-            guesses.push('The database rejected this write under Row Level Security — usually a subject/class assignment or a migration gap, not something wrong with the mark itself.');
-          }
+        }
+      });
+      return state.chain;
+    };
 
-          const subj = st.subjects.find(s => s.id === exam.subjectId);
-          const student = st.students.find(s => s.id === studentId);
-          Store.logClientError('save_result', {
-            examId: exam.id, studentId, klass: exam.klass, subjectId: exam.subjectId,
-            subjectName: subj?.name || '', studentName: student?.name || '', type: exam.type, term: exam.term, year: exam.year
-          }, err);
+    function queueSave(input, immediate = false) {
+      const state = getState(input);
+      if (state.timer) clearTimeout(state.timer);
+      const value = updateLocalPreview(input, input.value);
+      setStatus(input, 'Saving…', 'saving');
+      const run = () => performSave(input, value);
+      if (immediate) return run();
+      state.timer = setTimeout(() => { state.timer = null; run(); }, SAVE_DELAY);
+      return state.chain;
+    }
 
-          UI.toast('Could not save that mark — it has NOT been recorded.');
-          UI.showErrorDetails(`Mark not saved${subj ? ` — ${subj.name}` : ''}`, err, guesses);
-        });
+    document.querySelectorAll('.mark-input[data-student]').forEach(input => {
+      // Save while typing after a short debounce. This is more reliable than
+      // waiting for the browser's `change` event.
+      input.addEventListener('input', () => queueSave(input, false));
+      // Flush immediately when the user leaves a field.
+      input.addEventListener('blur', () => queueSave(input, true));
+      // Enter should commit before moving to the next row.
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') queueSave(input, true);
       });
     });
   }
@@ -2560,7 +2619,7 @@ Views.results = async function () {
     <div class="marks-entry">
       ${renderPicker()}
       <div id="totalMarksBarWrap">${renderTotalMarksBar(selectedId)}</div>
-      <p class="field-hint" style="margin-bottom:14px;">Marks save automatically as you type. Leave blank for a student who did not sit the exam.</p>
+      <p class="field-hint" style="margin-bottom:14px;">Marks save automatically. You will see “Saving…” then “✓ Saved” beside each mark. Leave blank for a student who did not sit the exam.</p>
       <div id="gridWrap">${renderGrid(selectedId)}</div>
     </div>
   `;
