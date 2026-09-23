@@ -1346,7 +1346,8 @@ Views.subjects = async function () {
 
   function renderTable(filterSection) {
     let rows = [...st.subjects].sort((a, b) => a.name.localeCompare(b.name));
-    if (filterSection) rows = rows.filter(s => sectionCovers(filterSection, s.section || '') && (s.section || ''));
+    if (filterSection === 'shared') rows = rows.filter(s => !(s.section || ''));
+    else if (filterSection) rows = rows.filter(s => sectionCovers(filterSection, s.section || '') && (s.section || ''));
     if (st.subjects.length === 0) {
       return `<div class="empty"><div class="empty-title">No subjects yet</div><p>Add subjects like Mathematics, English, Integrated Science.</p></div>`;
     }
@@ -1408,6 +1409,11 @@ Views.subjects = async function () {
   // shows its own real section, never the filter.
   function openForm(existing, defaultSection) {
     const isEdit = !!existing;
+    // New subjects are created inside one band at a time.  This prevents
+    // the old "Primary"/"All levels" choice from accidentally creating
+    // a shared subject when the admin intended a Lower, Upper or Junior
+    // subject. Existing shared/Primary subjects remain editable for
+    // backward compatibility.
     const initialSection = isEdit ? (existing.section || '') : (defaultSection || '');
     UI.openModal(`
       <h2>${isEdit ? 'Edit subject' : 'Add subject'}</h2>
@@ -1423,15 +1429,15 @@ Views.subjects = async function () {
         </div>
         <div class="field">
           <label>Level</label>
-          <select id="f_section">
-            <option value="" ${initialSection === '' ? 'selected' : ''}>All levels (shared everywhere &mdash; use with care)</option>
-            <option value="primary" ${initialSection === 'primary' ? 'selected' : ''}>Primary only &mdash; Lower &amp; Upper (Grade 1&ndash;6)</option>
-            <option value="lower-primary" ${initialSection === 'lower-primary' ? 'selected' : ''}>Lower Primary only (Grade 1&ndash;3)</option>
-            <option value="upper-primary" ${initialSection === 'upper-primary' ? 'selected' : ''}>Upper Primary only (Grade 4&ndash;6)</option>
-            <option value="junior-secondary" ${initialSection === 'junior-secondary' ? 'selected' : ''}>Junior Secondary only (Grade 7&ndash;9)</option>
-            <option value="senior-school" ${initialSection === 'senior-school' ? 'selected' : ''}>Senior School only (Grade 10&ndash;12)</option>
+          <select id="f_section" ${!isEdit && defaultSection ? 'disabled' : ''}>
+            ${!isEdit ? '' : `<option value="" ${initialSection === '' ? 'selected' : ''}>Shared / All levels (existing subject)</option>`}
+            ${!isEdit ? '' : `<option value="primary" ${initialSection === 'primary' ? 'selected' : ''}>Primary (existing shared subject) &mdash; Grade 1&ndash;6</option>`}
+            <option value="lower-primary" ${initialSection === 'lower-primary' ? 'selected' : ''}>Lower Primary &mdash; Grade 1&ndash;3</option>
+            <option value="upper-primary" ${initialSection === 'upper-primary' ? 'selected' : ''}>Upper Primary &mdash; Grade 4&ndash;6</option>
+            <option value="junior-secondary" ${initialSection === 'junior-secondary' ? 'selected' : ''}>Junior Secondary &mdash; Grade 7&ndash;9</option>
+            <option value="senior-school" ${initialSection === 'senior-school' ? 'selected' : ''}>Senior School &mdash; Grade 10&ndash;12</option>
           </select>
-          <p class="field-hint">${defaultSection && !isEdit ? `Defaulted to <strong>${UI.esc(sectionLabel(defaultSection))}</strong> since that's the level you're viewing &mdash; change it only if this subject should also appear elsewhere.` : 'Scoping a subject keeps it out of the picker for every other level &mdash; e.g. Chemistry for Senior School only. Leave on "All levels" only for a subject every level genuinely shares.'}</p>
+          <p class="field-hint">${defaultSection && !isEdit ? `This subject will be created <strong>only for ${UI.esc(sectionLabel(defaultSection))}</strong>. It will not appear in the other primary/junior levels.` : 'Each new subject belongs to one level. Existing shared subjects can still be edited here for compatibility.'}</p>
         </div>
       </div>
       <div class="modal-actions">
@@ -1452,7 +1458,11 @@ Views.subjects = async function () {
       root.querySelector('#saveBtn').onclick = async () => {
         const name = nameInput.value.trim();
         let code = codeInput.value.trim().toUpperCase();
-        const section = root.querySelector('#f_section').value;
+        const section = root.querySelector('#f_section').value || defaultSection || '';
+        if (!isEdit && !['lower-primary', 'upper-primary', 'junior-secondary', 'senior-school'].includes(section)) {
+          UI.toast('Choose a specific level before creating the subject');
+          return;
+        }
         if (!name) { UI.toast('Subject name is required'); return; }
         if (!code) code = suggestCode(name);
 
@@ -1569,28 +1579,60 @@ Views.subjects = async function () {
     });
   }
 
+  // Subject setup is intentionally band-by-band.  The tabs are the
+  // creation boundary: selecting Lower Primary and pressing + Add subject
+  // can only create a Lower Primary subject, and likewise for Upper and
+  // Junior Secondary.  "Shared" is kept only to expose legacy subjects
+  // that were created before the independent-band rule.
+  const currentLevel = effectiveLevel();
+  const defaultSubjectTab = ['lower-primary', 'upper-primary', 'junior-secondary', 'senior-school'].includes(currentLevel)
+    ? currentLevel : 'lower-primary';
+
   document.getElementById('content').innerHTML = `
-    <div class="filter-row">
-      <select id="sectionFilter">
-        <option value="">All levels</option>
-        <option value="primary">Primary (Grade 1&ndash;6)</option>
-        <option value="lower-primary">Lower Primary (Grade 1&ndash;3)</option>
-        <option value="upper-primary">Upper Primary (Grade 4&ndash;6)</option>
-        <option value="junior-secondary">Junior Secondary (Grade 7&ndash;9)</option>
-        <option value="senior-school">Senior School (Grade 10&ndash;12)</option>
-      </select>
+    <div class="filter-row" style="gap:8px; flex-wrap:wrap;">
+      <button class="btn btn-sm subject-level-tab" data-section="lower-primary">Lower Primary<br><span style="font-size:11px;opacity:.75">Grade 1&ndash;3</span></button>
+      <button class="btn btn-sm subject-level-tab" data-section="upper-primary">Upper Primary<br><span style="font-size:11px;opacity:.75">Grade 4&ndash;6</span></button>
+      <button class="btn btn-sm subject-level-tab" data-section="junior-secondary">Junior Secondary<br><span style="font-size:11px;opacity:.75">Grade 7&ndash;9</span></button>
+      <button class="btn btn-sm subject-level-tab" data-section="senior-school">Senior School<br><span style="font-size:11px;opacity:.75">Grade 10&ndash;12</span></button>
+      <button class="btn btn-sm subject-level-tab" data-section="shared">Shared / Existing</button>
     </div>
-    <div id="wrap">${renderTable('')}</div>
+    <div id="subjectLevelHint" class="field-hint" style="margin:10px 0 14px;"></div>
+    <div id="wrap"></div>
   `;
-  let activeFilterSection = '';
-  document.getElementById('addSubjectBtn').onclick = () => openForm(null, activeFilterSection);
-  document.getElementById('mergeSubjectsBtn').onclick = openMergeForm;
-  document.getElementById('sectionFilter').onchange = (e) => {
-    activeFilterSection = e.target.value;
+  let activeFilterSection = defaultSubjectTab;
+
+  function paintSubjects() {
+    const labels = {
+      'lower-primary': 'Lower Primary subjects are independent from Upper Primary and Junior Secondary.',
+      'upper-primary': 'Upper Primary subjects are independent from Lower Primary and Junior Secondary.',
+      'junior-secondary': 'Junior Secondary subjects are independent from Lower Primary and Upper Primary.',
+      'senior-school': 'Senior School subjects are independent from the primary and junior levels.',
+      'shared': 'Shared / Existing shows older subjects that were created for all levels. New subjects must be created inside a specific level.'
+    };
+    document.querySelectorAll('.subject-level-tab').forEach(btn => {
+      const active = btn.dataset.section === activeFilterSection;
+      btn.classList.toggle('btn-primary', active);
+    });
+    document.getElementById('subjectLevelHint').textContent = labels[activeFilterSection];
     document.getElementById('wrap').innerHTML = renderTable(activeFilterSection);
     wireRowActions();
+  }
+
+  document.getElementById('addSubjectBtn').onclick = () => {
+    if (activeFilterSection === 'shared') {
+      UI.toast('Select Lower Primary, Upper Primary, Junior Secondary or Senior School first');
+      return;
+    }
+    openForm(null, activeFilterSection);
   };
-  wireRowActions();
+  document.getElementById('mergeSubjectsBtn').onclick = openMergeForm;
+  document.querySelectorAll('.subject-level-tab').forEach(btn => {
+    btn.onclick = () => {
+      activeFilterSection = btn.dataset.section;
+      paintSubjects();
+    };
+  });
+  paintSubjects();
 };
 
 /* ------------------------- EXAMS ------------------------- */
