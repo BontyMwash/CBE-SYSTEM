@@ -111,7 +111,11 @@ Views.broadsheet = async function () {
 
   document.getElementById('content').innerHTML = `
     <div class="filter-row no-print">
-      <select id="bsClass"><option value="">Select class</option>${classes.map(c => `<option value="${UI.esc(c)}">${UI.esc(c)}</option>`).join('')}</select>
+      <select id="bsClass"><option value="">Select class / stream</option>${classes.map(c => `<option value="${UI.esc(c)}">${UI.esc(c)}</option>`).join('')}</select>
+      <select id="bsScope" title="Choose whether the broadsheet is for one stream or the whole grade/class">
+        <option value="stream">This stream only</option>
+        <option value="grade">Whole class / grade (all streams)</option>
+      </select>
       <select id="bsType">
         <option value="">Select exam type</option>
         ${st.examTypes.map(t => `<option value="${UI.esc(t.name)}">${UI.esc(t.name)}</option>`).join('')}
@@ -130,6 +134,7 @@ Views.broadsheet = async function () {
   `;
 
   const classSel = document.getElementById('bsClass');
+  const scopeSel = document.getElementById('bsScope');
   const typeSel = document.getElementById('bsType');
   const termSel = document.getElementById('bsTerm');
   const yearSel = document.getElementById('bsYear');
@@ -161,7 +166,7 @@ Views.broadsheet = async function () {
       }
     };
   }
-  [classSel, typeSel, termSel, yearSel].forEach(guardedChange);
+  [classSel, scopeSel, typeSel, termSel, yearSel].forEach(guardedChange);
 
   function render() {
     lastCsv = null;
@@ -180,39 +185,73 @@ Views.broadsheet = async function () {
       return;
     }
 
-    // Subjects that actually have an exam matching this class/type/term/year
+    // A broadsheet can be for one stream OR the whole grade/class.
+    // Existing exams remain attached to their original stream; the
+    // whole-grade view simply combines those existing exams without
+    // changing or migrating any exam/result records.
+    const selectedClass = st.classes.find(c => c.label === klass);
+    const gradeName = selectedClass ? selectedClass.name : klass;
+    const isWholeGrade = scopeSel.value === 'grade';
+    const targetLabels = isWholeGrade
+      ? (st.classes && st.classes.length
+          ? st.classes.filter(c => c.name === gradeName).map(c => c.label)
+          : [...new Set(st.students.filter(s => s.klass === klass).map(s => s.klass))])
+      : [klass];
+    if (!targetLabels.includes(klass)) targetLabels.push(klass);
+
     const matchingExams = st.exams.filter(e =>
-      e.klass === klass && e.type === type && e.term === term && String(e.year) === String(year)
+      targetLabels.includes(e.klass) && e.type === type && e.term === term && String(e.year) === String(year)
     );
     if (matchingExams.length === 0) {
-      wrap.innerHTML = `<div class="empty"><div class="empty-title">No ${UI.esc(type)} exams found</div><p>for ${UI.esc(klass)} in ${UI.esc(term)} ${UI.esc(year)}. Create exams for this sitting first.</p></div>`;
+      wrap.innerHTML = `<div class="empty"><div class="empty-title">No ${UI.esc(type)} exams found</div><p>for ${UI.esc(isWholeGrade ? gradeName : klass)} in ${UI.esc(term)} ${UI.esc(year)}. Create exams for this sitting first.</p></div>`;
       return;
     }
-    const subjectCols = matchingExams
-      .map(e => ({ exam: e, subject: st.subjects.find(s => s.id === e.subjectId) }))
-      .filter(c => c.subject)
+
+    // One column per subject. In whole-grade mode a subject can have a
+    // different exam record in each stream; keep those exam IDs intact
+    // and resolve the correct one from each learner's own stream.
+    const subjectMap = new Map();
+    matchingExams.forEach(e => {
+      const subject = st.subjects.find(s => s.id === e.subjectId);
+      if (!subject) return;
+      if (!subjectMap.has(subject.id)) subjectMap.set(subject.id, { subject, examsByClass: new Map() });
+      subjectMap.get(subject.id).examsByClass.set(e.klass, e);
+    });
+    const subjectCols = [...subjectMap.values()]
+      .map(c => ({ ...c, exam: !isWholeGrade ? c.examsByClass.get(klass) : null }))
       .sort((a, b) => a.subject.name.localeCompare(b.subject.name));
 
-    const students = st.students.filter(s => s.klass === klass).sort((a, b) => a.name.localeCompare(b.name));
+    const students = st.students.filter(s => targetLabels.includes(s.klass)).sort((a, b) => a.name.localeCompare(b.name));
 
-    // A published sitting is locked everywhere marks can be entered
-    // (this table included) — unpublish it from Analysis first.
-    const locked = (st.published || []).some(p => p.klass === klass && p.type === type && p.term === term && String(p.year) === String(year));
-    // Subject must be assigned to this teacher SPECIFICALLY FOR THIS
-    // CLASS (klass is fixed for the whole render() call) — a subject
-    // id can be shared across levels, so scope.subjectIds alone would
-    // let them edit a subject here they only actually teach elsewhere.
-    const canEditCol = (col) => !scope.isTeacher || !!scope.subjectsByClass.get(klass)?.has(col.subject.id);
-    const canEditAny = !locked && subjectCols.some(canEditCol);
+    const examForStudent = (col, stu) => col.exam || col.examsByClass.get(stu.klass) || null;
+    const isLockedForStudent = (stu) => {
+      const exams = subjectCols.map(col => examForStudent(col, stu)).filter(Boolean);
+      return exams.length > 0 && exams.every(exam => (st.published || []).some(p => p.klass === exam.klass && p.type === type && p.term === term && String(p.year) === String(year)));
+    };
+    // Subject assignment is checked against the learner's actual stream
+    // in whole-grade mode, so a teacher cannot edit another stream merely
+    // because the same subject exists there.
+    const canEditCol = (col, stu = null) => {
+      if (!scope.isTeacher) return true;
+      if (stu) return !!scope.subjectsByClass.get(stu.klass)?.has(col.subject.id);
+      return targetLabels.some(label => scope.subjectsByClass.get(label)?.has(col.subject.id));
+    };
+    const canEditAny = !subjectCols.every(col => students.every(stu => {
+      const exam = examForStudent(col, stu);
+      return !exam || isLockedForStudent(stu) || !canEditCol(col, stu);
+    }));
 
     // Build per-student rows
     const rows = students.map(stu => {
       const cells = subjectCols.map(col => {
-        const res = st.results.find(r => r.examId === col.exam.id && r.studentId === stu.id) || null;
-        if (!res) return { marks: null, pct: null, totalMarks: col.exam.totalMarks };
-        return { marks: res.marks, pct: Grading.percent(res.marks, col.exam.totalMarks), totalMarks: col.exam.totalMarks };
+        const exam = examForStudent(col, stu);
+        if (!exam) return { examId: null, exam: null, available: false, marks: null, pct: null, totalMarks: 0 };
+        const res = st.results.find(r => r.examId === exam.id && r.studentId === stu.id) || null;
+        if (!res) return { examId: exam.id, exam, available: true, marks: null, pct: null, totalMarks: exam.totalMarks };
+        return { examId: exam.id, exam, available: true, marks: res.marks, pct: Grading.percent(res.marks, exam.totalMarks), totalMarks: exam.totalMarks };
       });
-      const enteredCells = cells.filter(c => c.marks !== null);
+      const availableCells = cells.filter(c => c.available);
+      const enteredCells = availableCells.filter(c => c.marks !== null);
       const validPcts = enteredCells.map(c => c.pct);
       // Total marks = raw marks obtained across subjects sat (out of the raw
       // marks possible for those same subjects) — not a percentage.
@@ -224,8 +263,8 @@ Views.broadsheet = async function () {
       // Mean/Total above — those are left alone — but the Level badge
       // below is awarded Z rather than a grade band computed off an
       // incomplete record.
-      const complete = subjectCols.length > 0 && enteredCells.length === subjectCols.length;
-      return { student: stu, cells, totalObtained, totalPossible, meanPct, complete };
+      const complete = availableCells.length > 0 && enteredCells.length === availableCells.length;
+      return { student: stu, cells, availableCells, totalObtained, totalPossible, meanPct, complete };
     });
 
     // Rank by mean % (descending), ties share a rank. A student
@@ -293,7 +332,7 @@ Views.broadsheet = async function () {
         high: pcts.length ? Math.max(...pcts) : null,
         low: pcts.length ? Math.min(...pcts) : null,
         entered: pcts.length,
-        expected: students.length
+        expected: rows.filter(r => r.cells[i].available).length
       };
     }).sort((a, b) => (b.mean ?? -1) - (a.mean ?? -1));
 
@@ -303,8 +342,8 @@ Views.broadsheet = async function () {
     const classHigh = validMeans.length ? Math.max(...validMeans) : null;
     const classLow = validMeans.length ? Math.min(...validMeans) : null;
     const passRate = validMeans.length ? (validMeans.filter(v => v >= 50).length / validMeans.length) * 100 : null;
-    const expectedEntries = students.length * subjectCols.length;
-    const enteredEntries = subjectCols.reduce((sum, col) => sum + st.results.filter(r => r.examId === col.exam.id).length, 0);
+    const expectedEntries = rows.reduce((sum, r) => sum + r.cells.filter(c => c.available).length, 0);
+    const enteredEntries = rows.reduce((sum, r) => sum + r.cells.filter(c => c.available && c.marks !== null).length, 0);
     const completion = expectedEntries > 0 ? (enteredEntries / expectedEntries) * 100 : null;
     const bandCounts = [...(st.settings.gradingBands || [])].sort((a, b) => b.min - a.min).map(b => ({
       band: b, count: rowsExtra.filter(r => r.band && r.band.code === b.code).length
@@ -316,7 +355,6 @@ Views.broadsheet = async function () {
        East" vs "Grade 7 West". Only shown when the class actually
        has more than one stream to compare against. ---- */
     const classEntry = st.classes.find(c => c.label === klass);
-    const gradeName = classEntry ? classEntry.name : klass;
     const streamLabels = st.classes && st.classes.length
       ? st.classes.filter(c => c.name === gradeName).map(c => c.label)
       : [klass];
@@ -513,16 +551,18 @@ Views.broadsheet = async function () {
     function subjectCellHtml(row, col) {
       const idx = subjectCols.indexOf(col);
       const c = row.cells[idx];
-      const editable = editMode && canEditCol(col);
+      if (!c.available) return `<td class="num subj-cell" data-max="0" data-marks="" title="Subject not offered for this stream">—</td>`;
+      const exam = c.exam;
+      const editable = editMode && !isLockedForStudent(row.student) && canEditCol(col, row.student);
       if (!editable) {
-        return `<td class="num subj-cell" data-max="${col.exam.totalMarks}" data-marks="${c.marks === null ? '' : c.marks}" ${c.marks !== null ? `title="${c.marks}/${c.totalMarks} raw"` : ''}>${c.pct === null ? '<span class="row-index">—</span>' : c.pct.toFixed(1) + '%'}</td>`;
+        return `<td class="num subj-cell" data-max="${exam.totalMarks}" data-marks="${c.marks === null ? '' : c.marks}" ${c.marks !== null ? `title="${c.marks}/${c.totalMarks} raw"` : ''}>${c.pct === null ? '<span class="row-index">—</span>' : c.pct.toFixed(1) + '%'}</td>`;
       }
-      const key = `${col.exam.id}::${row.student.id}`;
+      const key = `${exam.id}::${row.student.id}`;
       const overridden = pending.get(key);
       const val = overridden ? overridden.marks : (c.marks === null ? '' : c.marks);
-      return `<td class="subj-cell" data-max="${col.exam.totalMarks}" data-marks="${val === '' ? '' : val}">
-        <input type="number" class="mark-input-compact ${overridden ? 'dirty' : ''}" min="0" max="${col.exam.totalMarks}"
-          data-exam="${col.exam.id}" data-student="${row.student.id}" data-max="${col.exam.totalMarks}" value="${val}">
+      return `<td class="subj-cell" data-max="${exam.totalMarks}" data-marks="${val === '' ? '' : val}">
+        <input type="number" class="mark-input-compact ${overridden ? 'dirty' : ''}" min="0" max="${exam.totalMarks}"
+          data-exam="${exam.id}" data-student="${row.student.id}" data-max="${exam.totalMarks}" value="${val}">
       </td>`;
     }
 
@@ -547,6 +587,8 @@ Views.broadsheet = async function () {
       return `<i class="fa-solid fa-arrow-${tableState.sortDir === 'asc' ? 'up' : 'down'} sort-arrow"></i>`;
     }
 
+    const allLocked = students.length > 0 && students.every(stu => isLockedForStudent(stu));
+
     wrap.innerHTML = `
       <div class="filter-row no-print" style="margin-bottom:12px;">
         <input type="text" id="bsSearch" placeholder="Search learner name or adm. no…" style="min-width:220px;">
@@ -561,11 +603,11 @@ Views.broadsheet = async function () {
           <button class="btn btn-primary" id="bsSaveBtn" style="display:none;" disabled><i class="fa-solid fa-floppy-disk"></i> Save Changes</button>
           <button class="btn btn-danger" id="bsCancelBtn" style="display:none;">Cancel Changes</button>
           <span class="unsaved-pill" id="bsUnsavedPill" style="display:none;"><i class="fa-solid fa-circle-exclamation"></i> 0 unsaved changes</span>
-        ` : locked ? `<span class="field-hint"><i class="fa-solid fa-lock"></i> Marks are locked — this sitting is published. Unpublish it from Analysis to edit.</span>` : ''}
+        ` : allLocked ? `<span class="field-hint"><i class="fa-solid fa-lock"></i> Marks are locked — this sitting is published. Unpublish it from Analysis to edit.</span>` : ''}
         <span id="bsCount" class="field-hint" style="margin-left:auto;"></span>
       </div>
       <div class="ledger" id="bsPrintArea">
-        <div style="padding:16px 16px 0 16px;">${buildReportMastheadHTML(st, `${klassTitlePrefix(st, klass)}Broadsheet — ${klass}`, `${type} Results`, term, year)}</div>
+        <div style="padding:16px 16px 0 16px;">${buildReportMastheadHTML(st, `${klassTitlePrefix(st, isWholeGrade ? gradeName : klass)}Broadsheet — ${isWholeGrade ? `${gradeName} (Whole Class)` : klass}`, `${type} Results`, term, year)}</div>
         <div class="ledger-scroll ledger-scroll-y">
           <table class="ledger-table">
             ${bsColgroupHTML(subjectCols.length)}
@@ -613,7 +655,7 @@ Views.broadsheet = async function () {
         ${buildBroadsheetFooterHTML(st)}
       </div>
       <p class="field-hint no-print" style="margin-top:10px;">
-        ${UI.esc(klass)} &middot; ${UI.esc(type)} &middot; ${UI.esc(term)} ${UI.esc(year)} &middot;
+        ${UI.esc(isWholeGrade ? `${gradeName} (Whole Class)` : klass)} &middot; ${UI.esc(type)} &middot; ${UI.esc(term)} ${UI.esc(year)} &middot;
         ${students.length} student${students.length === 1 ? '' : 's'} &middot; ${subjectCols.length} subject${subjectCols.length === 1 ? '' : 's'}
         ${editMode ? ' &middot; Editing — totals below update as you type; positions refresh after you save.' : ''}
       </p>
