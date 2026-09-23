@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<!-- B~CBE Analytics — Copyright (c) 2026 B~CBE Analytics. All rights reserved. -->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>B~CBE Analytics</title>
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#171B3A" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="B~CBE Analytics" />
+<link rel="icon" href="favicon.ico" sizes="any" />
+<link rel="icon" href="icons/icon-192.png" type="image/png" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+<link rel="stylesheet"
+href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css" />
+<!-- Chart.js: powers the dashboard analytics charts -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<!-- html2pdf.js (html2canvas + jsPDF bundled): powers every one-click
+     "Download PDF" button — renders a report element straight to a
+     downloadable PDF file, entirely client-side, no server involved.
+     Pinned to 0.9.3, NOT the newer 0.10.x line — html2pdf.js's own
+     maintainers flag 0.10 with widespread blank-PDF regressions and
+     say to stay on 0.9.3 until those are sorted out. Every "Download
+     PDF" button in this app (report cards, broadsheet, analysis,
+     attendance, exam summary, class performance) funnels through
+     this one script, so upgrading past 0.9.3 should be re-tested
+     against all of them first, not just the one that flagged it. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js"></script>
+<!-- pdf-lib: used only to stitch together the separately-rendered
+     PDF chunks that a large multi-page export (e.g. a whole class of
+     report cards) now gets split into, so every page can be captured
+     at full resolution instead of the old single giant capture that
+     had to be scaled down (and blurred) once it grew tall enough.
+     See UI._buildMultiPagePdf / _mergePdfBuffers in js/ui.js. If this
+     fails to load, PDF export still works — it just falls back to
+     the single-pass capture for very large exports. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script>
+  // Apply saved theme before paint, so there's no light-mode flash.
+  (function () {
+    try {
+      const saved = localStorage.getItem('cbeTheme');
+      if (saved === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<!-- Homepage (marketing landing page, shown first for signed-out visitors) -->
+<div id="homeRoot" style="display:none;"></div>
+
+<!-- Login screen (shown when nobody is logged in) -->
+<div id="loginRoot" class="login-screen" style="display:none;"></div>
+
+<!-- Main app shell (shown after login) -->
+<div class="app" id="appRoot" style="display:none;">
+
+  <!-- Mobile backdrop for the slide-in sidebar -->
+  <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <img src="icons/logo-mark.png" alt="B~CBE Analytics" class="brand-logo" width="34" height="34" />
+      <span class="brand-mark">B~CBE</span>
+      <span class="brand-name">Analytics</span>
+    </div>
+    <div id="levelSwitcherWrap" class="level-switcher-wrap">
+      <!-- populated by app.js: lets a superadmin/admin/teacher switch
+           which section (Primary / Junior Secondary / Senior School)
+           the whole app is filtered to, or shows a locked badge for a
+           section-scoped admin login -->
+    </div>
+
+    <nav class="nav" id="navList">
+      <!-- populated by app.js based on role -->
+    </nav>
+
+    <div class="sidebar-foot" id="sidebarFoot">
+      <!-- populated by app.js -->
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <div class="frozen-banner" id="frozenBanner">
+      <span class="frozen-dot"></span>
+      <span>This school's account is frozen.</span>
+      <span class="detail" id="frozenBannerDetail">Contact the school administrator to restore access.</span>
+    </div>
+    <header class="topbar">
+      <div style="display:flex; align-items:center; gap:12px;">
+        <button class="menu-toggle" id="menuToggle" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 5H17M3 10H17M3 15H17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+        <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" aria-label="Collapse sidebar" title="Collapse sidebar">
+          <i class="fa-solid fa-bars-staggered"></i>
+        </button>
+        <div class="topbar-title-block">
+          <h1 id="pageTitle">Dashboard</h1>
+          <span class="topbar-welcome" id="topbarWelcome"></span>
+        </div>
+      </div>
+
+      <div class="topbar-center">
+        <div class="header-search">
+          <i class="fa-solid fa-magnifying-glass"></i>
+          <input type="text" id="globalSearch" placeholder="Search students by name or admission no…" aria-label="Search students">
+        </div>
+      </div>
+
+      <div class="topbar-actions" id="topbarActionsWrap">
+        <div id="topbarActions"></div>
+
+        <div class="header-anchor">
+          <button class="icon-btn" id="notifBellBtn" aria-label="Notifications" title="Notifications">
+            <i class="fa-regular fa-bell"></i>
+            <span class="notif-dot" id="notifDot"></span>
+          </button>
+          <div class="dropdown-panel" id="notifPanel"></div>
+        </div>
+
+        <button class="icon-btn" id="themeToggleBtn" aria-label="Toggle dark mode" title="Toggle dark mode">
+          <i class="fa-solid fa-moon" id="themeToggleIcon"></i>
+        </button>
+
+        <div class="header-anchor">
+          <div class="user-menu" id="userMenuBtn" title="Account">
+            <span class="avatar" id="userAvatar">--</span>
+            <span class="user-meta">
+              <span class="user-name" id="userMenuName">—</span><br>
+              <span class="user-role" id="userMenuRole">—</span>
+            </span>
+          </div>
+          <div class="dropdown-panel" id="userPanel"></div>
+        </div>
+
+        <span class="last-sync" id="lastSync"></span>
+      </div>
+    </header>
+
+    <div class="content" id="content">
+      <!-- rendered by views.js -->
+    </div>
+  </main>
+</div>
+
+<!-- Floating action button: quick "Enter Marks" shortcut on mobile -->
+<button class="fab" id="fabEnterMarks" aria-label="Enter marks" title="Enter marks">
+  <i class="fa-solid fa-pen"></i>
+</button>
+
+<!-- Modal root -->
+<div id="modalRoot"></div>
+
+<!-- Toast root -->
+<div id="toastRoot" class="toast-root"></div>
+
+<!-- Supabase JS SDK -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+
+<!-- SheetJS: parses .xlsx/.xls files for bulk student import. CSV import
+     works fully offline; Excel needs this library loaded once per session. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<!-- App scripts, in dependency order -->
+<script src="js/supabaseClient.js"></script>
+<script src="js/data.js"></script>
+<script src="js/grading.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/import.js"></script>
+<script src="js/views.js"></script>
+<script src="js/classes.js"></script>
+<script src="js/auth-views.js"></script>
+<script src="js/broadsheet.js"></script>
+<script src="js/meritlist.js"></script>
+<script src="js/analysis.js"></script>
+<script src="js/notify.js"></script>
+<script src="js/sms.js"></script>
+<script src="js/teacher.js"></script>
+<script src="js/attendance.js"></script>
+<script src="js/app.js"></script>
+
+<!-- PWA: register service worker for installability + offline app shell -->
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('service-worker.js').catch((err) => {
+        console.warn('Service worker registration failed:', err);
+      });
+    });
+  }
+
+  // Shared "install this app" handle — used both for the automatic
+  // one-time toast below AND the explicit "Install App" button on the
+  // homepage (see auth-views.js Views.home). Kept on window so any
+  // screen can check availability / trigger the native install prompt,
+  // since the `beforeinstallprompt` event can only be captured once,
+  // globally, whenever the browser decides to fire it.
+  window.CBEInstall = {
+    deferredPrompt: null,
+    installed: window.matchMedia && window.matchMedia('(display-mode: standalone)').matches,
+    listeners: [],
+    onChange(fn) { this.listeners.push(fn); },
+    _notify() { this.listeners.forEach(fn => { try { fn(); } catch (e) {} }); },
+    async promptInstall() {
+      if (!this.deferredPrompt) return 'unavailable';
+      this.deferredPrompt.prompt();
+      const choice = await this.deferredPrompt.userChoice;
+      this.deferredPrompt = null;
+      this._notify();
+      return choice.outcome; // 'accepted' | 'dismissed'
+    }
+  };
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    window.CBEInstall.deferredPrompt = e;
+    window.CBEInstall._notify();
+
+    // Also offer the automatic one-time toast, same as before.
+    if (sessionStorage.getItem('cbeInstallOffered')) return;
+    sessionStorage.setItem('cbeInstallOffered', '1');
+    setTimeout(() => {
+      if (!window.CBEInstall.deferredPrompt) return;
+      const root = document.getElementById('toastRoot');
+      if (!root) return;
+      const el = document.createElement('div');
+      el.className = 'toast';
+      el.style.cursor = 'pointer';
+      el.textContent = 'Install this app on your device — tap here';
+      el.addEventListener('click', async () => {
+        el.remove();
+        await window.CBEInstall.promptInstall();
+      });
+      root.appendChild(el);
+      setTimeout(() => el.remove(), 8000);
+    }, 2500);
+  });
+
+  window.addEventListener('appinstalled', () => {
+    window.CBEInstall.installed = true;
+    window.CBEInstall.deferredPrompt = null;
+    window.CBEInstall._notify();
+  });
+</script>
+</body>
+</html>

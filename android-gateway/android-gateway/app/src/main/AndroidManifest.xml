@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copyright (c) 2026 B~CBE Analytics. All rights reserved. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Core: actually sending the SMS via the phone's own SIM. -->
+    <uses-permission android:name="android.permission.SEND_SMS" />
+
+    <!-- Networking to Supabase Edge Functions (normal permissions,
+         no runtime prompt). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Keeping the gateway alive as a foreground service so pending
+         SMS keep getting picked up while the app isn't in the
+         foreground. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Restart the gateway automatically after the phone reboots, so
+         a power cut doesn't silently take the school's SMS gateway
+         offline until someone notices and reopens the app. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Only used to LAUNCH the system's "ignore battery
+         optimizations" screen from a settings button — not to
+         silently grant ourselves the exemption. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.CbeSmsGateway"
+        android:usesCleartextTraffic="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".GatewayService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+</manifest>
