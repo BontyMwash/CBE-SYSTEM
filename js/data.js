@@ -527,39 +527,81 @@ const Store = {
 
   // ---- Results ----
   // marks === '' clears/deletes the result (student didn't sit the exam).
+  // Network hiccups (browser TypeError: Failed to fetch) are retried here so
+  // a temporary connection drop does not make a perfectly valid mark look
+  // lost. Database/RLS errors are NOT retried and are surfaced immediately.
   async setResult(examId, studentId, marks) {
+    const isNetworkError = (err) => {
+      const msg = String(err?.message || err || '').toLowerCase();
+      return err?.name === 'TypeError' && msg.includes('failed to fetch')
+        || msg.includes('networkerror')
+        || msg.includes('network request failed')
+        || msg.includes('load failed')
+        || msg.includes('fetch failed');
+    };
+
+    const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    const withNetworkRetry = async (operation, label) => {
+      let lastError = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const result = await operation();
+          if (result?.error) {
+            // Supabase/PostgREST errors are real database responses; do not
+            // retry them as if they were browser connectivity failures.
+            this._throwIfError(label, result.error);
+          }
+          return result;
+        } catch (err) {
+          lastError = err;
+          if (!isNetworkError(err) || attempt === 3) throw err;
+          await wait(350 * attempt);
+        }
+      }
+      throw lastError;
+    };
+
     if (marks === '' || marks === null || marks === undefined) {
-      const { error } = await supabase.from('results').delete().eq('exam_id', examId).eq('student_id', studentId);
-      this._throwIfError('clear result', error);
+      await withNetworkRetry(
+        () => supabase.from('results').delete().eq('exam_id', examId).eq('student_id', studentId),
+        'clear result'
+      );
       return null;
     }
+
     const numericMarks = Number(marks);
     if (!Number.isFinite(numericMarks)) {
       throw Object.assign(new Error('Marks must be a valid number.'), { label: 'save result' });
     }
 
-    const { data, error } = await supabase.from('results')
-      .upsert({ exam_id: examId, student_id: studentId, marks: numericMarks }, { onConflict: 'exam_id,student_id' })
-      .select('id,exam_id,student_id,marks')
-      .single();
-    this._throwIfError('save result', error);
+    const write = await withNetworkRetry(
+      () => supabase.from('results')
+        .upsert({ exam_id: examId, student_id: studentId, marks: numericMarks }, { onConflict: 'exam_id,student_id' })
+        .select('id,exam_id,student_id,marks')
+        .single(),
+      'save result'
+    );
 
     // Do not report “Saved” until the database can read the exact row back.
-    // This makes the UI status mean “persisted and readable after refresh”,
-    // rather than merely “the write request returned”.
-    const verify = await supabase.from('results')
-      .select('id,exam_id,student_id,marks')
-      .eq('exam_id', examId)
-      .eq('student_id', studentId)
-      .single();
-    this._throwIfError('verify saved result', verify.error);
+    // This also protects the refresh/load path: a successful UI write must
+    // correspond to a row that can actually be read back by this account.
+    const verify = await withNetworkRetry(
+      () => supabase.from('results')
+        .select('id,exam_id,student_id,marks')
+        .eq('exam_id', examId)
+        .eq('student_id', studentId)
+        .single(),
+      'verify saved result'
+    );
+
     if (!verify.data || Number(verify.data.marks) !== numericMarks) {
       const e = new Error('The mark was not confirmed in the database after saving.');
       e.label = 'verify saved result';
       e.code = 'SAVE_VERIFY_FAILED';
       throw e;
     }
-    return this._mapResult(verify.data || data);
+    return this._mapResult(verify.data || write.data);
   },
 
   // ---- Settings (per school) ----
