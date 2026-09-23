@@ -326,6 +326,16 @@ const Store = {
     const { error } = await supabase.from('subjects').delete().eq('id', id);
     this._throwIfError('delete subject', error);
   },
+  // Combine two subject records into one WITHOUT losing any recorded
+  // mark — see sql/028_merge_subjects.sql for exactly what this does.
+  // keepId survives; removeId's exams/results are moved onto it (or
+  // merged into matching exams where one already exists), and
+  // removeId itself is deleted once nothing references it any more.
+  async mergeSubjects(keepId, removeId) {
+    const { data, error } = await supabase.rpc('merge_subjects', { p_keep_id: keepId, p_remove_id: removeId });
+    this._throwIfError('merge subjects', error);
+    return data;
+  },
 
   // ---- Exam types (admin-defined sittings, e.g. Opener/Midterm/Endterm) ----
   async addExamType(t) {

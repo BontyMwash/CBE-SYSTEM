@@ -479,55 +479,6 @@ function subjectsForKlass(st, klassLabel) {
   return st.subjects.filter(s => sectionCovers(s.section || '', section.key));
 }
 
-// Same idea as subjectsForKlass(), but strict — used ONLY for exam
-// creation. subjectsForKlass() treats a legacy unscoped subject
-// (section: '', created before Subjects became level-independent —
-// see Views.subjects) as "covers every level", which is exactly
-// right for things like the Subjects/Manage-subjects screens where a
-// genuinely shared subject should still show up everywhere. But for
-// creating an EXAM it means one old unscoped "Mathematics" row would
-// be offered for a Junior Secondary exam AND a Lower Primary exam AND
-// every level in between — the cross-level leak this whole project
-// has been closing. This function only counts a subject as belonging
-// to a level if it's ACTUALLY been given that level (or the shared
-// 'primary' parent) — never the empty/legacy case.
-//
-// This never changes any subject's own data — a legacy subject still
-// works everywhere else exactly as before (Subjects page's "All
-// levels (legacy)" tab, Manage Subjects, etc.); it just isn't offered
-// when creating a NEW exam until an admin gives it one real level.
-// Falls back to the broader subjectsForKlass() only if a level has NO
-// properly-scoped subjects at all yet, so exam creation isn't fully
-// blocked before old subjects have been re-tagged.
-function levelScopedSubjectsForExam(st, klassLabel) {
-  if (!klassLabel) return st.subjects;
-  const section = sectionForKlassLabel(st, klassLabel);
-  if (!section) return st.subjects;
-  const strict = st.subjects.filter(s => !!s.section && sectionCovers(s.section, section.key));
-  return strict.length ? strict : subjectsForKlass(st, klassLabel);
-}
-
-// Narrower than subjectsForKlass(): subjects a real teacher is
-// actually assigned to teach IN THIS SPECIFIC CLASS (via
-// teacher_subject_classes — "Manage subjects" on the Users page, per
-// sql/026_teacher_subject_per_class.sql), not merely subjects that
-// COULD apply at that class's level. Used when creating an exam, so
-// the subject picker never offers something nobody teaches there —
-// e.g. French being scoped to "Junior Secondary" in general doesn't
-// mean this particular Grade 7 class has anyone teaching it. Falls
-// back to the full level list (subjectsForKlass) when nobody has been
-// assigned ANY subject for this class yet, so a brand-new school
-// setting up exams before assigning teachers isn't blocked.
-function subjectsTaughtInKlass(st, klassLabel) {
-  const levelSubjects = levelScopedSubjectsForExam(st, klassLabel);
-  const cls = (st.classes || []).find(c => c.label === klassLabel);
-  if (!cls) return levelSubjects;
-  const assignedIds = new Set((st.teacherSubjectClasses || []).filter(tsc => tsc.classId === cls.id).map(tsc => tsc.subjectId));
-  if (assignedIds.size === 0) return levelSubjects;
-  const taught = levelSubjects.filter(s => assignedIds.has(s.id));
-  return taught.length ? taught : levelSubjects;
-}
-
 // Shared by the teacher-facing screens (My Classes, Learners,
 // Assessments, Gradebook, Attendance, Competency Assessment): works
 // out which classes/subjects a "user" (teacher) login is scoped to.
@@ -1380,67 +1331,33 @@ Views.students = async function () {
 
 /* ------------------------- SUBJECTS ------------------------- */
 
-// The four bands a subject can be created for. Deliberately NOT
-// offering "All levels" (section: '') or the combined "Primary"
-// (section: 'primary') as choices when ADDING a subject any more —
-// those are what let one "Mathematics" row silently apply to every
-// level, which is exactly the cross-level leak this app spent several
-// rounds of fixes closing (subjectsForKlass, teacher_subject_classes,
-// exam creation, report cards...). Subject creation is now
-// independent PER LEVEL: adding a subject from the Upper Primary tab
-// can only ever create an Upper Primary subject, full stop — even if
-// a same-named subject already exists under Lower Primary or Junior
-// Secondary, they are two separate rows with two separate ids and
-// never share exams, marks or teacher assignments.
-//
-// Existing subjects created before this change with section '' or
-// 'primary' still work exactly as before (nothing is deleted or
-// silently reassigned) — they just surface under a special "All
-// levels (legacy)" tab so an admin can migrate each one, at their own
-// pace, to a specific level via Edit.
-const SUBJECT_LEVEL_TABS = ['lower-primary', 'upper-primary', 'junior-secondary', 'senior-school'];
-
 Views.subjects = async function () {
-  setTopbarActions(`<button class="btn btn-primary" id="addSubjectBtn">+ Add subject</button>`);
+  setTopbarActions(`
+    <button class="btn" id="mergeSubjectsBtn">Merge duplicates</button>
+    <button class="btn btn-primary" id="addSubjectBtn">+ Add subject</button>
+  `);
   showLoading();
   const st = await Store.current();
-
-  const hasLegacy = st.subjects.some(s => !SUBJECT_LEVEL_TABS.includes(s.section || ''));
-  const tabs = hasLegacy ? [...SUBJECT_LEVEL_TABS, 'legacy'] : SUBJECT_LEVEL_TABS;
 
   function sectionBadge(s) {
     const key = s.section || '';
     return `<span class="badge badge-${sectionBadgeClass(key)}">${UI.esc(sectionLabel(key))}</span>`;
   }
 
-  function tabLabel(tab) {
-    return tab === 'legacy' ? 'All levels (legacy)' : sectionLabel(tab);
-  }
-
-  // Strict for a real level tab (exactly that band, nothing shared in
-  // or out) — independence means Lower Primary's list is Lower
-  // Primary's list, not "anything that covers Lower Primary". The
-  // "legacy" tab is the one exception: it's specifically where
-  // pre-existing '' / 'primary' subjects (created before this change)
-  // surface for cleanup.
-  function rowsForTab(tab) {
-    if (tab === 'legacy') return st.subjects.filter(s => !SUBJECT_LEVEL_TABS.includes(s.section || ''));
-    return st.subjects.filter(s => (s.section || '') === tab);
-  }
-
-  function renderTable(tab) {
+  function renderTable(filterSection) {
+    let rows = [...st.subjects].sort((a, b) => a.name.localeCompare(b.name));
+    if (filterSection) rows = rows.filter(s => sectionCovers(filterSection, s.section || '') && (s.section || ''));
     if (st.subjects.length === 0) {
-      return `<div class="empty"><div class="empty-title">No subjects yet</div><p>Add subjects like Mathematics, English, Integrated Science — starting with whichever level you're setting up.</p></div>`;
+      return `<div class="empty"><div class="empty-title">No subjects yet</div><p>Add subjects like Mathematics, English, Integrated Science.</p></div>`;
     }
-    const rows = [...rowsForTab(tab)].sort((a, b) => a.name.localeCompare(b.name));
     if (rows.length === 0) {
-      return `<div class="empty"><div class="empty-title">No subjects for ${UI.esc(tabLabel(tab))} yet</div><p>${tab === 'legacy' ? '' : `Add one below — it'll only ever apply to ${UI.esc(tabLabel(tab))}.`}</p></div>`;
+      return `<div class="empty"><div class="empty-title">No subjects in this section</div><p>Try a different filter, or add a subject scoped to it.</p></div>`;
     }
     return `
       <div class="ledger">
         <div class="ledger-scroll">
           <table class="ledger-table">
-            <thead><tr><th>#</th><th>Subject</th><th>Code</th>${tab === 'legacy' ? '<th>Level</th>' : ''}<th>Exams recorded</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>Subject</th><th>Code</th><th>Section</th><th>Exams recorded</th><th></th></tr></thead>
             <tbody>
               ${rows.map((s, i) => {
                 const examCount = st.exams.filter(e => e.subjectId === s.id).length;
@@ -1448,7 +1365,7 @@ Views.subjects = async function () {
                   <td class="row-index">${i + 1}</td>
                   <td>${UI.esc(s.name)}</td>
                   <td class="num">${UI.esc(s.code) || '—'}</td>
-                  ${tab === 'legacy' ? `<td>${sectionBadge(s)}</td>` : ''}
+                  <td>${sectionBadge(s)}</td>
                   <td class="num">${examCount}</td>
                   <td>
                     <button class="btn btn-sm btn-ghost" data-edit="${s.id}">Edit</button>
@@ -1483,24 +1400,15 @@ Views.subjects = async function () {
     return name.replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase();
   }
 
-  // Adding a subject: the level is LOCKED to whichever tab you're on —
-  // there's no dropdown, so it's impossible to create a subject that
-  // spans multiple levels by accident. Editing an existing subject
-  // lets you move it to a different (single) level if you got it
-  // wrong, and — only for a pre-existing legacy '' / 'primary' subject
-  // — offers its current legacy value too, clearly labelled, so the
-  // dropdown isn't left showing something that isn't in the list.
-  function openForm(existing, lockedLevel) {
+  // A brand-new subject defaults its Level to whichever tab the admin is
+  // currently filtered to (passed in as `defaultSection`), NOT to "All
+  // levels" — that mismatch was the bug where a subject added while
+  // looking at Junior Secondary came out unscoped and silently leaked
+  // into every other level's picker. Editing an existing subject still
+  // shows its own real section, never the filter.
+  function openForm(existing, defaultSection) {
     const isEdit = !!existing;
-    const currentSection = isEdit ? (existing.section || '') : lockedLevel;
-    const isLegacyCurrent = isEdit && !SUBJECT_LEVEL_TABS.includes(currentSection);
-    const levelField = (!isEdit && lockedLevel)
-      ? `<p style="margin:0;"><strong>${UI.esc(sectionLabel(lockedLevel))}</strong></p><p class="field-hint">This subject will only ever apply to ${UI.esc(sectionLabel(lockedLevel))} — add it again separately under another level's tab if the same subject is also taught there, so each level keeps its own independent record, exams and teacher assignments.</p>`
-      : `<select id="f_section">
-          ${isLegacyCurrent ? `<option value="${UI.esc(currentSection)}" selected>${UI.esc(sectionLabel(currentSection))} (legacy — please move to one level below)</option>` : ''}
-          ${SUBJECT_LEVEL_TABS.map(k => `<option value="${k}" ${currentSection === k ? 'selected' : ''}>${UI.esc(sectionLabel(k))}</option>`).join('')}
-        </select>
-        <p class="field-hint">${isLegacyCurrent ? 'This subject currently applies to more than one level. Pick a single level to make it independent — its exams and marks stay exactly as they are, only future exams/assignments will be scoped to the level you choose.' : 'Each subject belongs to exactly one level — add the same subject again under a different level\'s tab if it\'s genuinely taught in both.'}</p>`;
+    const initialSection = isEdit ? (existing.section || '') : (defaultSection || '');
     UI.openModal(`
       <h2>${isEdit ? 'Edit subject' : 'Add subject'}</h2>
       <div class="form-grid">
@@ -1515,7 +1423,15 @@ Views.subjects = async function () {
         </div>
         <div class="field">
           <label>Level</label>
-          ${levelField}
+          <select id="f_section">
+            <option value="" ${initialSection === '' ? 'selected' : ''}>All levels (shared everywhere &mdash; use with care)</option>
+            <option value="primary" ${initialSection === 'primary' ? 'selected' : ''}>Primary only &mdash; Lower &amp; Upper (Grade 1&ndash;6)</option>
+            <option value="lower-primary" ${initialSection === 'lower-primary' ? 'selected' : ''}>Lower Primary only (Grade 1&ndash;3)</option>
+            <option value="upper-primary" ${initialSection === 'upper-primary' ? 'selected' : ''}>Upper Primary only (Grade 4&ndash;6)</option>
+            <option value="junior-secondary" ${initialSection === 'junior-secondary' ? 'selected' : ''}>Junior Secondary only (Grade 7&ndash;9)</option>
+            <option value="senior-school" ${initialSection === 'senior-school' ? 'selected' : ''}>Senior School only (Grade 10&ndash;12)</option>
+          </select>
+          <p class="field-hint">${defaultSection && !isEdit ? `Defaulted to <strong>${UI.esc(sectionLabel(defaultSection))}</strong> since that's the level you're viewing &mdash; change it only if this subject should also appear elsewhere.` : 'Scoping a subject keeps it out of the picker for every other level &mdash; e.g. Chemistry for Senior School only. Leave on "All levels" only for a subject every level genuinely shares.'}</p>
         </div>
       </div>
       <div class="modal-actions">
@@ -1536,8 +1452,7 @@ Views.subjects = async function () {
       root.querySelector('#saveBtn').onclick = async () => {
         const name = nameInput.value.trim();
         let code = codeInput.value.trim().toUpperCase();
-        const sectionField = root.querySelector('#f_section');
-        const section = sectionField ? sectionField.value : lockedLevel;
+        const section = root.querySelector('#f_section').value;
         if (!name) { UI.toast('Subject name is required'); return; }
         if (!code) code = suggestCode(name);
         try {
@@ -1552,30 +1467,101 @@ Views.subjects = async function () {
     });
   }
 
-  let activeTab = tabs[0];
-
-  function renderTabs() {
-    return `
-      <div class="filter-row" style="flex-wrap:wrap;">
-        ${tabs.map(t => `<button class="btn btn-sm ${t === activeTab ? 'btn-primary' : 'btn-ghost'}" data-tab="${UI.esc(t)}">${UI.esc(tabLabel(t))} (${rowsForTab(t).length})</button>`).join('')}
+  // Fold a duplicate subject into another WITHOUT losing any recorded
+  // mark — see sql/028_merge_subjects.sql. Handy for cleaning up any
+  // "Mathematics" / "Mathematics" duplicates left over from testing
+  // the level-independent subjects feature, or any other accidental
+  // duplicate.
+  function openMergeForm() {
+    if (st.subjects.length < 2) {
+      UI.openModal(`
+        <h2>Merge duplicate subjects</h2>
+        <p class="field-hint">You need at least two subjects for there to be anything to merge.</p>
+        <div class="modal-actions"><button class="btn btn-ghost" id="closeBtn">Close</button></div>
+      `, (root) => { root.querySelector('#closeBtn').onclick = () => UI.closeModal(); });
+      return;
+    }
+    const sorted = [...st.subjects].sort((a, b) => a.name.localeCompare(b.name) || sectionLabel(a.section || '').localeCompare(sectionLabel(b.section || '')));
+    const optionsHtml = (excludeId) => sorted.filter(s => s.id !== excludeId).map(s => {
+      const examCount = st.exams.filter(e => e.subjectId === s.id).length;
+      return `<option value="${s.id}">${UI.esc(s.name)} — ${UI.esc(sectionLabel(s.section || ''))} (${examCount} exam${examCount === 1 ? '' : 's'})</option>`;
+    }).join('');
+    UI.openModal(`
+      <h2>Merge duplicate subjects</h2>
+      <p class="field-hint" style="margin-bottom:12px;">Combines two subject records into one. Every exam and every recorded mark under "Old" moves onto "Keep" — nothing is deleted. If Old and Keep both already have an exam for the exact same class/type/term/year, their marks are merged together; if the same student somehow has a mark on both, neither is touched or overwritten — you'll get a note about it below so you can check.</p>
+      <div class="form-grid">
+        <div class="field full">
+          <label>Keep (this one survives, keeps its name/code)</label>
+          <select id="f_keep">${optionsHtml(null)}</select>
+        </div>
+        <div class="field full">
+          <label>Old (this one's exams/marks move into Keep, then it's removed)</label>
+          <select id="f_remove">${optionsHtml(sorted[0]?.id)}</select>
+        </div>
       </div>
-      ${activeTab === 'legacy' ? `<p class="field-hint" style="margin-bottom:12px;">These were created before subjects became level-independent, so they still apply to more than one level. Edit each one to move it to a single level when you get a chance — nothing here is broken in the meantime.</p>` : ''}
-    `;
-  }
-
-  function paint() {
-    document.getElementById('content').innerHTML = `
-      <div id="tabsWrap">${renderTabs()}</div>
-      <div id="wrap">${renderTable(activeTab)}</div>
-    `;
-    document.getElementById('addSubjectBtn').onclick = () => openForm(null, activeTab === 'legacy' ? SUBJECT_LEVEL_TABS[0] : activeTab);
-    document.querySelectorAll('[data-tab]').forEach(btn => {
-      btn.onclick = () => { activeTab = btn.dataset.tab; paint(); };
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
+        <button class="btn btn-primary" id="mergeBtn">Merge</button>
+      </div>
+    `, (root) => {
+      const keepSel = root.querySelector('#f_keep');
+      const removeSel = root.querySelector('#f_remove');
+      const syncRemoveOptions = () => { removeSel.innerHTML = optionsHtml(keepSel.value); };
+      keepSel.onchange = syncRemoveOptions;
+      syncRemoveOptions();
+      root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
+      root.querySelector('#mergeBtn').onclick = async () => {
+        const keepId = keepSel.value;
+        const removeId = removeSel.value;
+        if (!keepId || !removeId || keepId === removeId) { UI.toast('Pick two different subjects'); return; }
+        const keepName = st.subjects.find(s => s.id === keepId)?.name || 'Keep';
+        const removeName = st.subjects.find(s => s.id === removeId)?.name || 'Old';
+        UI.confirmAction(`Merge "${removeName}" into "${keepName}"? This moves every exam and mark from "${removeName}" onto "${keepName}" and removes "${removeName}" once empty.`, async () => {
+          try {
+            const summary = await Store.mergeSubjects(keepId, removeId);
+            UI.closeModal();
+            const bits = [];
+            if (summary.examsMoved) bits.push(`${summary.examsMoved} exam${summary.examsMoved === 1 ? '' : 's'} moved over`);
+            if (summary.examsMerged) bits.push(`${summary.examsMerged} duplicate sitting${summary.examsMerged === 1 ? '' : 's'} merged`);
+            if (summary.resultsMoved) bits.push(`${summary.resultsMoved} mark${summary.resultsMoved === 1 ? '' : 's'} moved`);
+            let msg = bits.length ? `Merged — ${bits.join(', ')}.` : 'Merged — nothing to move.';
+            if (summary.resultsConflicted) {
+              msg += ` ${summary.resultsConflicted} mark${summary.resultsConflicted === 1 ? '' : 's'} existed on BOTH subjects for the same student/sitting — neither was touched, and "${removeName}" was kept (not deleted) so you can compare them in Marks Entry and clear the wrong one, then merge again.`;
+            } else if (!summary.removedSubjectDeleted) {
+              msg += ` "${removeName}" still has something referencing it, so it wasn't removed — merge again to finish once that's cleared.`;
+            }
+            UI.toast(msg);
+            Views.subjects();
+          } catch (err) {
+            UI.toast('Could not merge: ' + err.message);
+          }
+        });
+      };
     });
-    wireRowActions();
   }
 
-  paint();
+  document.getElementById('content').innerHTML = `
+    <div class="filter-row">
+      <select id="sectionFilter">
+        <option value="">All levels</option>
+        <option value="primary">Primary (Grade 1&ndash;6)</option>
+        <option value="lower-primary">Lower Primary (Grade 1&ndash;3)</option>
+        <option value="upper-primary">Upper Primary (Grade 4&ndash;6)</option>
+        <option value="junior-secondary">Junior Secondary (Grade 7&ndash;9)</option>
+        <option value="senior-school">Senior School (Grade 10&ndash;12)</option>
+      </select>
+    </div>
+    <div id="wrap">${renderTable('')}</div>
+  `;
+  let activeFilterSection = '';
+  document.getElementById('addSubjectBtn').onclick = () => openForm(null, activeFilterSection);
+  document.getElementById('mergeSubjectsBtn').onclick = openMergeForm;
+  document.getElementById('sectionFilter').onchange = (e) => {
+    activeFilterSection = e.target.value;
+    document.getElementById('wrap').innerHTML = renderTable(activeFilterSection);
+    wireRowActions();
+  };
+  wireRowActions();
 };
 
 /* ------------------------- EXAMS ------------------------- */
@@ -1934,6 +1920,8 @@ Views.exams = async function () {
     if (emptyBtn) emptyBtn.onclick = () => openAllSubjectsForm();
     const noMatchBtn = document.getElementById('noMatchResetBtn');
     if (noMatchBtn) noMatchBtn.onclick = () => { resetFilters(); };
+    const goMergeBtn = document.getElementById('goMergeSubjectsBtn');
+    if (goMergeBtn) goMergeBtn.onclick = () => App.navigate('subjects');
   }
 
   function wirePagination() {
@@ -1994,7 +1982,8 @@ Views.exams = async function () {
     <p class="page-intro">Manage examinations, subjects and learner assessments.</p>
     ${allRows.some(r => r.duplicateSuspect) ? `
       <div class="field-hint" style="background:var(--warn-bg, #fff3cd); border:1px solid var(--warn-border, #ffe69c); border-radius:6px; padding:10px 12px; margin-bottom:14px;">
-        <strong>⚠ Possible duplicate exams found.</strong> Some rows below (flagged with ⚠ next to the subject) share the exact same class/type/term/year but point to two DIFFERENT subject records with the same name — almost always an old subject and its newer replacement (see the Subjects page). Marks entered against one won't show on the other. Open "More actions" on whichever one has the marks and use "Export Marks", then "Import Marks" that same file into the correct one, then Delete the wrong exam.
+        <strong>⚠ Possible duplicate exams found.</strong> Some rows below (flagged with ⚠ next to the subject) share the exact same class/type/term/year but point to two DIFFERENT subject records with the same name — almost always an old subject and its newer replacement (see the Subjects page). Marks entered against one won't show on the other.
+        <button class="btn btn-sm" id="goMergeSubjectsBtn" style="margin-left:6px;">Merge duplicate subjects</button>
       </div>` : ''}
     ${renderStatCards()}
     ${renderFilterBar()}
@@ -2077,7 +2066,7 @@ Views.exams = async function () {
       // never silently swaps the subject out from under you).
       function refreshSubjectOptions() {
         const klass = klassField.value.trim();
-        let options = subjectsTaughtInKlass(st, klass);
+        let options = subjectsForKlass(st, klass);
         if (isEdit && !options.some(s => s.id === existing.subjectId)) {
           const forced = st.subjects.find(s => s.id === existing.subjectId);
           if (forced) options = [forced, ...options];
@@ -2087,12 +2076,7 @@ Views.exams = async function () {
         const keep = isEdit && !subjectField.dataset.touched ? existing.subjectId : prevValue;
         if (options.some(s => s.id === keep)) subjectField.value = keep;
         const section = klass ? sectionForKlassLabel(st, klass) : null;
-        const levelCount = klass ? levelScopedSubjectsForExam(st, klass).length : st.subjects.length;
-        subjectHint.textContent = section
-          ? (options.length !== levelCount
-              ? `Showing subjects actually assigned to a teacher for ${UI.esc(klass)} (${options.length} of ${levelCount} ${section.label} subjects).`
-              : `Showing subjects for ${section.label}${options.length !== st.subjects.length ? ` (${options.length} of ${st.subjects.length} total)` : ''}.`)
-          : 'Pick a class to narrow this list to its level.';
+        subjectHint.textContent = section ? `Showing subjects for ${section.label}${options.length !== st.subjects.length ? ` (${options.length} of ${st.subjects.length} total)` : ''}.` : 'Pick a class to narrow this list to its level.';
       }
       subjectField.addEventListener('change', () => { subjectField.dataset.touched = '1'; });
       klassField.addEventListener('change', refreshSubjectOptions);
@@ -2176,17 +2160,15 @@ Views.exams = async function () {
       const klassField = root.querySelector('#f_klass');
       const hintEl = root.querySelector('#f_allsubjects_hint');
       const saveBtn = root.querySelector('#saveBtn');
-      // Same scoping as the single-subject form — a class only gets
-      // exams for subjects actually assigned to a teacher there (never
-      // subjects merely eligible for that level but nobody teaches).
-      function scopedSubjects() { return subjectsTaughtInKlass(st, klassField.value.trim()); }
+      // Same section-scoping as the single-subject form — a class only
+      // gets exams for subjects actually offered at its level.
+      function scopedSubjects() { return subjectsForKlass(st, klassField.value.trim()); }
       function refreshHint() {
         const subs = scopedSubjects();
         const klass = klassField.value.trim();
         const section = klass ? sectionForKlassLabel(st, klass) : null;
-        const levelCount = klass ? levelScopedSubjectsForExam(st, klass).length : st.subjects.length;
         hintEl.textContent = subs.length
-          ? `Will create exam entries for: ${subs.map(s => s.name).join(', ')}${section && subs.length !== levelCount ? ` (assigned to a teacher for ${klass} — ${subs.length} of ${levelCount} ${section.label} subjects)` : ''}`
+          ? `Will create exam entries for: ${subs.map(s => s.name).join(', ')}${section && subs.length !== st.subjects.length ? ` (${section.label} only)` : ''}`
           : (klass ? `No subjects are set up for ${section ? section.label : klass} yet — add one on the Subjects page.` : 'Pick a class to see which subjects this will create exams for.');
         saveBtn.textContent = `Create for ${subs.length} subject${subs.length === 1 ? '' : 's'}`;
         saveBtn.disabled = subs.length === 0;
