@@ -82,8 +82,13 @@ function buildBroadsheetFooterHTML(st) {
 // already appears once, up in the masthead at the top of the report
 // (see buildReportMastheadHTML in views.js), so it isn't repeated
 // down here in the footer too.
-function bsFooterOpts(st) {
-  return { left: 'B~CBE Analytics' };
+function bsFooterOpts(st, klassLabel = '', subjectLabel = '', type = '', term = '', year = '') {
+  const parts = [];
+  if (klassLabel) parts.push(`CLASS: ${klassLabel}`);
+  if (subjectLabel) parts.push(`SUBJECTS: ${subjectLabel}`);
+  if (type) parts.push(type);
+  if (term || year) parts.push(`${term} ${year}`.trim());
+  return { left: 'B~CBE Analytics', header: parts.join('  ·  ') };
 }
 
 Views.broadsheet = async function () {
@@ -207,18 +212,46 @@ Views.broadsheet = async function () {
       return;
     }
 
-    // One column per subject. In whole-grade mode a subject can have a
-    // different exam record in each stream; keep those exam IDs intact
-    // and resolve the correct one from each learner's own stream.
+    // One column per SUBJECT NAME, not per subject-row ID.  This is
+    // important after the independent Lower/Upper/Junior subject change:
+    // an older Upper Primary subject can have a different database ID from
+    // a newly-created Upper Primary subject with the same name.  Both can
+    // therefore have exam rows for the same JEMSA sitting.  If we keyed the
+    // broadsheet by subject.id, the old column (with the real marks) and the
+    // new column (often empty) would appear separately, making valid marks
+    // look like they had disappeared.
+    //
+    // For each class/stream we keep the exam record that actually contains
+    // the most results.  We NEVER move, delete, or rewrite the underlying
+    // exam/result records; this is only a display-time resolver.
+    const resultCountForExam = (examId) => st.results.reduce((n, r) => n + (r.examId === examId ? 1 : 0), 0);
+    const betterExam = (current, candidate) => {
+      if (!current) return candidate;
+      const currentCount = resultCountForExam(current.id);
+      const candidateCount = resultCountForExam(candidate.id);
+      if (candidateCount !== currentCount) return candidateCount > currentCount ? candidate : current;
+      // If both have the same number of marks, prefer the newer exam date
+      // when available; otherwise keep the first record for stability.
+      const currentDate = current.date ? new Date(current.date).getTime() : 0;
+      const candidateDate = candidate.date ? new Date(candidate.date).getTime() : 0;
+      return candidateDate > currentDate ? candidate : current;
+    };
+
     const subjectMap = new Map();
     matchingExams.forEach(e => {
       const subject = st.subjects.find(s => s.id === e.subjectId);
       if (!subject) return;
-      if (!subjectMap.has(subject.id)) subjectMap.set(subject.id, { subject, examsByClass: new Map() });
-      subjectMap.get(subject.id).examsByClass.set(e.klass, e);
+      const subjectKey = String(subject.name || '').trim().toLowerCase();
+      if (!subjectKey) return;
+      if (!subjectMap.has(subjectKey)) {
+        subjectMap.set(subjectKey, { subject, subjectIds: new Set(), examsByClass: new Map() });
+      }
+      const group = subjectMap.get(subjectKey);
+      group.subjectIds.add(subject.id);
+      group.examsByClass.set(e.klass, betterExam(group.examsByClass.get(e.klass), e));
     });
     const subjectCols = [...subjectMap.values()]
-      .map(c => ({ ...c, exam: !isWholeGrade ? c.examsByClass.get(klass) : null }))
+      .map(c => ({ ...c, subjectIds: [...c.subjectIds], exam: !isWholeGrade ? c.examsByClass.get(klass) : null }))
       .sort((a, b) => a.subject.name.localeCompare(b.subject.name));
 
     const students = st.students.filter(s => targetLabels.includes(s.klass)).sort((a, b) => a.name.localeCompare(b.name));
@@ -233,8 +266,15 @@ Views.broadsheet = async function () {
     // because the same subject exists there.
     const canEditCol = (col, stu = null) => {
       if (!scope.isTeacher) return true;
-      if (stu) return !!scope.subjectsByClass.get(stu.klass)?.has(col.subject.id);
-      return targetLabels.some(label => scope.subjectsByClass.get(label)?.has(col.subject.id));
+      const ids = col.subjectIds || [col.subject.id];
+      if (stu) {
+        const assigned = scope.subjectsByClass.get(stu.klass);
+        return !!assigned && ids.some(id => assigned.has(id));
+      }
+      return targetLabels.some(label => {
+        const assigned = scope.subjectsByClass.get(label);
+        return !!assigned && ids.some(id => assigned.has(id));
+      });
     };
     const canEditAny = !subjectCols.every(col => students.every(stu => {
       const exam = examForStudent(col, stu);
@@ -612,6 +652,13 @@ Views.broadsheet = async function () {
           <table class="ledger-table">
             ${bsColgroupHTML(subjectCols.length)}
             <thead>
+              <tr class="bs-page-repeat-head">
+                <th colspan="${3 + subjectCols.length + 4}" style="text-align:left; padding:5px 7px; font-size:9px; font-weight:700; letter-spacing:.02em; background:#fff; color:#334155; border-bottom:1px solid #cbd5e1;">
+                  CLASS: ${UI.esc(isWholeGrade ? `${gradeName} (WHOLE CLASS)` : klass)} &nbsp;&middot;&nbsp;
+                  SUBJECTS: ${UI.esc(subjectCols.map(c => c.subject.name).join(' &middot; '))}
+                  &nbsp;&middot;&nbsp; ${UI.esc(type)} &nbsp;&middot;&nbsp; ${UI.esc(term)} ${UI.esc(year)}
+                </th>
+              </tr>
               <tr>
                 <th class="sortable freeze-1" data-sort="rank" data-label="Pos.">Pos. ${sortArrow('rank')}</th>
                 <th class="sortable freeze-2" data-sort="name" data-label="Name">Name ${sortArrow('name')}</th>
@@ -980,7 +1027,15 @@ Views.broadsheet = async function () {
   document.getElementById('bsPdfBtn').onclick = (e) => {
     const main = document.getElementById('bsPrintArea');
     if (!main) { UI.toast('Choose a class and exam type first'); return; }
-    UI.downloadPDF(main, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, { orientation: 'landscape', footer: bsFooterOpts(st) });
+    const whole = scopeSel.value === 'grade';
+    const selectedClass = st.classes.find(c => c.label === classSel.value);
+    const gradeName = selectedClass ? selectedClass.name : classSel.value;
+    const classLabel = whole ? `${gradeName} (WHOLE CLASS)` : classSel.value;
+    const subjectLabel = lastCsv ? lastCsv.header.slice(3, -4).join(' · ') : '';
+    UI.downloadPDF(main, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, {
+      orientation: 'landscape',
+      footer: bsFooterOpts(st, classLabel, subjectLabel, typeSel.value, termSel.value, yearSel.value)
+    });
   };
   document.getElementById('bsCsvBtn').onclick = () => {
     if (!lastCsv) { UI.toast('Choose a class and exam type first'); return; }
