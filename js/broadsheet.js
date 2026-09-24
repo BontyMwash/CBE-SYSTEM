@@ -244,19 +244,46 @@ Views.broadsheet = async function () {
       const subjectKey = String(subject.name || '').trim().toLowerCase();
       if (!subjectKey) return;
       if (!subjectMap.has(subjectKey)) {
-        subjectMap.set(subjectKey, { subject, subjectIds: new Set(), examsByClass: new Map() });
+        subjectMap.set(subjectKey, {
+          subject,
+          subjectIds: new Set(),
+          // Keep ALL matching exams for the stream.  Older data can have
+          // two subject/exam records with the same visible subject name.
+          // A learner's marks may live in either record, so choosing only
+          // the exam with the largest total result count can hide valid marks.
+          examsByClass: new Map()
+        });
       }
       const group = subjectMap.get(subjectKey);
       group.subjectIds.add(subject.id);
-      group.examsByClass.set(e.klass, betterExam(group.examsByClass.get(e.klass), e));
+      if (!group.examsByClass.has(e.klass)) group.examsByClass.set(e.klass, []);
+      group.examsByClass.get(e.klass).push(e);
     });
     const subjectCols = [...subjectMap.values()]
-      .map(c => ({ ...c, subjectIds: [...c.subjectIds], exam: !isWholeGrade ? c.examsByClass.get(klass) : null }))
+      .map(c => ({
+        ...c,
+        subjectIds: [...c.subjectIds],
+        exam: !isWholeGrade ? betterExam(null, c.examsByClass.get(klass)?.[0]) : null
+      }))
       .sort((a, b) => a.subject.name.localeCompare(b.subject.name));
 
     const students = st.students.filter(s => targetLabels.includes(s.klass)).sort((a, b) => a.name.localeCompare(b.name));
 
-    const examForStudent = (col, stu) => col.exam || col.examsByClass.get(stu.klass) || null;
+    // Resolve the exam PER LEARNER, not once per subject/stream.  This is
+    // critical for existing Grade 6 data: Agriculture, English and Science
+    // may have marks split between an older subject/exam record and a newer
+    // duplicate record.  We must display whichever record actually contains
+    // that learner's saved result instead of hiding it behind the other exam.
+    const examsForStudent = (col, stu) => {
+      const exams = col.examsByClass.get(stu.klass) || [];
+      return exams.length ? exams : (col.exam ? [col.exam] : []);
+    };
+    const examForStudent = (col, stu) => {
+      const exams = examsForStudent(col, stu);
+      if (!exams.length) return null;
+      const withResult = exams.find(exam => st.results.some(r => r.examId === exam.id && r.studentId === stu.id));
+      return withResult || betterExam(null, exams[0]);
+    };
     const isLockedForStudent = (stu) => {
       const exams = subjectCols.map(col => examForStudent(col, stu)).filter(Boolean);
       return exams.length > 0 && exams.every(exam => (st.published || []).some(p => p.klass === exam.klass && p.type === type && p.term === term && String(p.year) === String(year)));
@@ -286,9 +313,14 @@ Views.broadsheet = async function () {
       const cells = subjectCols.map(col => {
         const exam = examForStudent(col, stu);
         if (!exam) return { examId: null, exam: null, available: false, marks: null, pct: null, totalMarks: 0 };
-        const res = st.results.find(r => r.examId === exam.id && r.studentId === stu.id) || null;
+        // Look across every legacy/new exam record for this visible subject
+        // before deciding that the learner has no mark.
+        const res = examsForStudent(col, stu)
+          .map(ex => ({ ex, res: st.results.find(r => r.examId === ex.id && r.studentId === stu.id) }))
+          .find(x => x.res)?.res || null;
+        const resultExam = res ? (examsForStudent(col, stu).find(ex => ex.id === res.examId) || exam) : exam;
         if (!res) return { examId: exam.id, exam, available: true, marks: null, pct: null, totalMarks: exam.totalMarks };
-        return { examId: exam.id, exam, available: true, marks: res.marks, pct: Grading.percent(res.marks, exam.totalMarks), totalMarks: exam.totalMarks };
+        return { examId: resultExam.id, exam: resultExam, available: true, marks: res.marks, pct: Grading.percent(res.marks, resultExam.totalMarks), totalMarks: resultExam.totalMarks };
       });
       const availableCells = cells.filter(c => c.available);
       const enteredCells = availableCells.filter(c => c.marks !== null);
