@@ -687,7 +687,7 @@ Views.broadsheet = async function () {
               <tr class="bs-page-repeat-head">
                 <th colspan="${3 + subjectCols.length + 4}" style="text-align:left; padding:5px 7px; font-size:9px; font-weight:700; letter-spacing:.02em; background:#fff; color:#334155; border-bottom:1px solid #cbd5e1;">
                   CLASS: ${UI.esc(isWholeGrade ? `${gradeName} (WHOLE CLASS)` : klass)} &nbsp;&middot;&nbsp;
-                  SUBJECTS: ${UI.esc(subjectCols.map(c => c.subject.name).join(' &middot; '))}
+                  SUBJECTS: ${UI.esc(subjectCols.map(c => c.subject.name).join(' · '))}
                   &nbsp;&middot;&nbsp; ${UI.esc(type)} &nbsp;&middot;&nbsp; ${UI.esc(term)} ${UI.esc(year)}
                 </th>
               </tr>

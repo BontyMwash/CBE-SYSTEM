@@ -400,7 +400,7 @@ const UI = {
       const cloneTables = clone.querySelectorAll('table.ledger-table');
       sourceTables.forEach((srcT, ti) => {
         const cloneT = cloneTables[ti];
-        const headerRow = srcT.querySelector('thead tr');
+        const headerRow = srcT.querySelector('thead tr:not(.bs-page-repeat-head)') || srcT.querySelector('thead tr:last-child');
         if (!cloneT || !headerRow) return;
         const ths = Array.from(headerRow.children);
         const widths = ths.map(th => th.getBoundingClientRect().width);
@@ -443,17 +443,21 @@ const UI = {
         // than the page can show.
         t.style.tableLayout = 'fixed';
       });
-      // html2pdf's 'css' pagebreak mode looks for CSS break-inside
-      // rules directly on the DOM it's about to capture — it does NOT
-      // know about the app's @media print stylesheet (html2canvas
-      // renders using normal screen styles), so without this every
-      // row was a candidate to get physically sliced in half wherever
-      // it happened to straddle a page boundary. Setting it inline,
-      // here, on the actual offscreen clone is what makes html2pdf
-      // push a row that would be cut onto the next page whole instead.
+      // Keep normal report rows intact at page boundaries. For the
+      // broadsheet specifically, do NOT put page-break-inside:avoid on
+      // every <tr>: html2pdf can interpret a long table with that rule
+      // as a series of page-sized blocks, which produced one learner
+      // per PDF page in the exported broadsheet. Short rows do not need
+      // the rule; the PDF paginator can slice between rows naturally.
+      const isBroadsheet = clone.id === 'bsPrintArea';
       clone.querySelectorAll('table.ledger-table tr').forEach(tr => {
-        tr.style.pageBreakInside = 'avoid';
-        tr.style.breakInside = 'avoid';
+        if (isBroadsheet) {
+          tr.style.pageBreakInside = 'auto';
+          tr.style.breakInside = 'auto';
+        } else {
+          tr.style.pageBreakInside = 'avoid';
+          tr.style.breakInside = 'avoid';
+        }
       });
       // Keep the header glued to whichever page its table starts on
       // (harmless — it's already always at the top of its own table).
@@ -542,7 +546,7 @@ const UI = {
         margin: UI._pdfMarginArray(),
         html2canvas: { scale: UI._safePdfScale(chunk), useCORS: true, backgroundColor: '#ffffff' },
         jsPDF: { unit: 'mm', format, orientation },
-        pagebreak: { mode: ['css', 'legacy'] }
+        pagebreak: { mode: ['css'] }
       }).from(wrap).toPdf().get('pdf');
       UI._stampPdfFooter(pdf, footerOpts);
       return pdf.output('arraybuffer');
@@ -584,7 +588,7 @@ const UI = {
           margin: UI._pdfMarginArray(),
           html2canvas: { scale: UI._safePdfScale(els), useCORS: true, backgroundColor: '#ffffff' },
           jsPDF: { unit: 'mm', format, orientation },
-          pagebreak: { mode: ['css', 'legacy'] }
+          pagebreak: { mode: ['css'] }
         }).from(wrap).toPdf().get('pdf');
         UI._stampPdfFooter(pdf, footerOpts);
         return pdf.output('arraybuffer');
