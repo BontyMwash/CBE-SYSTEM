@@ -2905,35 +2905,6 @@ table.ledger-table.sticky-head thead th {
   .sms-tabs { overflow-x: auto; flex-wrap: nowrap; }
 }
 
-
-/* ---------- Broadsheet repeating subject-code header ---------- */
-.bs-page-repeat-head {
-  display: none;
-  align-items: center;
-  gap: 8px;
-  margin: 0 16px;
-  padding: 6px 8px;
-  border-bottom: 1px solid #cbd5e1;
-  background: #f8fafc;
-  font-size: 8px;
-  line-height: 1.25;
-  text-transform: uppercase;
-}
-.bs-page-repeat-label {
-  font-weight: 800;
-  color: #475569;
-  white-space: nowrap;
-}
-.bs-page-repeat-codes {
-  font-weight: 800;
-  color: #0f172a;
-  letter-spacing: .04em;
-}
-.bs-analysis-print-section {
-  page-break-before: always;
-  break-before: page;
-}
-
 /* ============================================================
    Professional broadsheet print layout — subject-code headings
    and a compact performance summary at the bottom of the report.
@@ -2998,12 +2969,7 @@ table.ledger-table.sticky-head thead th {
 
 /* The main broadsheet must start each printed page with the compact
    subject-code header row, not the old class/subjects information strip. */
-.bs-page-repeat-head { display: none; }
-
-@media print {
-  .bs-page-repeat-head { display: flex !important; }
-  .bs-analysis-print-section { page-break-before: always; break-before: page; }
-}
+.bs-page-repeat-head { display: none !important; }
 
 @media print {
   .bs-performance-summary {
