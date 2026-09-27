@@ -746,14 +746,33 @@ Views.broadsheet = async function () {
     // Count the actual band on the row and use the full class population
     // as the denominator for "% of Class".  Learners whose displayed
     // level is Z are intentionally not assigned to a real performance band.
+    // IMPORTANT: The PDF distribution must use the same achievement level
+    // represented by the learner's actual Mean % in the broadsheet.  Do not
+    // use `row.complete`/`rowsExtra.band` here: in a whole-class view the
+    // subject columns are the union of all streams, so a learner can have a
+    // perfectly valid mean and level (for example AE2) while one subject
+    // column belonging to another stream is unavailable.  The old logic
+    // therefore converted those learners to Z and the PDF showed 0 in every
+    // real level.
+    //
+    // Resolve the level directly from each learner's displayed Mean %.  This
+    // guarantees the distribution counts the same grading bands used by the
+    // student's marks, including learners whose available subjects differ
+    // by stream. Learners with no marks at all remain unclassified and are
+    // not silently placed into a real band.
+    const pdfBandForStudent = (stu) => {
+      const row = rows.find(r => r.student.id === stu.id);
+      if (!row || row.meanPct === null || !Number.isFinite(Number(row.meanPct))) return null;
+      return Grading.levelForMarks(Number(row.meanPct), 100, st.settings.gradingBands || []);
+    };
     const bottomBandCounts = (st.settings.gradingBands || [])
       .slice().sort((a, b) => b.min - a.min)
       .map(b => ({
         band: b,
-        count: performanceStudents.filter(stu => {
-          const row = rows.find(r => r.student.id === stu.id);
-          return row && row.band && row.band.code === b.code;
-        }).length
+        count: performanceStudents.reduce((n, stu) => {
+          const band = pdfBandForStudent(stu);
+          return n + (band && band.code === b.code ? 1 : 0);
+        }, 0)
       }));
     const bottomLevelDenominator = performanceStudents.length || 1;
 
