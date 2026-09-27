@@ -255,6 +255,19 @@ const Store = {
     const users = await this.listUsersForSchool(this.activeSchoolId);
     return users.find(u => u.id === id) || null;
   },
+  // Super Admin editing an Admin account (name + level access) goes through
+  // the dedicated 'updateAdminProfile' action (see Auth.updateSuperAdminAdminProfile
+  // / manage-user Edge Function), which is restricted to superadmin -> admin
+  // targets only and can never demote the account. This wrapper was missing,
+  // which is why "Edit" on an Admin row failed to save for Super Admins.
+  async updateSuperAdminAdminProfile(id, patch) {
+    const result = await Auth.updateSuperAdminAdminProfile(id, {
+      name: patch.name, role: 'admin', sectionScopes: patch.sectionScopes
+    });
+    if (!result.ok) throw new Error(result.error || 'Could not update admin profile');
+    const users = await this.listUsersForSchool(this.activeSchoolId);
+    return users.find(u => u.id === id) || null;
+  },
 
   // ---- Classes / Streams ----
   async addClass(c) {
