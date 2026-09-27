@@ -144,6 +144,7 @@ Views.broadsheet = async function () {
   const yearSel = document.getElementById('bsYear');
 
   let lastCsv = null; // set inside render(); read by the CSV/Excel buttons
+  let lastPdfPagesBuilder = null; // set inside render(); read by the Download PDF button
   // Table-only state — re-applied without recomputing the whole
   // sitting (search/sort/level filter never change the underlying data,
   // only which rows show and in what order).
@@ -775,8 +776,142 @@ Views.broadsheet = async function () {
       </section>
     ` : '';
 
+    // Rebuilds the broadsheet for the "Download PDF" one-click button as
+    // a series of SEPARATE, already-paginated pages — each learner-table
+    // chunk carrying its own colgroup + subject-code <thead>, followed by
+    // a dedicated Class Mean per Subject page, the Subject/Class/Stream/
+    // Gender Performance Summary, and finally the Performance analysis
+    // section — instead of one flattened image. That export
+    // (html2canvas) has no concept of a <thead> and can't repeat it the
+    // way the browser's native Print/Save-as-PDF dialog already does via
+    // `display: table-header-group`; handing it several smaller elements
+    // instead of one big one works around that, since UI.downloadPDF/
+    // _buildPdfWrap already force a fresh PDF page between separate
+    // elements — each of THOSE pages then starts with its own header.
+    // Previously this export only ever looked at #bsPrintArea, so the
+    // Performance analysis section (stat cards, per-subject Mean/High/
+    // Low, class-level distribution, stream comparison) wasn't in the
+    // downloaded file at all; it's now appended as its own final page(s)
+    // instead of running on directly beneath the last page of students.
+    //
+    // Row-count-per-page is an estimate (assumed page height ÷ an
+    // assumed row height, both padded with a safety margin) rather than
+    // a pixel-perfect measurement of the live table, so a page can come
+    // out a row or two shorter than it strictly needed to — deliberately
+    // safe in that direction rather than risking an overflow onto an
+    // unheaded page.
+    function buildBroadsheetPdfPages() {
+      const list = visibleRows();
+      const ROW_H = 28, HEAD_H = 30, MAST_H = 85, SAFETY = 0.85;
+      const budget = UI._pdfPageContentHeightPx('landscape', 'a4');
+      const rowsFirst = Math.max(8, Math.floor(((budget - MAST_H - HEAD_H) * SAFETY) / ROW_H));
+      const rowsRest = Math.max(8, Math.floor(((budget - HEAD_H) * SAFETY) / ROW_H));
+
+      const chunks = [];
+      if (list.length === 0) {
+        chunks.push([]);
+      } else {
+        let i = 0;
+        while (i < list.length) {
+          const size = chunks.length === 0 ? rowsFirst : rowsRest;
+          chunks.push(list.slice(i, i + size));
+          i += size;
+        }
+      }
+
+      const theadRowHtml = `<tr>
+        <th class="freeze-1">Pos.</th>
+        <th class="freeze-2">Name</th>
+        <th>Adm. No.</th>
+        ${subjectCols.map(c => `<th title="${UI.esc(c.subject.name)}">${UI.esc(c.subject.code || c.subject.name)}</th>`).join('')}
+        <th>Total Marks</th>
+        <th>Mean %</th>
+        <th>Points</th>
+        <th>Level</th>
+      </tr>`;
+
+      // Student pages: every chunk repeats the subject-code header; no
+      // tfoot here any more — the class-mean-per-subject figures move to
+      // their own dedicated page below instead of a cramped last row.
+      const pages = chunks.map((chunk, idx) => {
+        const isFirst = idx === 0;
+        const div = document.createElement('div');
+        div.className = 'ledger bs-pdf-page';
+        div.style.padding = '16px';
+        div.innerHTML = `
+          ${isFirst ? `<div style="margin-bottom:8px;">${buildReportMastheadHTML(st, `${klassTitlePrefix(st, isWholeGrade ? gradeName : klass)}Broadsheet — ${isWholeGrade ? `${gradeName} (Whole Class)` : klass}`, `${type} Results`, term, year)}</div>` : ''}
+          <table class="ledger-table">
+            ${bsColgroupHTML(subjectCols.length)}
+            <thead>${theadRowHtml}</thead>
+            <tbody>${rowsHtml(chunk)}</tbody>
+          </table>
+        `;
+        return div;
+      });
+
+      // Class Mean per Subject — its own page, ordered highest to
+      // lowest like the performance summary below, with the overall
+      // class mean as a final highlighted row.
+      const classMeanRows = subjectCols
+        .map((col, i) => ({ code: col.subject.code || col.subject.name, name: col.subject.name, mean: subjectAverages[i] }))
+        .sort((a, b) => (b.mean ?? -1) - (a.mean ?? -1));
+      const meanDiv = document.createElement('div');
+      meanDiv.className = 'ledger bs-pdf-page';
+      meanDiv.style.padding = '16px';
+      meanDiv.innerHTML = `
+        <section class="bs-performance-summary">
+          <div class="bs-performance-title">CLASS MEAN PER SUBJECT</div>
+          <div class="bs-performance-meta">${UI.esc(type)} &nbsp;&bull;&nbsp; ${UI.esc(term)} ${UI.esc(year)}</div>
+          <table class="bs-performance-table">
+            <thead><tr><th>Subject</th><th>Class Mean %</th><th>Level</th></tr></thead>
+            <tbody>
+              ${classMeanRows.map(r => `<tr>
+                <td><strong>${UI.esc(r.code)}</strong><span class="bs-perf-subject-name">${UI.esc(r.name)}</span></td>
+                <td class="num">${r.mean === null ? '—' : r.mean.toFixed(1) + '%'}</td>
+                <td>${r.mean === null ? '—' : UI.badge(Grading.levelForMarks(r.mean, 100, st.settings.gradingBands))}</td>
+              </tr>`).join('')}
+              <tr style="font-weight:600;">
+                <td>OVERALL CLASS MEAN</td>
+                <td class="num">${classMean === null ? '—' : classMean.toFixed(1) + '%'}</td>
+                <td>${classMeanBand ? UI.badge(classMeanBand) : ''}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      `;
+      pages.push(meanDiv);
+
+      // Subject / Class / Stream / Gender performance summary — already
+      // built once for the on-screen broadsheet. The footer is stamped
+      // here (the last page we build ourselves) rather than on the live
+      // Performance-analysis element appended below, which must never be
+      // written to directly.
+      if (performanceTableHtml) {
+        const perfDiv = document.createElement('div');
+        perfDiv.className = 'ledger bs-pdf-page';
+        perfDiv.style.padding = '16px';
+        perfDiv.innerHTML = `${performanceTableHtml}${buildBroadsheetFooterHTML(st)}`;
+        pages.push(perfDiv);
+      } else {
+        meanDiv.innerHTML += buildBroadsheetFooterHTML(st);
+      }
+
+      // Performance analysis (stat cards, per-subject Mean/High/Low/
+      // Entries, class-level distribution, stream comparison) — grabbed
+      // LIVE (not cloned here) so any table inside it is measured
+      // correctly by _buildPdfWrap; it becomes its own final page(s),
+      // starting fresh rather than running on beneath the last student
+      // page.
+      const analysisEl = document.getElementById('bsAnalysisArea');
+      if (analysisEl) pages.push(analysisEl);
+
+      return pages;
+    }
+    lastPdfPagesBuilder = buildBroadsheetPdfPages;
+
     wrap.innerHTML = `
       <div class="filter-row no-print" style="margin-bottom:12px;">
+
         <input type="text" id="bsSearch" placeholder="Search learner name or adm. no…" style="min-width:220px;">
         <select id="bsLevel">
           <option value="all">All achievement levels</option>
@@ -1167,7 +1302,11 @@ Views.broadsheet = async function () {
   document.getElementById('bsPdfBtn').onclick = (e) => {
     const main = document.getElementById('bsPrintArea');
     if (!main) { UI.toast('Choose a class and exam type first'); return; }
-    UI.downloadPDF(main, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, {
+    // Paginated chunks (each with its own repeated subject-code header) —
+    // see buildBroadsheetPdfPages in render(). Falls back to the old
+    // single-element capture if that builder somehow wasn't set.
+    const pages = (typeof lastPdfPagesBuilder === 'function') ? lastPdfPagesBuilder() : main;
+    UI.downloadPDF(pages, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, {
       orientation: 'landscape',
       footer: bsFooterOpts()
     });
