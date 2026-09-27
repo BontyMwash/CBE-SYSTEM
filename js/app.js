@@ -41,12 +41,11 @@ const App = {
   },
 
   // Level switcher (Primary / Junior Secondary / Senior School), shown
-  // right under the logo. A section-scoped admin (profiles.section_scope)
-  // is locked to their section and sees a plain badge instead of a
-  // dropdown; everyone else (superadmin, unrestricted admin, teachers)
-  // gets the dropdown, backed by localStorage so the choice sticks
-  // across reloads. effectiveLevel()/levelAllows() in views.js read the
-  // same localStorage key to actually do the filtering.
+  // right under the logo. A section-scoped Admin OR Teacher is locked to
+  // that section and sees a plain badge instead of a dropdown. Unrestricted
+  // Admins and Superadmins can switch levels. The saved choice is scoped
+  // to the current login + school, so one person's Senior School choice
+  // can never leak into another person's Primary/Junior session.
   buildLevelSwitcher() {
     const user = Auth.currentUser();
     const wrap = document.getElementById('levelSwitcherWrap');
@@ -57,12 +56,12 @@ const App = {
     }
     const LABELS = { primary: 'Primary', 'lower-primary': 'Lower Primary', 'upper-primary': 'Upper Primary', 'junior-secondary': 'Junior Secondary', 'senior-school': 'Senior School' };
     if (user.section_scope && (user.role === 'admin' || user.role === 'user')) {
-      const why = user.role === 'admin' ? 'This login is limited to' : 'This login automatically sees';
+      const why = user.role === 'admin' ? 'This login is limited to' : 'This teacher is limited to';
       wrap.innerHTML = `<div class="level-locked-badge" title="${why} ${LABELS[user.section_scope]}."><i class="fa-solid fa-lock"></i> ${LABELS[user.section_scope]}</div>`;
       return;
     }
     let current = '';
-    try { current = localStorage.getItem('cbeLevel') || ''; } catch (e) {}
+    try { current = localStorage.getItem(levelStorageKey()) || ''; } catch (e) {}
     wrap.innerHTML = `
       <select id="levelSwitcherSel" title="Filter the whole app to one section">
         <option value="" ${current === '' ? 'selected' : ''}>All levels</option>
@@ -74,7 +73,7 @@ const App = {
       </select>
     `;
     document.getElementById('levelSwitcherSel').onchange = (e) => {
-      try { localStorage.setItem('cbeLevel', e.target.value); } catch (err) {}
+      try { localStorage.setItem(levelStorageKey(), e.target.value); } catch (err) {}
       App.renderShell();
     };
   },

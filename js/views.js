@@ -191,13 +191,26 @@ function activeLevelTitlePrefix() {
 // the dropdown doesn't even show for them.
 //
 // effectiveLevel() is the single source of truth every list view below
-// filters through: the locked scope wins if present, otherwise whatever
-// the person picked in the switcher (persisted in localStorage),
-// otherwise '' (no filter — show everything, today's default behaviour).
+// filters through: the locked Admin/Teacher scope wins if present, otherwise
+// whatever the person picked in the switcher (persisted per login + school),
+// otherwise '' (unrestricted Admin/Superadmin view).
+function levelStorageKey() {
+  const user = Auth.currentUser();
+  const schoolId = (typeof Store !== 'undefined' && Store.activeSchoolId) || (user && user.school_id) || 'all-schools';
+  const userId = (user && user.id) || 'anonymous';
+  return `cbeLevel:${schoolId}:${userId}`;
+}
+
 function effectiveLevel() {
   const user = Auth.currentUser();
-  if (user && user.role === 'admin' && user.section_scope) return user.section_scope;
-  try { return localStorage.getItem('cbeLevel') || ''; } catch (e) { return ''; }
+  // A section-scoped Admin OR Teacher is hard-locked to that level.
+  // This is important for Teachers: previously only Admins were locked,
+  // so a teacher assigned to Junior/Senior could inherit a stale browser
+  // level from another login and see the wrong school section.
+  if (user && (user.role === 'admin' || user.role === 'user') && user.section_scope) {
+    return user.section_scope;
+  }
+  try { return localStorage.getItem(levelStorageKey()) || ''; } catch (e) { return ''; }
 }
 
 // True if `klassName` belongs to the currently active level filter.
