@@ -50,7 +50,6 @@ serve(async (req) => {
 
     if (body.action === "create") return await handleCreate(adminClient, callerProfile, body);
     if (body.action === "updateProfile") return await handleUpdateProfile(adminClient, callerProfile, caller.id, body);
-    if (body.action === "updateAdminProfile") return await handleUpdateAdminProfile(adminClient, callerProfile, body);
     if (body.action === "resetPassword") return await handleResetPassword(adminClient, callerProfile, body);
     if (body.action === "delete") return await handleDelete(adminClient, callerProfile, caller.id, body);
 
@@ -144,41 +143,6 @@ function normalizedScopes(row: any): string[] {
 }
 
 const VALID_SECTIONS = ["primary", "junior-secondary", "senior-school"];
-
-async function handleUpdateAdminProfile(adminClient: any, callerProfile: any, body: any) {
-  // This endpoint is ONLY for Super Admin -> editing an existing Admin.
-  // It must never inherit the Admin -> teacher management restrictions.
-  if (callerProfile.role !== "superadmin") {
-    return json({ error: "Only Super Admins can edit Admin account details." }, 403);
-  }
-
-  const { userId, name, role, sectionScopes } = body;
-  if (!userId) return json({ error: "userId is required" }, 400);
-  if (role !== "admin") return json({ error: "This action can only update an Admin account." }, 400);
-  if (!name || !String(name).trim()) return json({ error: "Admin name is required" }, 400);
-  if (sectionScopes !== undefined && (!Array.isArray(sectionScopes) || sectionScopes.some((x: any) => !VALID_SECTIONS.includes(x)))) {
-    return json({ error: `sectionScopes must contain only: ${VALID_SECTIONS.join(", ")}` }, 400);
-  }
-
-  const { data: target, error: targetErr } = await adminClient
-    .from("profiles")
-    .select("id, role")
-    .eq("id", userId)
-    .single();
-  if (targetErr || !target) return json({ error: "Target Admin not found" }, 404);
-  if (target.role !== "admin") return json({ error: "Target account is not an Admin" }, 400);
-
-  const scopes = sectionScopes === undefined ? undefined : [...new Set(sectionScopes)];
-  const patch: any = { name: String(name).trim(), role: "admin" };
-  if (scopes !== undefined) {
-    patch.section_scopes = scopes.length ? scopes : null;
-    patch.section_scope = scopes[0] || null;
-  }
-
-  const { error } = await adminClient.from("profiles").update(patch).eq("id", userId);
-  if (error) return json({ error: error.message }, 400);
-  return json({ ok: true });
-}
 
 async function handleUpdateProfile(adminClient: any, callerProfile: any, callerId: string, body: any) {
   const { userId, name, role, sectionScopes } = body;
