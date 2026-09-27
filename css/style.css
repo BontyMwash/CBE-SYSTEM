@@ -1917,6 +1917,98 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
   }
 }
 
+
+/* Broadsheet PDF bottom performance summary: five clearly separated
+   sections requested for the downloaded broadsheet. Keep the layout
+   compact and predictable so the PDF renderer does not squeeze numeric
+   cells or split a section heading from its table. */
+.bs-bottom-performance {
+  margin: 22px 16px 10px;
+  border-top: 2px solid #334155;
+  padding-top: 10px;
+  page-break-before: always;
+  font-family: Arial, Helvetica, sans-serif;
+  color: #1f2937;
+}
+.bs-bottom-title {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-align: center;
+  margin-bottom: 3px;
+}
+.bs-bottom-meta {
+  font-size: 8px;
+  color: #64748b;
+  text-align: center;
+  text-transform: uppercase;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+.bs-bottom-section {
+  margin: 0 0 10px;
+  page-break-inside: avoid;
+}
+.bs-bottom-section-title {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  padding: 5px 7px;
+  background: #eef2f7;
+  border: 1px solid #dbe2ea;
+  border-bottom: 0;
+}
+.bs-bottom-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 8px;
+}
+.bs-bottom-table th,
+.bs-bottom-table td {
+  border: 1px solid #dbe2ea;
+  padding: 4px 6px;
+  line-height: 1.2;
+  vertical-align: middle;
+}
+.bs-bottom-table th {
+  background: #f7f9fc;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .025em;
+}
+.bs-bottom-table .num {
+  text-align: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.bs-bottom-muted {
+  color: #64748b;
+  font-size: 7px;
+  margin-left: 3px;
+}
+.bs-class-performance-table th,
+.bs-class-performance-table td {
+  width: 16.66%;
+}
+@media print {
+  .bs-bottom-performance {
+    margin-left: 0;
+    margin-right: 0;
+    page-break-before: always;
+  }
+  .bs-bottom-section {
+    page-break-inside: avoid;
+  }
+  .bs-bottom-table {
+    font-size: 7.5px;
+  }
+  .bs-bottom-table th,
+  .bs-bottom-table td {
+    padding: 3px 5px;
+  }
+}
+
 /* ============================================================
    Homepage — premium marketing landing page (signed-out visitors)
    Scoped under #homeRoot / .home-* so it never leaks into the app
@@ -2914,8 +3006,6 @@ table.ledger-table.sticky-head thead th {
   border: 1px solid #cbd5e1;
   background: #fff;
   page-break-inside: auto;
-  break-before: page;
-  page-break-before: always;
 }
 .bs-performance-title {
   padding: 7px 9px 2px;
@@ -2951,18 +3041,16 @@ table.ledger-table.sticky-head thead th {
   text-transform: uppercase;
   letter-spacing: .03em;
 }
-.bs-performance-table th:nth-child(1) { width: 22%; }
-.bs-performance-table th:nth-child(2) { width: 16%; }
-.bs-performance-table th:nth-child(3) { width: 16%; }
-.bs-performance-table th:nth-child(4) { width: 12%; }
-.bs-performance-table th:nth-child(5) { width: 34%; }
+.bs-performance-table th:nth-child(1) { width: 15%; }
+.bs-performance-table th:nth-child(2) { width: 12%; }
+.bs-performance-table th:nth-child(3) { width: 12%; }
+.bs-performance-table th:nth-child(4) { width: 9%; }
+.bs-performance-table th:nth-child(5) { width: 8%; }
+.bs-performance-table th:nth-child(6),
+.bs-performance-table th:nth-child(7),
+.bs-performance-table th:nth-child(8) { width: 9%; }
+.bs-performance-table th:nth-child(9) { width: 8%; }
 .bs-performance-table .num { text-align: center; }
-.bs-performance-table .bs-perf-value {
-  text-align: center;
-  white-space: nowrap;
-  font-family: Inter, Arial, sans-serif;
-  font-weight: 700;
-}
 .bs-perf-subject-name {
   display: block;
   margin-top: 1px;
@@ -2979,8 +3067,6 @@ table.ledger-table.sticky-head thead th {
   .bs-performance-summary {
     margin-left: 0;
     margin-right: 0;
-    break-before: page;
-    page-break-before: always;
   }
   .bs-performance-table {
     font-size: 7.5px;

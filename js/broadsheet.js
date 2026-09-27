@@ -661,70 +661,177 @@ Views.broadsheet = async function () {
 
     const allLocked = students.length > 0 && students.every(stu => isLockedForStudent(stu));
 
-    // Printable subject performance breakdown.  This is intentionally kept
-    // at the bottom of the broadsheet so the main learner-by-subject table
-    // stays clean and each printed page begins with the subject-code header.
-    // The breakdown reports Subject + Class + Stream + Gender and the actual
-    // subject performance (mean/high/low/entries).  It uses the same resolved
-    // learner cells as the main table, so legacy/duplicate subject exam rows
-    // do not make valid marks disappear from the performance figures.
+    // ---- Printable performance sections at the bottom of the downloaded
+    // broadsheet.  These are deliberately kept inside #bsPrintArea so the
+    // one-click PDF contains the same five sections the user sees at the
+    // bottom of the broadsheet: Subject Performance, Class Performance,
+    // Stream Performance, Gender Performance, and Class Performance Level
+    // Distribution.
     const performanceClassLabel = isWholeGrade ? gradeName : klass;
-    const performanceStreams = isWholeGrade
-      ? streamLabels
-      : [klass];
-    const performanceRows = [];
-    subjectCols.forEach((col, subjectIndex) => {
-      performanceStreams.forEach(streamLabel => {
-        const streamRows = rows.filter(r => r.student.klass === streamLabel);
-        const genderGroups = [
-          { label: 'All', rows: streamRows },
-          { label: 'Male', rows: streamRows.filter(r => r.student.gender === 'M') },
-          { label: 'Female', rows: streamRows.filter(r => r.student.gender === 'F') }
-        ];
-        genderGroups.forEach(group => {
-          const values = group.rows
-            .map(r => r.cells[subjectIndex])
-            .filter(c => c && c.available && c.marks !== null)
-            .map(c => c.pct)
-            .filter(v => v !== null);
-          if (!values.length && group.label !== 'All') return;
-          performanceRows.push({
-            subject: col.subject.name,
-            code: col.subject.code || col.subject.name,
-            classLabel: performanceClassLabel,
-            stream: streamLabel,
-            gender: group.label,
-            entries: values.length,
-            mean: values.length ? Grading.average(values) : null,
-            high: values.length ? Math.max(...values) : null,
-            low: values.length ? Math.min(...values) : null
-          });
-        });
-      });
+    const performanceStudents = isWholeGrade
+      ? gradeStudents
+      : students;
+
+    // Subject performance for the selected broadsheet population.
+    const bottomSubjectStats = subjectCols.map((col, i) => {
+      const values = performanceStudents.map(stu => {
+        const row = rows.find(r => r.student.id === stu.id);
+        return row && row.cells[i] && row.cells[i].available && row.cells[i].marks !== null
+          ? row.cells[i].pct : null;
+      }).filter(v => v !== null);
+      return {
+        subject: col.subject,
+        entries: values.length,
+        mean: values.length ? Grading.average(values) : null,
+        high: values.length ? Math.max(...values) : null,
+        low: values.length ? Math.min(...values) : null,
+        performance: values.length ? Grading.levelForMarks(Grading.average(values), 100, st.settings.gradingBands) : null
+      };
     });
 
-    const performanceTableHtml = performanceRows.length ? `
-      <section class="bs-performance-summary">
-        <div class="bs-performance-title">SUBJECT PERFORMANCE</div>
-        <div class="bs-performance-meta">${UI.esc(type)} &nbsp;•&nbsp; ${UI.esc(term)} ${UI.esc(year)} &nbsp;•&nbsp; ${UI.esc(performanceClassLabel)}</div>
-        <table class="bs-performance-table">
-          <thead>
-            <tr>
-              <th>Subject</th><th>Class</th><th>Stream</th><th>Gender</th><th>Subject Performance</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${performanceRows.map(r => `<tr>
-              <td><strong>${UI.esc(r.code)}</strong><span class="bs-perf-subject-name">${UI.esc(r.subject)}</span></td>
-              <td>${UI.esc(r.classLabel)}</td>
-              <td>${UI.esc(r.stream)}</td>
-              <td>${UI.esc(r.gender)}</td>
-              <td class="bs-perf-value">${r.mean === null ? '—' : `Mean ${r.mean.toFixed(1)}% &nbsp; | &nbsp; High ${r.high.toFixed(1)}% &nbsp; | &nbsp; Low ${r.low.toFixed(1)}%`}</td>
-            </tr>`).join('')}
-          </tbody>
-        </table>
+    // Class performance headline for the exact population in the PDF.
+    const classMeans = performanceStudents.map(stu => {
+      const row = rows.find(r => r.student.id === stu.id);
+      return row && row.meanPct !== null ? row.meanPct : null;
+    }).filter(v => v !== null);
+    const classMeanBottom = classMeans.length ? Grading.average(classMeans) : null;
+    const classHighBottom = classMeans.length ? Math.max(...classMeans) : null;
+    const classLowBottom = classMeans.length ? Math.min(...classMeans) : null;
+    const classPassBottom = classMeans.length ? (classMeans.filter(v => v >= 50).length / classMeans.length) * 100 : null;
+    const classBandBottom = classMeanBottom === null ? null : Grading.levelForMarks(classMeanBottom, 100, st.settings.gradingBands);
+
+    // Stream performance.  For a single-stream broadsheet this still shows
+    // the selected stream; for a whole-grade broadsheet it compares all
+    // streams belonging to the grade.
+    const bottomStreamLabels = isWholeGrade ? streamLabels : [klass];
+    const bottomStreamStats = bottomStreamLabels.map(label => {
+      const streamRows = rows.filter(r => r.student.klass === label);
+      const means = streamRows.map(r => r.meanPct).filter(v => v !== null);
+      return {
+        label,
+        students: streamRows.length,
+        mean: means.length ? Grading.average(means) : null,
+        high: means.length ? Math.max(...means) : null,
+        low: means.length ? Math.min(...means) : null
+      };
+    });
+
+    // Gender performance for the same population.
+    const bottomGenderGroups = [
+      { label: 'Male', students: performanceStudents.filter(s => s.gender === 'M') },
+      { label: 'Female', students: performanceStudents.filter(s => s.gender === 'F') }
+    ];
+    const unspecifiedGenderStudents = performanceStudents.filter(s => s.gender !== 'M' && s.gender !== 'F');
+    if (unspecifiedGenderStudents.length) bottomGenderGroups.push({ label: 'Not specified', students: unspecifiedGenderStudents });
+    const bottomGenderStats = bottomGenderGroups.map(g => {
+      const means = g.students.map(stu => {
+        const row = rows.find(r => r.student.id === stu.id);
+        return row && row.meanPct !== null ? row.meanPct : null;
+      }).filter(v => v !== null);
+      return {
+        label: g.label,
+        students: g.students.length,
+        mean: means.length ? Grading.average(means) : null,
+        high: means.length ? Math.max(...means) : null,
+        low: means.length ? Math.min(...means) : null
+      };
+    });
+
+    // Class performance level distribution.
+    const bottomBandCounts = (st.settings.gradingBands || [])
+      .slice().sort((a, b) => b.min - a.min)
+      .map(b => ({
+        band: b,
+        count: performanceStudents.filter(stu => {
+          const row = rows.find(r => r.student.id === stu.id);
+          return row && row.complete && row.band && row.band.code === b.code;
+        }).length
+      }));
+    const bottomLevelDenominator = classMeans.length || 1;
+
+    const bottomPerformanceHtml = `
+      <section class="bs-bottom-performance">
+        <div class="bs-bottom-title">PERFORMANCE SUMMARY</div>
+        <div class="bs-bottom-meta">${UI.esc(performanceClassLabel)} &nbsp;•&nbsp; ${UI.esc(type)} &nbsp;•&nbsp; ${UI.esc(term)} ${UI.esc(year)}</div>
+
+        <section class="bs-bottom-section">
+          <div class="bs-bottom-section-title">1. SUBJECT PERFORMANCE</div>
+          <table class="bs-bottom-table">
+            <thead><tr><th>Subject</th><th>Entries</th><th>Mean %</th><th>High %</th><th>Low %</th><th>Performance</th></tr></thead>
+            <tbody>
+              ${bottomSubjectStats.map(s => `<tr>
+                <td><strong>${UI.esc(s.subject.code || s.subject.name)}</strong> <span class="bs-bottom-muted">${UI.esc(s.subject.name)}</span></td>
+                <td class="num">${s.entries}</td>
+                <td class="num">${s.mean === null ? '—' : s.mean.toFixed(1) + '%'}</td>
+                <td class="num">${s.high === null ? '—' : s.high.toFixed(1) + '%'}</td>
+                <td class="num">${s.low === null ? '—' : s.low.toFixed(1) + '%'}</td>
+                <td>${s.performance ? UI.esc(s.performance.code || s.performance.label || '') : '—'}</td>
+              </tr>`).join('') || '<tr><td colspan="6">No subject performance data available.</td></tr>'}
+            </tbody>
+          </table>
+        </section>
+
+        <section class="bs-bottom-section">
+          <div class="bs-bottom-section-title">2. CLASS PERFORMANCE</div>
+          <table class="bs-bottom-table bs-class-performance-table">
+            <thead><tr><th>Students</th><th>Mean %</th><th>High %</th><th>Low %</th><th>Pass Rate</th><th>Grade</th></tr></thead>
+            <tbody><tr>
+              <td class="num">${performanceStudents.length}</td>
+              <td class="num">${classMeanBottom === null ? '—' : classMeanBottom.toFixed(1) + '%'}</td>
+              <td class="num">${classHighBottom === null ? '—' : classHighBottom.toFixed(1) + '%'}</td>
+              <td class="num">${classLowBottom === null ? '—' : classLowBottom.toFixed(1) + '%'}</td>
+              <td class="num">${classPassBottom === null ? '—' : classPassBottom.toFixed(1) + '%'}</td>
+              <td>${classBandBottom ? UI.esc(classBandBottom.code || classBandBottom.label || '') : '—'}</td>
+            </tr></tbody>
+          </table>
+        </section>
+
+        <section class="bs-bottom-section">
+          <div class="bs-bottom-section-title">3. STREAM PERFORMANCE</div>
+          <table class="bs-bottom-table">
+            <thead><tr><th>Stream</th><th>Students</th><th>Mean %</th><th>High %</th><th>Low %</th></tr></thead>
+            <tbody>
+              ${bottomStreamStats.map(s => `<tr>
+                <td>${UI.esc(s.label)}</td><td class="num">${s.students}</td>
+                <td class="num">${s.mean === null ? '—' : s.mean.toFixed(1) + '%'}</td>
+                <td class="num">${s.high === null ? '—' : s.high.toFixed(1) + '%'}</td>
+                <td class="num">${s.low === null ? '—' : s.low.toFixed(1) + '%'}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </section>
+
+        <section class="bs-bottom-section">
+          <div class="bs-bottom-section-title">4. GENDER PERFORMANCE</div>
+          <table class="bs-bottom-table">
+            <thead><tr><th>Gender</th><th>Students</th><th>Mean %</th><th>High %</th><th>Low %</th></tr></thead>
+            <tbody>
+              ${bottomGenderStats.map(g => `<tr>
+                <td>${UI.esc(g.label)}</td><td class="num">${g.students}</td>
+                <td class="num">${g.mean === null ? '—' : g.mean.toFixed(1) + '%'}</td>
+                <td class="num">${g.high === null ? '—' : g.high.toFixed(1) + '%'}</td>
+                <td class="num">${g.low === null ? '—' : g.low.toFixed(1) + '%'}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </section>
+
+        <section class="bs-bottom-section">
+          <div class="bs-bottom-section-title">5. CLASS PERFORMANCE LEVEL DISTRIBUTION</div>
+          <table class="bs-bottom-table">
+            <thead><tr><th>Level</th><th>Description</th><th>Students</th><th>% of Class</th></tr></thead>
+            <tbody>
+              ${bottomBandCounts.map(b => `<tr>
+                <td>${UI.esc(b.band.code || '')}</td>
+                <td>${UI.esc(b.band.label || '')}</td>
+                <td class="num">${b.count}</td>
+                <td class="num">${((b.count / bottomLevelDenominator) * 100).toFixed(1)}%</td>
+              </tr>`).join('') || '<tr><td colspan="4">No grading bands configured.</td></tr>'}
+            </tbody>
+          </table>
+        </section>
       </section>
-    ` : '';
+    `;
 
     wrap.innerHTML = `
       <div class="filter-row no-print" style="margin-bottom:12px;">
@@ -789,7 +896,7 @@ Views.broadsheet = async function () {
             </tfoot>
           </table>
         </div>
-        ${performanceTableHtml}
+        ${bottomPerformanceHtml}
         ${buildBroadsheetFooterHTML(st)}
       </div>
       <p class="field-hint no-print" style="margin-top:10px;">
