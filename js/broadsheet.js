@@ -661,6 +661,76 @@ Views.broadsheet = async function () {
 
     const allLocked = students.length > 0 && students.every(stu => isLockedForStudent(stu));
 
+    // Printable subject performance breakdown.  This is intentionally kept
+    // at the bottom of the broadsheet so the main learner-by-subject table
+    // stays clean and each printed page begins with the subject-code header.
+    // The breakdown reports Subject + Class + Stream + Gender and the actual
+    // subject performance (mean/high/low/entries).  It uses the same resolved
+    // learner cells as the main table, so legacy/duplicate subject exam rows
+    // do not make valid marks disappear from the performance figures.
+    const performanceClassLabel = isWholeGrade ? gradeName : klass;
+    const performanceStreams = isWholeGrade
+      ? streamLabels
+      : [klass];
+    const performanceRows = [];
+    subjectCols.forEach((col, subjectIndex) => {
+      performanceStreams.forEach(streamLabel => {
+        const streamRows = rows.filter(r => r.student.klass === streamLabel);
+        const genderGroups = [
+          { label: 'All', rows: streamRows },
+          { label: 'Male', rows: streamRows.filter(r => r.student.gender === 'M') },
+          { label: 'Female', rows: streamRows.filter(r => r.student.gender === 'F') }
+        ];
+        genderGroups.forEach(group => {
+          const values = group.rows
+            .map(r => r.cells[subjectIndex])
+            .filter(c => c && c.available && c.marks !== null)
+            .map(c => c.pct)
+            .filter(v => v !== null);
+          if (!values.length && group.label !== 'All') return;
+          performanceRows.push({
+            subject: col.subject.name,
+            code: col.subject.code || col.subject.name,
+            classLabel: performanceClassLabel,
+            stream: streamLabel,
+            gender: group.label,
+            entries: values.length,
+            mean: values.length ? Grading.average(values) : null,
+            high: values.length ? Math.max(...values) : null,
+            low: values.length ? Math.min(...values) : null
+          });
+        });
+      });
+    });
+
+    const performanceTableHtml = performanceRows.length ? `
+      <section class="bs-performance-summary">
+        <div class="bs-performance-title">SUBJECT PERFORMANCE SUMMARY</div>
+        <div class="bs-performance-meta">${UI.esc(type)} &nbsp;•&nbsp; ${UI.esc(term)} ${UI.esc(year)}</div>
+        <table class="bs-performance-table">
+          <thead>
+            <tr>
+              <th>Subject</th><th>Class</th><th>Stream</th><th>Gender</th>
+              <th>Entries</th><th>Mean %</th><th>High %</th><th>Low %</th><th>Performance</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${performanceRows.map(r => `<tr>
+              <td><strong>${UI.esc(r.code)}</strong><span class="bs-perf-subject-name">${UI.esc(r.subject)}</span></td>
+              <td>${UI.esc(r.classLabel)}</td>
+              <td>${UI.esc(r.stream)}</td>
+              <td>${UI.esc(r.gender)}</td>
+              <td class="num">${r.entries}</td>
+              <td class="num">${r.mean === null ? '—' : r.mean.toFixed(1) + '%'}</td>
+              <td class="num">${r.high === null ? '—' : r.high.toFixed(1) + '%'}</td>
+              <td class="num">${r.low === null ? '—' : r.low.toFixed(1) + '%'}</td>
+              <td>${r.mean === null ? '—' : UI.badge(Grading.levelForMarks(r.mean, 100, st.settings.gradingBands))}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </section>
+    ` : '';
+
     wrap.innerHTML = `
       <div class="filter-row no-print" style="margin-bottom:12px;">
         <input type="text" id="bsSearch" placeholder="Search learner name or adm. no…" style="min-width:220px;">
@@ -684,13 +754,6 @@ Views.broadsheet = async function () {
           <table class="ledger-table">
             ${bsColgroupHTML(subjectCols.length)}
             <thead>
-              <tr class="bs-page-repeat-head">
-                <th colspan="${3 + subjectCols.length + 4}" style="text-align:left; padding:5px 7px; font-size:9px; font-weight:700; letter-spacing:.02em; background:#fff; color:#334155; border-bottom:1px solid #cbd5e1;">
-                  CLASS: ${UI.esc(isWholeGrade ? `${gradeName} (WHOLE CLASS)` : klass)} &nbsp;&middot;&nbsp;
-                  SUBJECTS: ${UI.esc(subjectCols.map(c => c.subject.name).join(' · '))}
-                  &nbsp;&middot;&nbsp; ${UI.esc(type)} &nbsp;&middot;&nbsp; ${UI.esc(term)} ${UI.esc(year)}
-                </th>
-              </tr>
               <tr>
                 <th class="sortable freeze-1" data-sort="rank" data-label="Pos.">Pos. ${sortArrow('rank')}</th>
                 <th class="sortable freeze-2" data-sort="name" data-label="Name">Name ${sortArrow('name')}</th>
@@ -732,6 +795,7 @@ Views.broadsheet = async function () {
           </table>
         </div>
         ${buildBroadsheetFooterHTML(st)}
+        ${performanceTableHtml}
       </div>
       <p class="field-hint no-print" style="margin-top:10px;">
         ${UI.esc(isWholeGrade ? `${gradeName} (Whole Class)` : klass)} &middot; ${UI.esc(type)} &middot; ${UI.esc(term)} ${UI.esc(year)} &middot;

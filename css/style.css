@@ -2904,3 +2904,83 @@ table.ledger-table.sticky-head thead th {
 @media (max-width: 768px) {
   .sms-tabs { overflow-x: auto; flex-wrap: nowrap; }
 }
+
+/* ============================================================
+   Professional broadsheet print layout — subject-code headings
+   and a compact performance summary at the bottom of the report.
+   ============================================================ */
+.bs-performance-summary {
+  margin: 18px 16px 12px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  page-break-inside: auto;
+}
+.bs-performance-title {
+  padding: 7px 9px 2px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  color: #1e293b;
+  border-bottom: 0;
+}
+.bs-performance-meta {
+  padding: 0 9px 7px;
+  font-size: 8px;
+  color: #64748b;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.bs-performance-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 8px;
+}
+.bs-performance-table th,
+.bs-performance-table td {
+  border: 1px solid #dbe2ea;
+  padding: 4px 5px;
+  vertical-align: middle;
+}
+.bs-performance-table th {
+  background: #eef2f7;
+  color: #334155;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+.bs-performance-table th:nth-child(1) { width: 15%; }
+.bs-performance-table th:nth-child(2) { width: 12%; }
+.bs-performance-table th:nth-child(3) { width: 12%; }
+.bs-performance-table th:nth-child(4) { width: 9%; }
+.bs-performance-table th:nth-child(5) { width: 8%; }
+.bs-performance-table th:nth-child(6),
+.bs-performance-table th:nth-child(7),
+.bs-performance-table th:nth-child(8) { width: 9%; }
+.bs-performance-table th:nth-child(9) { width: 8%; }
+.bs-performance-table .num { text-align: center; }
+.bs-perf-subject-name {
+  display: block;
+  margin-top: 1px;
+  font-size: 7px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+/* The main broadsheet must start each printed page with the compact
+   subject-code header row, not the old class/subjects information strip. */
+.bs-page-repeat-head { display: none !important; }
+
+@media print {
+  .bs-performance-summary {
+    margin-left: 0;
+    margin-right: 0;
+  }
+  .bs-performance-table {
+    font-size: 7.5px;
+  }
+  .bs-performance-table th,
+  .bs-performance-table td {
+    padding: 3px 4px;
+  }
+}
