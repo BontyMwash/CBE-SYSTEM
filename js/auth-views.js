@@ -1085,8 +1085,9 @@ Views.users = async function () {
                   : '<span class="row-index">—</span>'}</td>
                 <td>
                   <button class="btn btn-sm btn-ghost" data-profile="${u.id}">Profile</button>
-                  <button class="btn btn-sm btn-ghost" data-edit="${u.id}">Edit name/role</button>
-                  ${isSuperadmin && u.role === 'admin' ? `<button class="btn btn-sm btn-primary" data-level-edit="${u.id}">Edit level access</button>` : ''}
+                  ${isSuperadmin && u.role === 'admin'
+                    ? `<button class="btn btn-sm btn-primary" data-admin-edit="${u.id}">Edit</button>`
+                    : `<button class="btn btn-sm btn-ghost" data-edit="${u.id}">Edit name/role</button>`}
                   ${u.role === 'user' ? `<button class="btn btn-sm btn-ghost" data-subjects="${u.id}">Manage subjects</button>` : ''}
                   ${u.role === 'user' ? `<button class="btn btn-sm btn-ghost" data-classes="${u.id}">Manage classes</button>` : ''}
                   <button class="btn btn-sm btn-ghost" data-reset="${u.id}">Reset password</button>
@@ -1111,6 +1112,59 @@ Views.users = async function () {
   }
 
   function openEditForm(existing) {
+    // Super Admins get one consolidated Edit button for Admin accounts.
+    // It edits the Admin's details AND CBC level allocation in one form.
+    if (isSuperadmin && existing?.role === 'admin') {
+      UI.openModal(`
+        <h2>Edit Admin — ${UI.esc(existing.name)}</h2>
+        <p class="field-hint" style="margin-top:-6px;">Update the Admin's account details and the CBC levels they are allowed to manage.</p>
+        <div class="form-grid">
+          <div class="field full">
+            <label>Full name</label>
+            <input type="text" id="f_name" value="${UI.esc(existing.name)}">
+          </div>
+          <div class="field full">
+            <label>Role</label>
+            <select id="f_role">
+              <option value="admin" selected>Admin</option>
+              <option value="user">User (teacher)</option>
+            </select>
+          </div>
+          <div class="field full">
+            <label>Level allocation</label>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;">${sectionCheckboxes(normalizedScopes(existing))}</div>
+            <p class="field-hint">Select the CBC levels this Admin should access. Leave all unchecked for unrestricted access.</p>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
+          <button class="btn btn-primary" id="saveBtn">Save Admin changes</button>
+        </div>
+      `, (root) => {
+        root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
+        root.querySelector('#saveBtn').onclick = async () => {
+          const name = root.querySelector('#f_name').value.trim();
+          const role = root.querySelector('#f_role').value;
+          const sectionScopes = [...root.querySelectorAll('.f_level_access:checked')].map(x => x.value);
+          if (!name) { UI.toast('Name is required'); return; }
+          const saveBtn = root.querySelector('#saveBtn');
+          saveBtn.disabled = true;
+          saveBtn.textContent = 'Saving…';
+          try {
+            await Store.updateUserProfile(existing.id, { name, role, sectionScopes });
+            UI.toast('Admin details updated successfully');
+            UI.closeModal();
+            Views.users();
+          } catch (err) {
+            UI.toast('Could not save Admin details: ' + err.message);
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save Admin changes';
+          }
+        };
+      });
+      return;
+    }
+
     UI.openModal(`
       <h2>Edit login</h2>
       <div class="form-grid">
@@ -1154,53 +1208,6 @@ Views.users = async function () {
     });
   }
 
-  function openLevelAccessForm(existing) {
-    // Dedicated Super Admin control for changing an Admin's CBC level access.
-    // This preserves the Admin's name and role; only level scopes are changed.
-    if (!isSuperadmin || existing.role !== 'admin') {
-      UI.toast('Only a Super Admin can edit an Admin level access.');
-      return;
-    }
-
-    UI.openModal(`
-      <h2>Edit level access — ${UI.esc(existing.name)}</h2>
-      <div class="field full">
-        <label>Admin level access</label>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;">
-          ${sectionCheckboxes(normalizedScopes(existing))}
-        </div>
-        <p class="field-hint">
-          Select every CBC level this Admin may access. Leave all unchecked for unrestricted access.
-        </p>
-      </div>
-      <div class="modal-actions">
-        <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
-        <button class="btn btn-primary" id="saveBtn">Save level access</button>
-      </div>
-    `, (root) => {
-      root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
-      root.querySelector('#saveBtn').onclick = async () => {
-        const sectionScopes = [...root.querySelectorAll('.f_level_access:checked')].map(x => x.value);
-        const saveBtn = root.querySelector('#saveBtn');
-        saveBtn.disabled = true;
-        saveBtn.textContent = 'Saving…';
-        try {
-          await Store.updateUserProfile(existing.id, {
-            name: existing.name,
-            role: existing.role,
-            sectionScopes
-          });
-          UI.toast('Admin level access updated');
-          UI.closeModal();
-          Views.users();
-        } catch (err) {
-          UI.toast('Could not save level access: ' + err.message);
-          saveBtn.disabled = false;
-          saveBtn.textContent = 'Save level access';
-        }
-      };
-    });
-  }
 
   function openCreateForm() {
     UI.openModal(`
@@ -1494,8 +1501,8 @@ Views.users = async function () {
     document.querySelectorAll('[data-edit]').forEach(btn => {
       btn.onclick = () => openEditForm(users.find(u => u.id === btn.dataset.edit));
     });
-    document.querySelectorAll('[data-level-edit]').forEach(btn => {
-      btn.onclick = () => openLevelAccessForm(users.find(u => u.id === btn.dataset.levelEdit));
+    document.querySelectorAll('[data-admin-edit]').forEach(btn => {
+      btn.onclick = () => openEditForm(users.find(u => u.id === btn.dataset.adminEdit));
     });
     document.querySelectorAll('[data-subjects]').forEach(btn => {
       btn.onclick = () => openSubjectsForm(users.find(u => u.id === btn.dataset.subjects));
