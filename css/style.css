@@ -2914,6 +2914,8 @@ table.ledger-table.sticky-head thead th {
   border: 1px solid #cbd5e1;
   background: #fff;
   page-break-inside: auto;
+  break-before: page;
+  page-break-before: always;
 }
 .bs-performance-title {
   padding: 7px 9px 2px;
@@ -2949,16 +2951,18 @@ table.ledger-table.sticky-head thead th {
   text-transform: uppercase;
   letter-spacing: .03em;
 }
-.bs-performance-table th:nth-child(1) { width: 15%; }
-.bs-performance-table th:nth-child(2) { width: 12%; }
-.bs-performance-table th:nth-child(3) { width: 12%; }
-.bs-performance-table th:nth-child(4) { width: 9%; }
-.bs-performance-table th:nth-child(5) { width: 8%; }
-.bs-performance-table th:nth-child(6),
-.bs-performance-table th:nth-child(7),
-.bs-performance-table th:nth-child(8) { width: 9%; }
-.bs-performance-table th:nth-child(9) { width: 8%; }
+.bs-performance-table th:nth-child(1) { width: 22%; }
+.bs-performance-table th:nth-child(2) { width: 16%; }
+.bs-performance-table th:nth-child(3) { width: 16%; }
+.bs-performance-table th:nth-child(4) { width: 12%; }
+.bs-performance-table th:nth-child(5) { width: 34%; }
 .bs-performance-table .num { text-align: center; }
+.bs-performance-table .bs-perf-value {
+  text-align: center;
+  white-space: nowrap;
+  font-family: Inter, Arial, sans-serif;
+  font-weight: 700;
+}
 .bs-perf-subject-name {
   display: block;
   margin-top: 1px;
@@ -2975,6 +2979,8 @@ table.ledger-table.sticky-head thead th {
   .bs-performance-summary {
     margin-left: 0;
     margin-right: 0;
+    break-before: page;
+    page-break-before: always;
   }
   .bs-performance-table {
     font-size: 7.5px;

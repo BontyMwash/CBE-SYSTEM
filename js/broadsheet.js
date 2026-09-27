@@ -705,13 +705,12 @@ Views.broadsheet = async function () {
 
     const performanceTableHtml = performanceRows.length ? `
       <section class="bs-performance-summary">
-        <div class="bs-performance-title">SUBJECT PERFORMANCE SUMMARY</div>
-        <div class="bs-performance-meta">${UI.esc(type)} &nbsp;•&nbsp; ${UI.esc(term)} ${UI.esc(year)}</div>
+        <div class="bs-performance-title">SUBJECT PERFORMANCE</div>
+        <div class="bs-performance-meta">${UI.esc(type)} &nbsp;•&nbsp; ${UI.esc(term)} ${UI.esc(year)} &nbsp;•&nbsp; ${UI.esc(performanceClassLabel)}</div>
         <table class="bs-performance-table">
           <thead>
             <tr>
-              <th>Subject</th><th>Class</th><th>Stream</th><th>Gender</th>
-              <th>Entries</th><th>Mean %</th><th>High %</th><th>Low %</th><th>Performance</th>
+              <th>Subject</th><th>Class</th><th>Stream</th><th>Gender</th><th>Subject Performance</th>
             </tr>
           </thead>
           <tbody>
@@ -720,11 +719,7 @@ Views.broadsheet = async function () {
               <td>${UI.esc(r.classLabel)}</td>
               <td>${UI.esc(r.stream)}</td>
               <td>${UI.esc(r.gender)}</td>
-              <td class="num">${r.entries}</td>
-              <td class="num">${r.mean === null ? '—' : r.mean.toFixed(1) + '%'}</td>
-              <td class="num">${r.high === null ? '—' : r.high.toFixed(1) + '%'}</td>
-              <td class="num">${r.low === null ? '—' : r.low.toFixed(1) + '%'}</td>
-              <td>${r.mean === null ? '—' : UI.badge(Grading.levelForMarks(r.mean, 100, st.settings.gradingBands))}</td>
+              <td class="bs-perf-value">${r.mean === null ? '—' : `Mean ${r.mean.toFixed(1)}% &nbsp; | &nbsp; High ${r.high.toFixed(1)}% &nbsp; | &nbsp; Low ${r.low.toFixed(1)}%`}</td>
             </tr>`).join('')}
           </tbody>
         </table>
@@ -794,8 +789,8 @@ Views.broadsheet = async function () {
             </tfoot>
           </table>
         </div>
-        ${buildBroadsheetFooterHTML(st)}
         ${performanceTableHtml}
+        ${buildBroadsheetFooterHTML(st)}
       </div>
       <p class="field-hint no-print" style="margin-top:10px;">
         ${UI.esc(isWholeGrade ? `${gradeName} (Whole Class)` : klass)} &middot; ${UI.esc(type)} &middot; ${UI.esc(term)} ${UI.esc(year)} &middot;
