@@ -83,12 +83,10 @@ function buildBroadsheetFooterHTML(st) {
 // (see buildReportMastheadHTML in views.js), so it isn't repeated
 // down here in the footer too.
 function bsFooterOpts(st, klassLabel = '', subjectLabel = '', type = '', term = '', year = '') {
-  const parts = [];
-  if (klassLabel) parts.push(`CLASS: ${klassLabel}`);
-  if (subjectLabel) parts.push(`SUBJECTS: ${subjectLabel}`);
-  if (type) parts.push(type);
-  if (term || year) parts.push(`${term} ${year}`.trim());
-  return { left: 'B~CBE Analytics', header: parts.join('  ·  ') };
+  // The PDF footer must contain only the system name.  Do NOT stamp
+  // the class/subjects/term metadata across the top of every page;
+  // the broadsheet table itself carries the actual column headings.
+  return { left: 'B~CBE Analytics' };
 }
 
 Views.broadsheet = async function () {
@@ -749,7 +747,14 @@ Views.broadsheet = async function () {
       }));
     const bottomLevelDenominator = classMeans.length || 1;
 
-    const bottomPerformanceHtml = `
+    const bottomPerformanceHtml = '';
+    /*
+      The downloadable broadsheet is intentionally kept as a clean student
+      ledger. The separate performance-analysis data remains available in
+      the app's analysis area; it is not inserted between the student pages
+      in the downloaded broadsheet.
+    */
+    /* const bottomPerformanceHtml = `
       <section class="bs-bottom-performance">
         <div class="bs-bottom-title">PERFORMANCE SUMMARY</div>
         <div class="bs-bottom-meta">${UI.esc(performanceClassLabel)} &nbsp;•&nbsp; ${UI.esc(type)} &nbsp;•&nbsp; ${UI.esc(term)} ${UI.esc(year)}</div>
@@ -831,7 +836,7 @@ Views.broadsheet = async function () {
           </table>
         </section>
       </section>
-    `;
+    `; */
 
     wrap.innerHTML = `
       <div class="filter-row no-print" style="margin-bottom:12px;">

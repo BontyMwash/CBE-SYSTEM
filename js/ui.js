@@ -297,6 +297,59 @@ const UI = {
     return Math.round((contentHeightMm / 25.4) * 96);
   },
 
+  // The broadsheet PDF is captured as a canvas, so html2pdf cannot
+  // use the browser's normal <thead> repetition when a long table
+  // crosses a page boundary.  Split the student ledger into page-sized
+  // table chunks BEFORE capture.  Every chunk owns the same <thead>,
+  // which gives page 2, page 3, etc. the exact compact column heading
+  // row shown on screen.  The first page has a masthead, so it carries
+  // fewer learners; later pages use a full, repeatable student block.
+  _splitBroadsheetPdfTable(clone, firstPageRows = 14, laterPageRows = 17) {
+    const table = clone.querySelector('table.ledger-table');
+    if (!table) return;
+    const tbody = table.querySelector('tbody');
+    if (!tbody) return;
+    const rows = Array.from(tbody.children).filter(n => n.tagName === 'TR');
+    if (rows.length <= firstPageRows) return;
+
+    const scroll = table.parentElement;
+    if (!scroll) return;
+    const originalColgroup = table.querySelector('colgroup');
+    const originalThead = table.querySelector('thead');
+    const originalTfoot = table.querySelector('tfoot');
+    const chunks = [];
+    let offset = 0;
+    let chunkIndex = 0;
+
+    while (offset < rows.length) {
+      const size = chunkIndex === 0 ? firstPageRows : laterPageRows;
+      const chunkRows = rows.slice(offset, offset + size);
+      const t = table.cloneNode(false);
+      t.style.pageBreakInside = 'avoid';
+      t.style.breakInside = 'avoid';
+      t.style.pageBreakBefore = chunkIndex === 0 ? 'auto' : 'always';
+      t.style.breakBefore = chunkIndex === 0 ? 'auto' : 'page';
+
+      if (originalColgroup) t.appendChild(originalColgroup.cloneNode(true));
+      if (originalThead) t.appendChild(originalThead.cloneNode(true));
+      const tb = document.createElement('tbody');
+      chunkRows.forEach(r => tb.appendChild(r.cloneNode(true)));
+      t.appendChild(tb);
+
+      // Keep Subject mean on the final student page only.
+      if (originalTfoot && offset + size >= rows.length) {
+        t.appendChild(originalTfoot.cloneNode(true));
+      }
+      chunks.push(t);
+      offset += size;
+      chunkIndex++;
+    }
+
+    // Replace the one long table with the repeated-header chunks.
+    table.remove();
+    chunks.forEach(t => scroll.appendChild(t));
+  },
+
   // Builds the off-screen container itself: ledger scroll boxes are
   // forced open so the FULL table is captured instead of just
   // whatever fit in the on-screen scroll window, and sticky/frozen
@@ -350,6 +403,9 @@ const UI = {
     hideBox.style.height = '1px';
     hideBox.style.overflow = 'hidden';
     hideBox.style.zIndex = '-9999';
+
+    document.body.appendChild(hideBox);
+    hideBox.appendChild(wrap);
 
     els.forEach((el, i) => {
       const clone = el.cloneNode(true);
@@ -485,13 +541,21 @@ const UI = {
       // container — drop them, same as print does.
       clone.querySelectorAll('.stat-icon').forEach(ic => { ic.style.display = 'none'; });
 
+      // Important broadsheet fix: do not let html2pdf slice one giant
+      // table into anonymous canvas pages. Build real repeated-header
+      // table pages so every student page starts with Pos./Name/Adm. No.
+      // and the subject/summary headings from the first page.
+      if (isBroadsheet) {
+        // At this point the clone is inside the hidden, rendered wrapper,
+        // so its table layout is already resolved using the PDF styles.
+        UI._splitBroadsheetPdfTable(clone, 14, 17);
+      }
+
       clone.style.pageBreakAfter = i < els.length - 1 ? 'always' : 'auto';
       clone.style.background = '#fff';
       clone.style.width = '100%';
       wrap.appendChild(clone);
     });
-    hideBox.appendChild(wrap);
-    document.body.appendChild(hideBox);
     wrap._pdfHideBox = hideBox;
     return wrap;
   },
