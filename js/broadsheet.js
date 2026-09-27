@@ -807,15 +807,28 @@ Views.broadsheet = async function () {
       const rowsFirst = Math.max(8, Math.floor(((budget - MAST_H - HEAD_H) * SAFETY) / ROW_H));
       const rowsRest = Math.max(8, Math.floor(((budget - HEAD_H) * SAFETY) / ROW_H));
 
+      // Balance the final student pages instead of filling the first page
+      // to capacity and then blindly starting another full-size chunk.
+      // With a class size just over a page boundary that old approach could
+      // produce pages such as 14 + 3 + 17 + 3 learners, leaving most of two
+      // pages blank. Keep the first page's masthead allowance, then spread
+      // the remaining learners as evenly as possible across the minimum
+      // number of pages that can hold them.
       const chunks = [];
       if (list.length === 0) {
         chunks.push([]);
       } else {
-        let i = 0;
-        while (i < list.length) {
-          const size = chunks.length === 0 ? rowsFirst : rowsRest;
-          chunks.push(list.slice(i, i + size));
-          i += size;
+        const firstSize = Math.min(rowsFirst, list.length);
+        chunks.push(list.slice(0, firstSize));
+        let remaining = list.length - firstSize;
+        const maxRestPages = Math.max(1, Math.ceil(remaining / rowsRest));
+        const base = maxRestPages ? Math.floor(remaining / maxRestPages) : 0;
+        const extra = maxRestPages ? remaining % maxRestPages : 0;
+        let offset = firstSize;
+        for (let page = 0; page < maxRestPages && offset < list.length; page++) {
+          const size = base + (page < extra ? 1 : 0);
+          chunks.push(list.slice(offset, offset + size));
+          offset += size;
         }
       }
 

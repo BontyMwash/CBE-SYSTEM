@@ -14,3 +14,8 @@ This build fixes the broadsheet PDF/export layout and improves the printed prese
 ## Test
 Open Broadsheet → choose the exam → Whole Class → Download PDF.
 Confirm that each page contains the learner table columns and that multiple learners appear per page.
+
+### Export polish update
+- The downloaded PDF now uses a deterministic local sans-serif font for numeric cells during html2canvas capture, avoiding doubled/overlapping digits when the remote IBM Plex Mono web font is still loading.
+- Student pages are balanced across the minimum number of landscape A4 pages, avoiding mostly blank pages such as a 14 + 3 + 17 + 3 learner split.
+

@@ -478,6 +478,19 @@ const UI = {
           c.style.fontSize = '10px';
           c.style.overflowWrap = 'break-word';
           c.style.whiteSpace = c.classList.contains('num') ? 'nowrap' : 'normal';
+          // Do not let html2canvas rasterize IBM Plex Mono from the
+          // remote Google Fonts stylesheet. When that web font is still
+          // swapping, html2canvas can paint the same digit with fallback
+          // metrics and produce the characteristic doubled/overlapping
+          // marks seen in exported broadsheets. A local system sans font
+          // is deterministic in the PDF capture and is also easier to read
+          // at the compact size used by wide broadsheet tables.
+          if (c.classList.contains('num')) {
+            c.style.fontFamily = 'Arial, Helvetica, sans-serif';
+            c.style.fontWeight = '600';
+            c.style.fontVariantNumeric = 'tabular-nums';
+            c.style.letterSpacing = '0';
+          }
         });
       });
       // Decorative absolutely-positioned stat-card icons/corners can
