@@ -2373,76 +2373,223 @@ Views.results = async function () {
     );
   }
 
-  function renderPicker() {
-    const klasses = distinctSorted(st.exams.map(e => e.klass));
-    const types = distinctSorted(examsMatching({ klass: picked.klass }).map(e => e.type));
-    const terms = distinctSorted(examsMatching({ klass: picked.klass, type: picked.type }).map(e => e.term));
-    const years = distinctSorted(examsMatching({ klass: picked.klass, type: picked.type, term: picked.term }).map(e => String(e.year)));
-    const subjectExams = examsMatching(picked).sort((a, b) => subjectName(a.subjectId).localeCompare(subjectName(b.subjectId)));
+  // Marks must always start with an explicit five-part setup.  The exam
+  // picker represents a sitting (type + term + year), while class and stream
+  // resolve to the exact `klass` label used by the exam/result records.
+  const initialExam = startExam;
+  let setup = {
+    examKey: `${initialExam.type}||${initialExam.term}||${initialExam.year}`,
+    className: '',
+    stream: '',
+    subjectId: initialExam.subjectId,
+    outOf: Number(initialExam.totalMarks) || 100
+  };
+
+  const examSittings = () => {
+    const seen = new Map();
+    st.exams.forEach(e => {
+      const key = `${e.type}||${e.term}||${e.year}`;
+      if (!seen.has(key)) seen.set(key, { key, type: e.type, term: e.term, year: e.year });
+    });
+    return [...seen.values()].sort((a, b) =>
+      (Number(b.year) - Number(a.year)) || a.term.localeCompare(b.term) || a.type.localeCompare(b.type)
+    );
+  };
+
+  function classesForSetup() {
+    const labels = [...new Set(st.exams.map(e => e.klass))];
+    return labels.filter(label => {
+      const c = st.classes.find(x => x.label === label);
+      return !!c && levelAllows(c.name);
+    }).sort();
+  }
+
+  function streamOptionsForClass(className) {
+    const rows = st.classes.filter(c => c.name === className && levelAllows(c.name));
+    // A class without a stream is represented by an empty stream value.
+    return rows.sort((a, b) => (a.stream || '').localeCompare(b.stream || ''));
+  }
+
+  function examsForSetup() {
+    const [type, term, year] = setup.examKey.split('||');
+    return st.exams.filter(e => e.type === type && e.term === term && String(e.year) === String(year));
+  }
+
+  function exactKlassForSetup() {
+    return setup.stream ? `${setup.className} ${setup.stream}` : setup.className;
+  }
+
+  function subjectsForSetup() {
+    const klass = exactKlassForSetup();
+    const candidates = examsForSetup().filter(e => e.klass === klass);
+    const seen = new Set();
+    return candidates.map(e => st.subjects.find(s => s.id === e.subjectId)).filter(s => {
+      if (!s || seen.has(s.id)) return false;
+      seen.add(s.id);
+      return true;
+    }).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  function selectedExamFromSetup() {
+    const klass = exactKlassForSetup();
+    return examsForSetup().find(e => e.klass === klass && e.subjectId === setup.subjectId) || null;
+  }
+
+  function syncSetupDefaults() {
+    const sittings = examSittings();
+    if (!sittings.length) return;
+    if (!sittings.some(x => x.key === setup.examKey)) setup.examKey = sittings[0].key;
+
+    const classes = classesForSetup();
+    const exams = examsForSetup();
+    const initialClassExam = exams.find(e => e.subjectId === setup.subjectId) || exams[0];
+    const classFromExam = initialClassExam?.klass || classes[0] || '';
+    const classRecord = st.classes.find(c => c.label === classFromExam);
+    setup.className = classRecord?.name || classFromExam;
+
+    const streams = streamOptionsForClass(setup.className);
+    const examLabels = new Set(exams.map(e => e.klass));
+    const validStreams = streams.filter(c => examLabels.has(c.label));
+    if (!validStreams.length) {
+      // Legacy/no-stream class records may not exist in st.classes; use the
+      // exact exam label as a fallback so old exams remain enterable.
+      setup.stream = classRecord?.stream || '';
+    } else {
+      const matching = validStreams.find(c => c.label === classFromExam);
+      setup.stream = matching ? matching.stream : validStreams[0].stream;
+    }
+
+    const subjects = subjectsForSetup();
+    if (!subjects.some(s => s.id === setup.subjectId)) setup.subjectId = subjects[0]?.id || '';
+    const ex = selectedExamFromSetup();
+    if (ex) setup.outOf = Number(ex.totalMarks) || 100;
+  }
+
+  syncSetupDefaults();
+
+  function renderSetupScreen() {
+    const sittings = examSittings();
+    const classes = classesForSetup();
+    const streams = streamOptionsForClass(setup.className);
+    const examLabels = new Set(examsForSetup().map(e => e.klass));
+    const usableStreams = streams.filter(c => examLabels.has(c.label));
+    const subjects = subjectsForSetup();
+    const chosen = selectedExamFromSetup();
+    const canContinue = !!chosen && Number(setup.outOf) > 0;
 
     return `
-      <div class="filter-row">
-        <select id="folderKlass">
-          ${klasses.map(k => `<option value="${UI.esc(k)}" ${k === picked.klass ? 'selected' : ''}>${UI.esc(k)}</option>`).join('')}
-        </select>
-        <select id="folderType">
-          ${types.map(t => `<option value="${UI.esc(t)}" ${t === picked.type ? 'selected' : ''}>${UI.esc(t)}</option>`).join('')}
-        </select>
-        <select id="folderTerm">
-          ${terms.map(t => `<option value="${UI.esc(t)}" ${t === picked.term ? 'selected' : ''}>${UI.esc(t)}</option>`).join('')}
-        </select>
-        <select id="folderYear">
-          ${years.map(y => `<option value="${UI.esc(y)}" ${y === picked.year ? 'selected' : ''}>${UI.esc(y)}</option>`).join('')}
-        </select>
-        <select id="examPicker">
-          ${subjectExams.map(e => `<option value="${e.id}" ${e.id === selectedId ? 'selected' : ''}>${UI.esc(subjectName(e.subjectId))}</option>`).join('')}
-        </select>
+      <div class="marks-setup-card card">
+        <div class="marks-setup-heading">
+          <div class="marks-setup-icon"><i class="fa-solid fa-clipboard-list"></i></div>
+          <div>
+            <h2 style="margin:0 0 4px 0;">Prepare Marks Entry</h2>
+            <p class="field-hint" style="margin:0;">Choose the exact exam, class, stream, subject and paper total before entering marks.</p>
+          </div>
+        </div>
+        <div class="marks-setup-grid">
+          <div class="field">
+            <label>Exam</label>
+            <select id="marksSetupExam">
+              ${sittings.map(x => `<option value="${UI.esc(x.key)}" ${x.key === setup.examKey ? 'selected' : ''}>${UI.esc(x.type)} · ${UI.esc(x.term)} · ${UI.esc(String(x.year))}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field">
+            <label>Class</label>
+            <select id="marksSetupClass">
+              ${classes.map(c => `<option value="${UI.esc(c)}" ${c === setup.className ? 'selected' : ''}>${UI.esc(c)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field">
+            <label>Stream</label>
+            <select id="marksSetupStream">
+              ${usableStreams.length
+                ? usableStreams.map(c => `<option value="${UI.esc(c.stream)}" ${c.stream === setup.stream ? 'selected' : ''}>${UI.esc(c.stream)}</option>`).join('')
+                : `<option value="">Whole class</option>`}
+            </select>
+          </div>
+          <div class="field">
+            <label>Subject</label>
+            <select id="marksSetupSubject">
+              ${subjects.map(s => `<option value="${s.id}" ${s.id === setup.subjectId ? 'selected' : ''}>${UI.esc(s.name)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field">
+            <label>Out of</label>
+            <input id="marksSetupOutOf" type="number" min="1" step="1" value="${UI.esc(String(setup.outOf || 100))}" placeholder="e.g. 100">
+            <p class="field-hint">The maximum mark for this paper.</p>
+          </div>
+        </div>
+        ${chosen ? `<div class="marks-setup-summary"><strong>Ready:</strong> ${UI.esc(chosen.type)} · ${UI.esc(chosen.term)} ${UI.esc(String(chosen.year))} — ${UI.esc(chosen.klass)} — ${UI.esc(subjectName(chosen.subjectId))} — out of ${Number(setup.outOf) || Number(chosen.totalMarks) || 100}</div>` : `<div class="marks-setup-warning">No exam exists for this exact exam/class/stream/subject combination. Choose another combination or create the exam first.</div>`}
+        <div class="marks-setup-actions">
+          <button class="btn btn-primary" id="startMarksEntry" ${canContinue ? '' : 'disabled'}><i class="fa-solid fa-pen"></i> Continue to Enter Marks</button>
+        </div>
       </div>
-      <p class="field-hint" style="margin-bottom:14px;">
-        Open the class, exam type, term and year for this sitting, then pick the subject to enter marks for.
-      </p>
     `;
   }
 
-  function wirePicker() {
-    const klassSel = document.getElementById('folderKlass');
-    const typeSel = document.getElementById('folderType');
-    const termSel = document.getElementById('folderTerm');
-    const yearSel = document.getElementById('folderYear');
-    const examSel = document.getElementById('examPicker');
-
-    klassSel.onchange = () => { picked = { klass: klassSel.value, type: undefined, term: undefined, year: undefined }; syncAndRepaint(); };
-    typeSel.onchange = () => { picked = { klass: picked.klass, type: typeSel.value, term: undefined, year: undefined }; syncAndRepaint(); };
-    termSel.onchange = () => { picked = { klass: picked.klass, type: picked.type, term: termSel.value, year: undefined }; syncAndRepaint(); };
-    yearSel.onchange = () => { picked = { klass: picked.klass, type: picked.type, term: picked.term, year: yearSel.value }; syncAndRepaint(); };
-    examSel.onchange = () => {
-      selectedId = examSel.value;
-      App.state.selectedExamId = selectedId;
-      paint(selectedId);
+  function wireSetupScreen() {
+    const root = document.getElementById('marksSetupWrap');
+    if (!root) return;
+    const repaint = () => {
+      syncSetupDefaults();
+      root.innerHTML = renderSetupScreen();
+      wireSetupScreen();
     };
 
-    function syncAndRepaint() {
-      // Fill in any undefined lower levels with the first available option
-      // for the newly narrowed folder, then re-render the whole row.
-      const types = distinctSorted(examsMatching({ klass: picked.klass }).map(e => e.type));
-      if (picked.type === undefined) picked.type = types[0];
-      const terms = distinctSorted(examsMatching({ klass: picked.klass, type: picked.type }).map(e => e.term));
-      if (picked.term === undefined) picked.term = terms[0];
-      const years = distinctSorted(examsMatching({ klass: picked.klass, type: picked.type, term: picked.term }).map(e => String(e.year)));
-      if (picked.year === undefined) picked.year = years[0];
-      const subjectExams = examsMatching(picked);
-      selectedId = subjectExams[0]?.id;
-      App.state.selectedExamId = selectedId;
-
-      const filterRow = document.querySelector('.filter-row');
-      const hint = filterRow.nextElementSibling;
-      filterRow.outerHTML = renderPicker();
-      // renderPicker() also re-adds its own hint paragraph, so drop the
-      // now-duplicated old one.
-      if (hint && hint.classList.contains('field-hint')) hint.remove();
-      wirePicker();
-      if (selectedId) paint(selectedId);
-    }
+    root.querySelector('#marksSetupExam').onchange = (e) => {
+      setup.examKey = e.target.value;
+      setup.className = '';
+      setup.stream = '';
+      setup.subjectId = '';
+      syncSetupDefaults();
+      root.innerHTML = renderSetupScreen();
+      wireSetupScreen();
+    };
+    root.querySelector('#marksSetupClass').onchange = (e) => {
+      setup.className = e.target.value;
+      setup.stream = '';
+      setup.subjectId = '';
+      repaint();
+    };
+    root.querySelector('#marksSetupStream').onchange = (e) => {
+      setup.stream = e.target.value;
+      setup.subjectId = '';
+      repaint();
+    };
+    root.querySelector('#marksSetupSubject').onchange = (e) => {
+      setup.subjectId = e.target.value;
+      const ex = selectedExamFromSetup();
+      if (ex) setup.outOf = Number(ex.totalMarks) || 100;
+      repaint();
+    };
+    root.querySelector('#marksSetupOutOf').oninput = (e) => {
+      setup.outOf = Math.max(1, Number(e.target.value) || 1);
+      const summary = root.querySelector('.marks-setup-summary');
+      if (summary) summary.innerHTML = `<strong>Ready:</strong> ${UI.esc(setup.examKey.replaceAll('||', ' · '))} — ${UI.esc(exactKlassForSetup())} — ${UI.esc(subjectName(setup.subjectId))} — out of ${setup.outOf}`;
+      const btn = root.querySelector('#startMarksEntry');
+      if (btn) btn.disabled = !selectedExamFromSetup() || setup.outOf <= 0;
+    };
+    root.querySelector('#startMarksEntry').onclick = async () => {
+      const exam = selectedExamFromSetup();
+      if (!exam) { UI.toast('Choose a valid exam, class, stream and subject combination first.'); return; }
+      const total = Math.max(1, Number(setup.outOf) || 0);
+      if (!total) { UI.toast('Enter the paper total in the “Out of” field.'); return; }
+      try {
+        if (Number(exam.totalMarks) !== total) {
+          await Store.updateExam(exam.id, { totalMarks: total });
+          exam.totalMarks = total;
+        }
+        selectedId = exam.id;
+        App.state.selectedExamId = selectedId;
+        root.innerHTML = renderSetupScreen();
+        root.style.display = 'none';
+        document.getElementById('totalMarksBarWrap').style.display = '';
+        document.getElementById('marksGridSection').style.display = '';
+        paint(selectedId);
+      } catch (err) {
+        UI.toast('Could not save the paper total: ' + err.message);
+      }
+    };
   }
 
   // A sitting (class/type/term/year) that has been published is locked
@@ -2690,16 +2837,16 @@ Views.results = async function () {
   App.state.selectedExamId = selectedId;
   document.getElementById('content').innerHTML = `
     <div class="marks-entry">
-      ${renderPicker()}
-      <div id="totalMarksBarWrap">${renderTotalMarksBar(selectedId)}</div>
-      <p class="field-hint" style="margin-bottom:14px;">Marks save automatically. You will see “Saving…” then “✓ Saved” beside each mark. Leave blank for a student who did not sit the exam.</p>
-      <div id="gridWrap">${renderGrid(selectedId)}</div>
+      <div id="marksSetupWrap">${renderSetupScreen()}</div>
+      <div id="marksGridSection" style="display:none;">
+        <div id="totalMarksBarWrap"></div>
+        <p class="field-hint" style="margin-bottom:14px;">Marks save automatically. You will see “Saving…” then “✓ Saved” beside each mark. Leave blank for a student who did not sit the exam.</p>
+        <div id="gridWrap"></div>
+      </div>
     </div>
   `;
 
-  wirePicker();
-  wireTotalMarksBar(selectedId);
-  wireGrid(selectedId);
+  wireSetupScreen();
 };
 
 /* ------------------------- REPORTS ------------------------- */

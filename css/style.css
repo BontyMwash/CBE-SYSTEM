@@ -3076,3 +3076,67 @@ table.ledger-table.sticky-head thead th {
     padding: 3px 4px;
   }
 }
+
+/* ---------- Marks entry setup gate ---------- */
+.marks-setup-card {
+  max-width: 980px;
+  margin: 0 auto 24px;
+  padding: 24px;
+  border-top: 4px solid var(--chalkboard, #3745a6);
+}
+.marks-setup-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+.marks-setup-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(55,69,166,0.10);
+  color: var(--chalkboard, #3745a6);
+  font-size: 19px;
+  flex-shrink: 0;
+}
+.marks-setup-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.marks-setup-grid .field:last-child {
+  max-width: 240px;
+}
+.marks-setup-grid select,
+.marks-setup-grid input {
+  width: 100%;
+  min-height: 42px;
+}
+.marks-setup-summary,
+.marks-setup-warning {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border-radius: 9px;
+  font-size: 13px;
+}
+.marks-setup-summary {
+  background: rgba(22,128,58,0.07);
+  border: 1px solid rgba(22,128,58,0.18);
+}
+.marks-setup-warning {
+  background: rgba(184,134,59,0.08);
+  border: 1px solid rgba(184,134,59,0.25);
+}
+.marks-setup-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+@media (max-width: 700px) {
+  .marks-setup-grid { grid-template-columns: 1fr; }
+  .marks-setup-grid .field:last-child { max-width: none; }
+  .marks-setup-actions .btn { width: 100%; }
+}
