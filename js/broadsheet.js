@@ -82,11 +82,12 @@ function buildBroadsheetFooterHTML(st) {
 // already appears once, up in the masthead at the top of the report
 // (see buildReportMastheadHTML in views.js), so it isn't repeated
 // down here in the footer too.
-function bsFooterOpts(st, klassLabel = '', subjectLabel = '', type = '', term = '', year = '') {
-  // Do not stamp a class/subjects strip above every PDF page.  The
-  // broadsheet table header (subject codes) is repeated by the print/PDF
-  // engine and is the only heading needed at the top of each page.
-  return { left: 'B~CBE Analytics', header: '' };
+function bsFooterOpts() {
+  // The broadsheet PDF must NOT stamp a second top header. The report
+  // title and subject-code table header are rendered by the broadsheet
+  // itself; the subject-code table header repeats naturally on every
+  // printed/PDF page through the table <thead>.
+  return { left: 'B~CBE Analytics' };
 }
 
 Views.broadsheet = async function () {
@@ -542,11 +543,44 @@ Views.broadsheet = async function () {
           if (pts !== null && pts !== undefined) pointsList.push(pts);
         });
       });
-      const mean = Grading.average(pointsList);
-      return { label: subject.name, teacherName: '', entry, bandCounts, z: 0, mean, grade: mean === null ? null : Grading.bandForPoints(mean, gradeBands) };
-    }).filter(Boolean).sort((a, b) => a.label.localeCompare(b.label));
+      // Subject performance is reported as a percentage, not mean points.
+      // Keep the raw percentage values so the subject table can be ordered
+      // from the highest-performing subject to the lowest-performing one.
+      const percentageValues = [];
+      gradeExams.filter(e => e.subjectId === sid).forEach(e => {
+        st.results.filter(r => r.examId === e.id).forEach(r => {
+          const pct = Grading.percent(r.marks, e.totalMarks);
+          if (pct !== null && pct !== undefined) percentageValues.push(pct);
+        });
+      });
+      const meanPct = Grading.average(percentageValues);
+      return {
+        label: subject.name,
+        code: subject.code || subject.name,
+        teacherName: '',
+        entry,
+        bandCounts,
+        z: 0,
+        meanPct,
+        grade: meanPct === null ? null : Grading.levelForMarks(meanPct, 100, gradeBands)
+      };
+    }).filter(Boolean).sort((a, b) => (b.meanPct ?? -1) - (a.meanPct ?? -1));
 
-    const overallSummary = { label: 'OVERALL', teacherName: '', ...summarizeStudents(gradeStudents.map(s => s.id)) };
+    const overallPercentageValues = [];
+    gradeExams.forEach(e => {
+      st.results.filter(r => r.examId === e.id).forEach(r => {
+        const pct = Grading.percent(r.marks, e.totalMarks);
+        if (pct !== null && pct !== undefined) overallPercentageValues.push(pct);
+      });
+    });
+    const overallMeanPct = Grading.average(overallPercentageValues);
+    const overallSummary = {
+      label: 'OVERALL',
+      teacherName: '',
+      ...summarizeStudents(gradeStudents.map(s => s.id)),
+      meanPct: overallMeanPct,
+      grade: overallMeanPct === null ? null : Grading.levelForMarks(overallMeanPct, 100, gradeBands)
+    };
     const showSummary = gradeBands.length > 0 && gradeStudents.length > 0;
 
     function summaryRowHtml(r, showTeacher) {
@@ -555,7 +589,7 @@ Views.broadsheet = async function () {
         <td class="num">${r.entry}</td>
         ${orderedBandCodes.map(code => `<td class="num">${r.bandCounts[code] || 0}</td>`).join('')}
         <td class="num">${r.z}</td>
-        <td class="num">${r.mean === null ? '—' : r.mean.toFixed(1)}</td>
+        <td class="num">${r.meanPct !== undefined ? (r.meanPct === null ? '—' : r.meanPct.toFixed(1) + '%') : (r.mean === null ? '—' : r.mean.toFixed(1))}</td>
         <td>${UI.badge(r.grade)}</td>
         ${showTeacher ? `<td>${UI.esc(r.teacherName) || '—'}</td>` : ''}
       </tr>`;
@@ -572,8 +606,8 @@ Views.broadsheet = async function () {
                 <th>Entry</th>
                 ${orderedBandCodes.map(code => `<th>${UI.esc(code)}</th>`).join('')}
                 <th title="Learners with no marks entered at all for this sitting — counted in Entry and Z, excluded from Mean">Z</th>
-                <th>Mean Point</th>
-                <th>Grade</th>
+                <th>Mean %</th>
+                <th>Level</th>
                 ${showTeacher ? '<th>Class Teacher</th>' : ''}
               </tr></thead>
               <tbody>${rows.map(r => summaryRowHtml(r, showTeacher)).join('')}</tbody>
@@ -701,6 +735,18 @@ Views.broadsheet = async function () {
       });
     });
 
+    // For the printable subject-performance table, order subjects by the
+    // overall ('All') mean percentage, highest to lowest. Gender rows for
+    // each subject stay together beneath that subject.
+    const performanceSubjectOrder = new Map();
+    performanceRows.filter(r => r.gender === 'All').forEach(r => performanceSubjectOrder.set(r.subject, r.mean ?? -1));
+    performanceRows.sort((a, b) => {
+      const subjectDiff = (performanceSubjectOrder.get(b.subject) ?? -1) - (performanceSubjectOrder.get(a.subject) ?? -1);
+      if (subjectDiff !== 0) return subjectDiff;
+      const genderOrder = { All: 0, Male: 1, Female: 2 };
+      return (genderOrder[a.gender] ?? 9) - (genderOrder[b.gender] ?? 9);
+    });
+
     const performanceTableHtml = performanceRows.length ? `
       <section class="bs-performance-summary">
         <div class="bs-performance-title">SUBJECT PERFORMANCE SUMMARY</div>
@@ -747,6 +793,7 @@ Views.broadsheet = async function () {
         <span id="bsCount" class="field-hint" style="margin-left:auto;"></span>
       </div>
       <div class="ledger" id="bsPrintArea">
+        <div style="padding:16px 16px 0 16px;">${buildReportMastheadHTML(st, `${klassTitlePrefix(st, isWholeGrade ? gradeName : klass)}Broadsheet — ${isWholeGrade ? `${gradeName} (Whole Class)` : klass}`, `${type} Results`, term, year)}</div>
         <div class="ledger-scroll ledger-scroll-y">
           <table class="ledger-table">
             ${bsColgroupHTML(subjectCols.length)}
@@ -800,7 +847,7 @@ Views.broadsheet = async function () {
         ${editMode ? ' &middot; Editing — totals below update as you type; positions refresh after you save.' : ''}
       </p>
 
-      <div id="bsAnalysisArea" style="margin-top:28px;">
+      <div id="bsAnalysisArea" class="bs-analysis-print-section" style="margin-top:28px;">
         <div class="section-title">Performance analysis</div>
 
         <div class="grid grid-4 section-block">
@@ -903,7 +950,7 @@ Views.broadsheet = async function () {
           ${summaryTableHtml('Stream', streamSummary, { showTeacher: true })}
           <div class="section-title">Gender</div>
           ${summaryTableHtml('Gender', genderSummary)}
-          <div class="section-title">Subject</div>
+          <div class="section-title">Subject performance (%) — highest to lowest</div>
           ${summaryTableHtml('Subject', [...subjectSummary, overallSummary])}
           <p class="field-hint no-print" style="margin:0;">Z is this system's "no marks entered" count for the sitting — counted in Entry, but excluded from each group's Mean Point.</p>
         `}
@@ -1120,14 +1167,9 @@ Views.broadsheet = async function () {
   document.getElementById('bsPdfBtn').onclick = (e) => {
     const main = document.getElementById('bsPrintArea');
     if (!main) { UI.toast('Choose a class and exam type first'); return; }
-    const whole = scopeSel.value === 'grade';
-    const selectedClass = st.classes.find(c => c.label === classSel.value);
-    const gradeName = selectedClass ? selectedClass.name : classSel.value;
-    const classLabel = whole ? `${gradeName} (WHOLE CLASS)` : classSel.value;
-    const subjectLabel = lastCsv ? lastCsv.header.slice(3, -4).join(' · ') : '';
     UI.downloadPDF(main, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, {
       orientation: 'landscape',
-      footer: bsFooterOpts(st, classLabel, subjectLabel, typeSel.value, termSel.value, yearSel.value)
+      footer: bsFooterOpts()
     });
   };
   document.getElementById('bsCsvBtn').onclick = () => {

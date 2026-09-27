@@ -1739,6 +1739,7 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
   print-color-adjust: exact;
   * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .ledger-table thead { display: table-header-group; }
+  #bsPrintArea .ledger-table thead { display: table-header-group; }
 
   /* Squeeze a single student's report card down so it reliably fits
      one printed page — smaller type, tighter spacing throughout —
@@ -1880,13 +1881,6 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
   #bsAnalysisArea .grid-4, #bsAnalysisArea .grid-2 {
     grid-template-columns: 1fr;
   }
-  /* The printable broadsheet ends with its compact Subject Performance
-     Summary inside #bsPrintArea.  The on-screen analysis dashboards below
-     are intentionally not printed as extra pages. */
-  #bsAnalysisArea, #bsSummaryArea {
-    display: none !important;
-  }
-
   #bsAnalysisArea .card {
     box-shadow: none;
     border: 1px solid #ddd;
@@ -2912,6 +2906,14 @@ table.ledger-table.sticky-head thead th {
   .sms-tabs { overflow-x: auto; flex-wrap: nowrap; }
 }
 
+
+/* Broadsheet analysis starts on its own printed page, keeping the complete
+   learner/subject broadsheet independent from the analysis section. */
+.bs-analysis-print-section {
+  page-break-before: always;
+  break-before: page;
+}
+
 /* ============================================================
    Professional broadsheet print layout — subject-code headings
    and a compact performance summary at the bottom of the report.
@@ -2973,10 +2975,6 @@ table.ledger-table.sticky-head thead th {
   color: #64748b;
   font-weight: 500;
 }
-
-/* The main broadsheet must start each printed page with the compact
-   subject-code header row, not the old class/subjects information strip. */
-.bs-page-repeat-head { display: none !important; }
 
 @media print {
   .bs-performance-summary {
