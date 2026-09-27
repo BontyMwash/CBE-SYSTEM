@@ -49,6 +49,7 @@ serve(async (req) => {
     const body = await req.json();
 
     if (body.action === "create") return await handleCreate(adminClient, callerProfile, body);
+    if (body.action === "updateAdminProfile") return await handleUpdateAdminProfile(adminClient, callerProfile, body);
     if (body.action === "updateProfile") return await handleUpdateProfile(adminClient, callerProfile, caller.id, body);
     if (body.action === "resetPassword") return await handleResetPassword(adminClient, callerProfile, body);
     if (body.action === "delete") return await handleDelete(adminClient, callerProfile, caller.id, body);
@@ -143,6 +144,45 @@ function normalizedScopes(row: any): string[] {
 }
 
 const VALID_SECTIONS = ["primary", "junior-secondary", "senior-school"];
+
+async function handleUpdateAdminProfile(adminClient: any, callerProfile: any, body: any) {
+  if (callerProfile.role !== "superadmin") {
+    return json({ error: "Only Super Admins can edit Admin accounts." }, 403);
+  }
+
+  const { userId, name, role, sectionScopes } = body;
+  if (!userId) return json({ error: "userId is required" }, 400);
+  if (role !== undefined && role !== "admin") {
+    return json({ error: "This action can only edit an Admin account." }, 400);
+  }
+  if (sectionScopes !== undefined && (!Array.isArray(sectionScopes) || sectionScopes.some((x: any) => !VALID_SECTIONS.includes(x)))) {
+    return json({ error: `sectionScopes must contain only: ${VALID_SECTIONS.join(", ")}` }, 400);
+  }
+
+  const { data: target, error: targetErr } = await adminClient
+    .from("profiles").select("id, role").eq("id", userId).single();
+  if (targetErr || !target) return json({ error: "Target user not found" }, 404);
+  if (target.role !== "admin") return json({ error: "Target account is not an Admin." }, 400);
+
+  const patch: any = {};
+  if (name !== undefined) {
+    const cleanName = String(name).trim();
+    if (!cleanName) return json({ error: "Name is required" }, 400);
+    patch.name = cleanName;
+  }
+  // Keep the target as Admin. Super Admins can edit details and level allocation,
+  // but this dedicated action must never downgrade the account to a teacher.
+  patch.role = "admin";
+  if (sectionScopes !== undefined) {
+    const scopes = [...new Set(sectionScopes)];
+    patch.section_scopes = scopes.length ? scopes : null;
+    patch.section_scope = scopes[0] || null;
+  }
+
+  const { error } = await adminClient.from("profiles").update(patch).eq("id", userId);
+  if (error) return json({ error: error.message }, 400);
+  return json({ ok: true });
+}
 
 async function handleUpdateProfile(adminClient: any, callerProfile: any, callerId: string, body: any) {
   const { userId, name, role, sectionScopes } = body;
