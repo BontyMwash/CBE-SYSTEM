@@ -736,16 +736,26 @@ Views.broadsheet = async function () {
     });
 
     // Class performance level distribution.
+    // Class performance level distribution must be driven by the same
+    // learner-level band shown in the broadsheet's LEVEL column.  The old
+    // version added `row.complete` here, which made every count zero in
+    // whole-class views whenever a learner did not have a mark for every
+    // subject column in the union of all streams.  That is a display/data
+    // mismatch: the learner can still have a real overall level (for
+    // example AE2) from the marks that belong to their own stream.
+    // Count the actual band on the row and use the full class population
+    // as the denominator for "% of Class".  Learners whose displayed
+    // level is Z are intentionally not assigned to a real performance band.
     const bottomBandCounts = (st.settings.gradingBands || [])
       .slice().sort((a, b) => b.min - a.min)
       .map(b => ({
         band: b,
         count: performanceStudents.filter(stu => {
           const row = rows.find(r => r.student.id === stu.id);
-          return row && row.complete && row.band && row.band.code === b.code;
+          return row && row.band && row.band.code === b.code;
         }).length
       }));
-    const bottomLevelDenominator = classMeans.length || 1;
+    const bottomLevelDenominator = performanceStudents.length || 1;
 
     const bottomPerformanceHtml = `
       <section class="bs-bottom-performance">
