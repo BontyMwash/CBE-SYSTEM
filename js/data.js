@@ -248,27 +248,12 @@ const Store = {
   // because they require the service role key, which never reaches the
   // browser. Editing name/role/section only (not password) can go direct:
   async updateUserProfile(id, patch) {
-    const dbPatch = {};
-    if (patch.name !== undefined) dbPatch.name = patch.name;
-    if (patch.role !== undefined) dbPatch.role = patch.role;
-    // section_scope means something for BOTH roles now: for an admin
-    // it restricts which classes they can manage; for a teacher
-    // ('user') it auto-grants every subject/class in that band (see
-    // teacherScope() in views.js and teacher_has_subject/
-    // teacher_has_class in 025_teacher_section_scope.sql). So it's
-    // saved as given, for either role — no more forcing it to null
-    // for teachers.
-    if (patch.sectionScopes !== undefined) {
-      const scopes = Array.isArray(patch.sectionScopes) ? [...new Set(patch.sectionScopes.filter(Boolean))] : [];
-      dbPatch.section_scopes = scopes.length ? scopes : null;
-      dbPatch.section_scope = scopes[0] || null;
-    } else if (patch.sectionScope !== undefined) {
-      dbPatch.section_scope = patch.sectionScope || null;
-      dbPatch.section_scopes = patch.sectionScope ? [patch.sectionScope] : null;
-    }
-    const { data, error } = await supabase.from('profiles').update(dbPatch).eq('id', id).select().single();
-    this._throwIfError('update profile', error);
-    return data;
+    const result = await Auth.updateManagedUserProfile(id, {
+      name: patch.name, role: patch.role, sectionScopes: patch.sectionScopes
+    });
+    if (!result.ok) throw new Error(result.error || 'Could not update profile');
+    const users = await this.listUsersForSchool(this.activeSchoolId);
+    return users.find(u => u.id === id) || null;
   },
 
   // ---- Classes / Streams ----

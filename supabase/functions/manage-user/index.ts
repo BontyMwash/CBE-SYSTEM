@@ -43,12 +43,13 @@ serve(async (req) => {
     const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
     const { data: callerProfile, error: profileErr } = await adminClient
-      .from("profiles").select("role, school_id").eq("id", caller.id).single();
+      .from("profiles").select("id, role, school_id, section_scopes, section_scope").eq("id", caller.id).single();
     if (profileErr || !callerProfile) return json({ error: "Caller has no profile" }, 403);
 
     const body = await req.json();
 
     if (body.action === "create") return await handleCreate(adminClient, callerProfile, body);
+    if (body.action === "updateProfile") return await handleUpdateProfile(adminClient, callerProfile, caller.id, body);
     if (body.action === "resetPassword") return await handleResetPassword(adminClient, callerProfile, body);
     if (body.action === "delete") return await handleDelete(adminClient, callerProfile, caller.id, body);
 
@@ -75,6 +76,20 @@ async function handleCreate(adminClient: any, callerProfile: any, body: any) {
     : (sectionScope && VALID_SECTIONS.includes(sectionScope) ? [sectionScope] : []);
   if (sectionScope && !VALID_SECTIONS.includes(sectionScope)) {
     return json({ error: `sectionScope must be one of: ${VALID_SECTIONS.join(", ")}` }, 400);
+  }
+
+  // A scoped admin may only create teachers whose level access is a subset
+  // of the admin's own level access. Empty/unrestricted is NOT allowed for
+  // a scoped admin because it would be an escalation.
+  if (callerProfile.role === "admin" && role === "user") {
+    const { data: callerRow } = await adminClient
+      .from("profiles").select("section_scopes, section_scope").eq("id", callerProfile.id || "").single();
+    const callerScopes = normalizedScopes(callerRow);
+    if (callerScopes.length) {
+      if (!scopes.length || scopes.some((x: string) => !callerScopes.includes(x))) {
+        return json({ error: "You can only create teachers within the levels assigned to your admin account." }, 403);
+      }
+    }
   }
 
   let targetSchoolId = schoolId;
@@ -120,6 +135,55 @@ async function handleCreate(adminClient: any, callerProfile: any, body: any) {
   }
 
   return json({ ok: true, userId: created.user.id, schoolId: targetSchoolId });
+}
+
+function normalizedScopes(row: any): string[] {
+  const xs = Array.isArray(row?.section_scopes) ? row.section_scopes : (row?.section_scope ? [row.section_scope] : []);
+  return [...new Set(xs.filter((x: any) => VALID_SECTIONS.includes(x)))];
+}
+
+const VALID_SECTIONS = ["primary", "junior-secondary", "senior-school"];
+
+async function handleUpdateProfile(adminClient: any, callerProfile: any, callerId: string, body: any) {
+  const { userId, name, role, sectionScopes } = body;
+  if (!userId) return json({ error: "userId is required" }, 400);
+  if (role && !["admin", "user"].includes(role)) return json({ error: "Invalid role" }, 400);
+  if (sectionScopes !== undefined && (!Array.isArray(sectionScopes) || sectionScopes.some((x: any) => !VALID_SECTIONS.includes(x)))) {
+    return json({ error: `sectionScopes must contain only: ${VALID_SECTIONS.join(", ")}` }, 400);
+  }
+
+  const { data: target, error: targetErr } = await adminClient
+    .from("profiles").select("id, school_id, role, section_scopes, section_scope").eq("id", userId).single();
+  if (targetErr || !target) return json({ error: "Target user not found" }, 404);
+
+  if (callerProfile.role === "superadmin") {
+    // unrestricted
+  } else if (callerProfile.role === "admin") {
+    if (target.school_id !== callerProfile.school_id || target.role !== "user") {
+      return json({ error: "Admins may only manage teachers in their own school." }, 403);
+    }
+    const callerScopes = normalizedScopes(callerProfile);
+    const requested = sectionScopes === undefined ? normalizedScopes(target) : [...new Set(sectionScopes)];
+    if (callerScopes.length) {
+      if (!requested.length || requested.some((x: string) => !callerScopes.includes(x))) {
+        return json({ error: "You can only assign teachers levels that are assigned to your own admin account." }, 403);
+      }
+    }
+  } else {
+    return json({ error: "Not authorized to update logins" }, 403);
+  }
+
+  const patch: any = {};
+  if (name !== undefined) patch.name = String(name).trim();
+  if (role !== undefined) patch.role = role;
+  if (sectionScopes !== undefined) {
+    const scopes = [...new Set(sectionScopes)];
+    patch.section_scopes = scopes.length ? scopes : null;
+    patch.section_scope = scopes[0] || null;
+  }
+  const { error } = await adminClient.from("profiles").update(patch).eq("id", userId);
+  if (error) return json({ error: error.message }, 400);
+  return json({ ok: true });
 }
 
 async function handleResetPassword(adminClient: any, callerProfile: any, body: any) {

@@ -179,6 +179,9 @@ const Auth = {
   createUser({ email, password, name, role, schoolId, schoolName, sectionScope, sectionScopes }) {
     return this._callManageUser({ action: 'create', email, password, name, role, schoolId, schoolName, sectionScope, sectionScopes });
   },
+  updateManagedUserProfile(userId, { name, role, sectionScopes }) {
+    return this._callManageUser({ action: 'updateProfile', userId, name, role, sectionScopes });
+  },
   resetUserPassword(userId, newPassword) {
     return this._callManageUser({ action: 'resetPassword', userId, newPassword });
   },
