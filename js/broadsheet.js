@@ -82,12 +82,13 @@ function buildBroadsheetFooterHTML(st) {
 // already appears once, up in the masthead at the top of the report
 // (see buildReportMastheadHTML in views.js), so it isn't repeated
 // down here in the footer too.
-function bsFooterOpts() {
-  // The broadsheet PDF must NOT stamp a second top header. The report
-  // title and subject-code table header are rendered by the broadsheet
-  // itself; the subject-code table header repeats naturally on every
-  // printed/PDF page through the table <thead>.
-  return { left: 'B~CBE Analytics' };
+function bsFooterOpts(st, klassLabel = '', subjectLabel = '', type = '', term = '', year = '') {
+  const parts = [];
+  if (klassLabel) parts.push(`CLASS: ${klassLabel}`);
+  if (subjectLabel) parts.push(`SUBJECTS: ${subjectLabel}`);
+  if (type) parts.push(type);
+  if (term || year) parts.push(`${term} ${year}`.trim());
+  return { left: 'B~CBE Analytics', header: parts.join('  ·  ') };
 }
 
 Views.broadsheet = async function () {
@@ -144,7 +145,6 @@ Views.broadsheet = async function () {
   const yearSel = document.getElementById('bsYear');
 
   let lastCsv = null; // set inside render(); read by the CSV/Excel buttons
-  let lastPdfPagesBuilder = null; // set inside render(); read by the Download PDF button
   // Table-only state — re-applied without recomputing the whole
   // sitting (search/sort/level filter never change the underlying data,
   // only which rows show and in what order).
@@ -544,44 +544,11 @@ Views.broadsheet = async function () {
           if (pts !== null && pts !== undefined) pointsList.push(pts);
         });
       });
-      // Subject performance is reported as a percentage, not mean points.
-      // Keep the raw percentage values so the subject table can be ordered
-      // from the highest-performing subject to the lowest-performing one.
-      const percentageValues = [];
-      gradeExams.filter(e => e.subjectId === sid).forEach(e => {
-        st.results.filter(r => r.examId === e.id).forEach(r => {
-          const pct = Grading.percent(r.marks, e.totalMarks);
-          if (pct !== null && pct !== undefined) percentageValues.push(pct);
-        });
-      });
-      const meanPct = Grading.average(percentageValues);
-      return {
-        label: subject.name,
-        code: subject.code || subject.name,
-        teacherName: '',
-        entry,
-        bandCounts,
-        z: 0,
-        meanPct,
-        grade: meanPct === null ? null : Grading.levelForMarks(meanPct, 100, gradeBands)
-      };
-    }).filter(Boolean).sort((a, b) => (b.meanPct ?? -1) - (a.meanPct ?? -1));
+      const mean = Grading.average(pointsList);
+      return { label: subject.name, teacherName: '', entry, bandCounts, z: 0, mean, grade: mean === null ? null : Grading.bandForPoints(mean, gradeBands) };
+    }).filter(Boolean).sort((a, b) => a.label.localeCompare(b.label));
 
-    const overallPercentageValues = [];
-    gradeExams.forEach(e => {
-      st.results.filter(r => r.examId === e.id).forEach(r => {
-        const pct = Grading.percent(r.marks, e.totalMarks);
-        if (pct !== null && pct !== undefined) overallPercentageValues.push(pct);
-      });
-    });
-    const overallMeanPct = Grading.average(overallPercentageValues);
-    const overallSummary = {
-      label: 'OVERALL',
-      teacherName: '',
-      ...summarizeStudents(gradeStudents.map(s => s.id)),
-      meanPct: overallMeanPct,
-      grade: overallMeanPct === null ? null : Grading.levelForMarks(overallMeanPct, 100, gradeBands)
-    };
+    const overallSummary = { label: 'OVERALL', teacherName: '', ...summarizeStudents(gradeStudents.map(s => s.id)) };
     const showSummary = gradeBands.length > 0 && gradeStudents.length > 0;
 
     function summaryRowHtml(r, showTeacher) {
@@ -590,7 +557,7 @@ Views.broadsheet = async function () {
         <td class="num">${r.entry}</td>
         ${orderedBandCodes.map(code => `<td class="num">${r.bandCounts[code] || 0}</td>`).join('')}
         <td class="num">${r.z}</td>
-        <td class="num">${r.meanPct !== undefined ? (r.meanPct === null ? '—' : r.meanPct.toFixed(1) + '%') : (r.mean === null ? '—' : r.mean.toFixed(1))}</td>
+        <td class="num">${r.mean === null ? '—' : r.mean.toFixed(1)}</td>
         <td>${UI.badge(r.grade)}</td>
         ${showTeacher ? `<td>${UI.esc(r.teacherName) || '—'}</td>` : ''}
       </tr>`;
@@ -607,8 +574,8 @@ Views.broadsheet = async function () {
                 <th>Entry</th>
                 ${orderedBandCodes.map(code => `<th>${UI.esc(code)}</th>`).join('')}
                 <th title="Learners with no marks entered at all for this sitting — counted in Entry and Z, excluded from Mean">Z</th>
-                <th>Mean %</th>
-                <th>Level</th>
+                <th>Mean Point</th>
+                <th>Grade</th>
                 ${showTeacher ? '<th>Class Teacher</th>' : ''}
               </tr></thead>
               <tbody>${rows.map(r => summaryRowHtml(r, showTeacher)).join('')}</tbody>
@@ -694,237 +661,8 @@ Views.broadsheet = async function () {
 
     const allLocked = students.length > 0 && students.every(stu => isLockedForStudent(stu));
 
-    // Printable subject performance breakdown.  This is intentionally kept
-    // at the bottom of the broadsheet so the main learner-by-subject table
-    // stays clean and each printed page begins with the subject-code header.
-    // The breakdown reports Subject + Class + Stream + Gender and the actual
-    // subject performance (mean/high/low/entries).  It uses the same resolved
-    // learner cells as the main table, so legacy/duplicate subject exam rows
-    // do not make valid marks disappear from the performance figures.
-    const performanceClassLabel = isWholeGrade ? gradeName : klass;
-    const performanceStreams = isWholeGrade
-      ? streamLabels
-      : [klass];
-    const performanceRows = [];
-    subjectCols.forEach((col, subjectIndex) => {
-      performanceStreams.forEach(streamLabel => {
-        const streamRows = rows.filter(r => r.student.klass === streamLabel);
-        const genderGroups = [
-          { label: 'All', rows: streamRows },
-          { label: 'Male', rows: streamRows.filter(r => r.student.gender === 'M') },
-          { label: 'Female', rows: streamRows.filter(r => r.student.gender === 'F') }
-        ];
-        genderGroups.forEach(group => {
-          const values = group.rows
-            .map(r => r.cells[subjectIndex])
-            .filter(c => c && c.available && c.marks !== null)
-            .map(c => c.pct)
-            .filter(v => v !== null);
-          if (!values.length && group.label !== 'All') return;
-          performanceRows.push({
-            subject: col.subject.name,
-            code: col.subject.code || col.subject.name,
-            classLabel: performanceClassLabel,
-            stream: streamLabel,
-            gender: group.label,
-            entries: values.length,
-            mean: values.length ? Grading.average(values) : null,
-            high: values.length ? Math.max(...values) : null,
-            low: values.length ? Math.min(...values) : null
-          });
-        });
-      });
-    });
-
-    // For the printable subject-performance table, order subjects by the
-    // overall ('All') mean percentage, highest to lowest. Gender rows for
-    // each subject stay together beneath that subject.
-    const performanceSubjectOrder = new Map();
-    performanceRows.filter(r => r.gender === 'All').forEach(r => performanceSubjectOrder.set(r.subject, r.mean ?? -1));
-    performanceRows.sort((a, b) => {
-      const subjectDiff = (performanceSubjectOrder.get(b.subject) ?? -1) - (performanceSubjectOrder.get(a.subject) ?? -1);
-      if (subjectDiff !== 0) return subjectDiff;
-      const genderOrder = { All: 0, Male: 1, Female: 2 };
-      return (genderOrder[a.gender] ?? 9) - (genderOrder[b.gender] ?? 9);
-    });
-
-    const performanceTableHtml = performanceRows.length ? `
-      <section class="bs-performance-summary">
-        <div class="bs-performance-title">SUBJECT PERFORMANCE SUMMARY</div>
-        <div class="bs-performance-meta">${UI.esc(type)} &nbsp;•&nbsp; ${UI.esc(term)} ${UI.esc(year)}</div>
-        <table class="bs-performance-table">
-          <thead>
-            <tr>
-              <th>Subject</th><th>Class</th><th>Stream</th><th>Gender</th>
-              <th>Entries</th><th>Mean %</th><th>High %</th><th>Low %</th><th>Performance</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${performanceRows.map(r => `<tr>
-              <td><strong>${UI.esc(r.code)}</strong><span class="bs-perf-subject-name">${UI.esc(r.subject)}</span></td>
-              <td>${UI.esc(r.classLabel)}</td>
-              <td>${UI.esc(r.stream)}</td>
-              <td>${UI.esc(r.gender)}</td>
-              <td class="num">${r.entries}</td>
-              <td class="num">${r.mean === null ? '—' : r.mean.toFixed(1) + '%'}</td>
-              <td class="num">${r.high === null ? '—' : r.high.toFixed(1) + '%'}</td>
-              <td class="num">${r.low === null ? '—' : r.low.toFixed(1) + '%'}</td>
-              <td>${r.mean === null ? '—' : UI.badge(Grading.levelForMarks(r.mean, 100, st.settings.gradingBands))}</td>
-            </tr>`).join('')}
-          </tbody>
-        </table>
-      </section>
-    ` : '';
-
-    // Rebuilds the broadsheet for the "Download PDF" one-click button as
-    // a series of SEPARATE, already-paginated pages — each learner-table
-    // chunk carrying its own colgroup + subject-code <thead>, followed by
-    // a dedicated Class Mean per Subject page, the Subject/Class/Stream/
-    // Gender Performance Summary, and finally the Performance analysis
-    // section — instead of one flattened image. That export
-    // (html2canvas) has no concept of a <thead> and can't repeat it the
-    // way the browser's native Print/Save-as-PDF dialog already does via
-    // `display: table-header-group`; handing it several smaller elements
-    // instead of one big one works around that, since UI.downloadPDF/
-    // _buildPdfWrap already force a fresh PDF page between separate
-    // elements — each of THOSE pages then starts with its own header.
-    // Previously this export only ever looked at #bsPrintArea, so the
-    // Performance analysis section (stat cards, per-subject Mean/High/
-    // Low, class-level distribution, stream comparison) wasn't in the
-    // downloaded file at all; it's now appended as its own final page(s)
-    // instead of running on directly beneath the last page of students.
-    //
-    // Row-count-per-page is an estimate (assumed page height ÷ an
-    // assumed row height, both padded with a safety margin) rather than
-    // a pixel-perfect measurement of the live table, so a page can come
-    // out a row or two shorter than it strictly needed to — deliberately
-    // safe in that direction rather than risking an overflow onto an
-    // unheaded page.
-    function buildBroadsheetPdfPages() {
-      const list = visibleRows();
-      const ROW_H = 28, HEAD_H = 30, MAST_H = 85, SAFETY = 0.85;
-      const budget = UI._pdfPageContentHeightPx('landscape', 'a4');
-      const rowsFirst = Math.max(8, Math.floor(((budget - MAST_H - HEAD_H) * SAFETY) / ROW_H));
-      const rowsRest = Math.max(8, Math.floor(((budget - HEAD_H) * SAFETY) / ROW_H));
-
-      // Balance the final student pages instead of filling the first page
-      // to capacity and then blindly starting another full-size chunk.
-      // With a class size just over a page boundary that old approach could
-      // produce pages such as 14 + 3 + 17 + 3 learners, leaving most of two
-      // pages blank. Keep the first page's masthead allowance, then spread
-      // the remaining learners as evenly as possible across the minimum
-      // number of pages that can hold them.
-      const chunks = [];
-      if (list.length === 0) {
-        chunks.push([]);
-      } else {
-        const firstSize = Math.min(rowsFirst, list.length);
-        chunks.push(list.slice(0, firstSize));
-        let remaining = list.length - firstSize;
-        const maxRestPages = Math.max(1, Math.ceil(remaining / rowsRest));
-        const base = maxRestPages ? Math.floor(remaining / maxRestPages) : 0;
-        const extra = maxRestPages ? remaining % maxRestPages : 0;
-        let offset = firstSize;
-        for (let page = 0; page < maxRestPages && offset < list.length; page++) {
-          const size = base + (page < extra ? 1 : 0);
-          chunks.push(list.slice(offset, offset + size));
-          offset += size;
-        }
-      }
-
-      const theadRowHtml = `<tr>
-        <th class="freeze-1">Pos.</th>
-        <th class="freeze-2">Name</th>
-        <th>Adm. No.</th>
-        ${subjectCols.map(c => `<th title="${UI.esc(c.subject.name)}">${UI.esc(c.subject.code || c.subject.name)}</th>`).join('')}
-        <th>Total Marks</th>
-        <th>Mean %</th>
-        <th>Points</th>
-        <th>Level</th>
-      </tr>`;
-
-      // Student pages: every chunk repeats the subject-code header; no
-      // tfoot here any more — the class-mean-per-subject figures move to
-      // their own dedicated page below instead of a cramped last row.
-      const pages = chunks.map((chunk, idx) => {
-        const isFirst = idx === 0;
-        const div = document.createElement('div');
-        div.className = 'ledger bs-pdf-page';
-        div.style.padding = '16px';
-        div.innerHTML = `
-          ${isFirst ? `<div style="margin-bottom:8px;">${buildReportMastheadHTML(st, `${klassTitlePrefix(st, isWholeGrade ? gradeName : klass)}Broadsheet — ${isWholeGrade ? `${gradeName} (Whole Class)` : klass}`, `${type} Results`, term, year)}</div>` : ''}
-          <table class="ledger-table">
-            ${bsColgroupHTML(subjectCols.length)}
-            <thead>${theadRowHtml}</thead>
-            <tbody>${rowsHtml(chunk)}</tbody>
-          </table>
-        `;
-        return div;
-      });
-
-      // Class Mean per Subject — its own page, ordered highest to
-      // lowest like the performance summary below, with the overall
-      // class mean as a final highlighted row.
-      const classMeanRows = subjectCols
-        .map((col, i) => ({ code: col.subject.code || col.subject.name, name: col.subject.name, mean: subjectAverages[i] }))
-        .sort((a, b) => (b.mean ?? -1) - (a.mean ?? -1));
-      const meanDiv = document.createElement('div');
-      meanDiv.className = 'ledger bs-pdf-page';
-      meanDiv.style.padding = '16px';
-      meanDiv.innerHTML = `
-        <section class="bs-performance-summary">
-          <div class="bs-performance-title">CLASS MEAN PER SUBJECT</div>
-          <div class="bs-performance-meta">${UI.esc(type)} &nbsp;&bull;&nbsp; ${UI.esc(term)} ${UI.esc(year)}</div>
-          <table class="bs-performance-table">
-            <thead><tr><th>Subject</th><th>Class Mean %</th><th>Level</th></tr></thead>
-            <tbody>
-              ${classMeanRows.map(r => `<tr>
-                <td><strong>${UI.esc(r.code)}</strong><span class="bs-perf-subject-name">${UI.esc(r.name)}</span></td>
-                <td class="num">${r.mean === null ? '—' : r.mean.toFixed(1) + '%'}</td>
-                <td>${r.mean === null ? '—' : UI.badge(Grading.levelForMarks(r.mean, 100, st.settings.gradingBands))}</td>
-              </tr>`).join('')}
-              <tr style="font-weight:600;">
-                <td>OVERALL CLASS MEAN</td>
-                <td class="num">${classMean === null ? '—' : classMean.toFixed(1) + '%'}</td>
-                <td>${classMeanBand ? UI.badge(classMeanBand) : ''}</td>
-              </tr>
-            </tbody>
-          </table>
-        </section>
-      `;
-      pages.push(meanDiv);
-
-      // Subject / Class / Stream / Gender performance summary — already
-      // built once for the on-screen broadsheet. The footer is stamped
-      // here (the last page we build ourselves) rather than on the live
-      // Performance-analysis element appended below, which must never be
-      // written to directly.
-      if (performanceTableHtml) {
-        const perfDiv = document.createElement('div');
-        perfDiv.className = 'ledger bs-pdf-page';
-        perfDiv.style.padding = '16px';
-        perfDiv.innerHTML = `${performanceTableHtml}${buildBroadsheetFooterHTML(st)}`;
-        pages.push(perfDiv);
-      } else {
-        meanDiv.innerHTML += buildBroadsheetFooterHTML(st);
-      }
-
-      // Performance analysis (stat cards, per-subject Mean/High/Low/
-      // Entries, class-level distribution, stream comparison) — grabbed
-      // LIVE (not cloned here) so any table inside it is measured
-      // correctly by _buildPdfWrap; it becomes its own final page(s),
-      // starting fresh rather than running on beneath the last student
-      // page.
-      const analysisEl = document.getElementById('bsAnalysisArea');
-      if (analysisEl) pages.push(analysisEl);
-
-      return pages;
-    }
-    lastPdfPagesBuilder = buildBroadsheetPdfPages;
-
     wrap.innerHTML = `
       <div class="filter-row no-print" style="margin-bottom:12px;">
-
         <input type="text" id="bsSearch" placeholder="Search learner name or adm. no…" style="min-width:220px;">
         <select id="bsLevel">
           <option value="all">All achievement levels</option>
@@ -946,6 +684,13 @@ Views.broadsheet = async function () {
           <table class="ledger-table">
             ${bsColgroupHTML(subjectCols.length)}
             <thead>
+              <tr class="bs-page-repeat-head">
+                <th colspan="${3 + subjectCols.length + 4}" style="text-align:left; padding:5px 7px; font-size:9px; font-weight:700; letter-spacing:.02em; background:#fff; color:#334155; border-bottom:1px solid #cbd5e1;">
+                  CLASS: ${UI.esc(isWholeGrade ? `${gradeName} (WHOLE CLASS)` : klass)} &nbsp;&middot;&nbsp;
+                  SUBJECTS: ${UI.esc(subjectCols.map(c => c.subject.name).join(' · '))}
+                  &nbsp;&middot;&nbsp; ${UI.esc(type)} &nbsp;&middot;&nbsp; ${UI.esc(term)} ${UI.esc(year)}
+                </th>
+              </tr>
               <tr>
                 <th class="sortable freeze-1" data-sort="rank" data-label="Pos.">Pos. ${sortArrow('rank')}</th>
                 <th class="sortable freeze-2" data-sort="name" data-label="Name">Name ${sortArrow('name')}</th>
@@ -986,7 +731,6 @@ Views.broadsheet = async function () {
             </tfoot>
           </table>
         </div>
-        ${performanceTableHtml}
         ${buildBroadsheetFooterHTML(st)}
       </div>
       <p class="field-hint no-print" style="margin-top:10px;">
@@ -995,7 +739,7 @@ Views.broadsheet = async function () {
         ${editMode ? ' &middot; Editing — totals below update as you type; positions refresh after you save.' : ''}
       </p>
 
-      <div id="bsAnalysisArea" class="bs-analysis-print-section" style="margin-top:28px;">
+      <div id="bsAnalysisArea" style="margin-top:28px;">
         <div class="section-title">Performance analysis</div>
 
         <div class="grid grid-4 section-block">
@@ -1098,7 +842,7 @@ Views.broadsheet = async function () {
           ${summaryTableHtml('Stream', streamSummary, { showTeacher: true })}
           <div class="section-title">Gender</div>
           ${summaryTableHtml('Gender', genderSummary)}
-          <div class="section-title">Subject performance (%) — highest to lowest</div>
+          <div class="section-title">Subject</div>
           ${summaryTableHtml('Subject', [...subjectSummary, overallSummary])}
           <p class="field-hint no-print" style="margin:0;">Z is this system's "no marks entered" count for the sitting — counted in Entry, but excluded from each group's Mean Point.</p>
         `}
@@ -1315,13 +1059,14 @@ Views.broadsheet = async function () {
   document.getElementById('bsPdfBtn').onclick = (e) => {
     const main = document.getElementById('bsPrintArea');
     if (!main) { UI.toast('Choose a class and exam type first'); return; }
-    // Paginated chunks (each with its own repeated subject-code header) —
-    // see buildBroadsheetPdfPages in render(). Falls back to the old
-    // single-element capture if that builder somehow wasn't set.
-    const pages = (typeof lastPdfPagesBuilder === 'function') ? lastPdfPagesBuilder() : main;
-    UI.downloadPDF(pages, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, {
+    const whole = scopeSel.value === 'grade';
+    const selectedClass = st.classes.find(c => c.label === classSel.value);
+    const gradeName = selectedClass ? selectedClass.name : classSel.value;
+    const classLabel = whole ? `${gradeName} (WHOLE CLASS)` : classSel.value;
+    const subjectLabel = lastCsv ? lastCsv.header.slice(3, -4).join(' · ') : '';
+    UI.downloadPDF(main, (lastCsv ? lastCsv.filename : 'broadsheet'), e.currentTarget, {
       orientation: 'landscape',
-      footer: bsFooterOpts()
+      footer: bsFooterOpts(st, classLabel, subjectLabel, typeSel.value, termSel.value, yearSel.value)
     });
   };
   document.getElementById('bsCsvBtn').onclick = () => {
