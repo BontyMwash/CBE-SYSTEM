@@ -83,12 +83,10 @@ function buildBroadsheetFooterHTML(st) {
 // (see buildReportMastheadHTML in views.js), so it isn't repeated
 // down here in the footer too.
 function bsFooterOpts(st, klassLabel = '', subjectLabel = '', type = '', term = '', year = '') {
-  const parts = [];
-  if (klassLabel) parts.push(`CLASS: ${klassLabel}`);
-  if (subjectLabel) parts.push(`SUBJECTS: ${subjectLabel}`);
-  if (type) parts.push(type);
-  if (term || year) parts.push(`${term} ${year}`.trim());
-  return { left: 'B~CBE Analytics', header: parts.join('  ·  ') };
+  // Do not stamp a class/subjects strip above every PDF page.  The
+  // broadsheet table header (subject codes) is repeated by the print/PDF
+  // engine and is the only heading needed at the top of each page.
+  return { left: 'B~CBE Analytics', header: '' };
 }
 
 Views.broadsheet = async function () {
@@ -749,7 +747,6 @@ Views.broadsheet = async function () {
         <span id="bsCount" class="field-hint" style="margin-left:auto;"></span>
       </div>
       <div class="ledger" id="bsPrintArea">
-        <div style="padding:16px 16px 0 16px;">${buildReportMastheadHTML(st, `${klassTitlePrefix(st, isWholeGrade ? gradeName : klass)}Broadsheet — ${isWholeGrade ? `${gradeName} (Whole Class)` : klass}`, `${type} Results`, term, year)}</div>
         <div class="ledger-scroll ledger-scroll-y">
           <table class="ledger-table">
             ${bsColgroupHTML(subjectCols.length)}
@@ -794,8 +791,8 @@ Views.broadsheet = async function () {
             </tfoot>
           </table>
         </div>
-        ${buildBroadsheetFooterHTML(st)}
         ${performanceTableHtml}
+        ${buildBroadsheetFooterHTML(st)}
       </div>
       <p class="field-hint no-print" style="margin-top:10px;">
         ${UI.esc(isWholeGrade ? `${gradeName} (Whole Class)` : klass)} &middot; ${UI.esc(type)} &middot; ${UI.esc(term)} ${UI.esc(year)} &middot;

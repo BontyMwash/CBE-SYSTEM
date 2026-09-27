@@ -105,6 +105,95 @@ const Store = {
     this._throwIfError('clear error log', error);
   },
 
+  // Resolve the CBC level/section from a class/grade name without
+  // depending on views.js. This is used only by the safe exam-subject
+  // backfill below so historical marks stay attached to their existing
+  // result rows while the owning exam is corrected to the right level
+  // subject.
+  _sectionForClassName(name) {
+    const n = String(name || '').trim().toLowerCase();
+    if (/^(pp1|pp2|pre[- ]?primary)/.test(n)) return 'primary';
+    const m = n.match(/grade\s*(\d{1,2})/i) || n.match(/^(\d{1,2})(?:\s|$)/);
+    if (!m) return '';
+    const g = Number(m[1]);
+    if (g >= 1 && g <= 3) return 'lower-primary';
+    if (g >= 4 && g <= 6) return 'upper-primary';
+    if (g >= 7 && g <= 9) return 'junior-secondary';
+    if (g >= 10 && g <= 12) return 'senior-school';
+    return '';
+  },
+
+  _subjectSectionMatches(subjectSection, classSection) {
+    const s = String(subjectSection || '').trim().toLowerCase();
+    const c = String(classSection || '').trim().toLowerCase();
+    // Blank section means the subject is intentionally shared/legacy.
+    if (!s || !c) return true;
+    if (s === c) return true;
+    // A Primary-scoped subject covers both Lower and Upper Primary.
+    if (s === 'primary' && (c === 'lower-primary' || c === 'upper-primary' || c === 'primary')) return true;
+    return false;
+  },
+
+  // One-time, non-destructive subject-level repair for historical marks.
+  // Results point to exams, so correcting an exam's subject_id preserves
+  // every existing mark row. We only change an exam when its current
+  // subject belongs to a different CBC level AND there is exactly one
+  // unambiguous subject with the same name that belongs to the class level.
+  // Shared/blank subjects and ambiguous duplicates are deliberately left
+  // untouched.
+  async _repairExamSubjectLevels(examRows, classRows, subjectRows) {
+    const classByLabel = new Map((classRows || []).map(c => [
+      c.stream ? `${c.name} ${c.stream}` : c.name, c
+    ]));
+    const subjectsByName = new Map();
+    (subjectRows || []).forEach(sub => {
+      const key = String(sub.name || '').trim().toLowerCase();
+      if (!key) return;
+      if (!subjectsByName.has(key)) subjectsByName.set(key, []);
+      subjectsByName.get(key).push(sub);
+    });
+
+    let repaired = 0;
+    for (const exam of (examRows || [])) {
+      const cls = classByLabel.get(exam.klass);
+      if (!cls) continue;
+      const classSection = this._sectionForClassName(cls.name);
+      if (!classSection) continue;
+
+      const currentSubject = (subjectRows || []).find(s => s.id === exam.subject_id);
+      if (!currentSubject) continue;
+      const currentSection = String(currentSubject.section || '').trim().toLowerCase();
+      if (this._subjectSectionMatches(currentSection, classSection)) continue;
+
+      const key = String(currentSubject.name || '').trim().toLowerCase();
+      const matching = (subjectsByName.get(key) || []).filter(s =>
+        this._subjectSectionMatches(s.section || '', classSection)
+      );
+      // Prefer a subject explicitly created for this exact level over a
+      // broader Primary/shared subject. This is what separates, for example,
+      // Lower Primary English from Upper Primary English when both exist.
+      const exact = matching.filter(s => String(s.section || '').trim().toLowerCase() === classSection);
+      const parentPrimary = matching.filter(s =>
+        String(s.section || '').trim().toLowerCase() === 'primary'
+      );
+      const candidates = exact.length ? exact : parentPrimary.length ? parentPrimary : matching.filter(s => !String(s.section || '').trim());
+      if (candidates.length !== 1 || candidates[0].id === currentSubject.id) continue;
+
+      const replacement = candidates[0];
+      const { error } = await supabase.from('exams')
+        .update({ subject_id: replacement.id })
+        .eq('id', exam.id)
+        .eq('school_id', this.activeSchoolId);
+      this._throwIfError('repair exam subject level', error);
+
+      // Keep the current in-memory bundle consistent with the database.
+      exam.subject_id = replacement.id;
+      repaired++;
+    }
+    if (repaired) console.info(`[CBE] Repaired ${repaired} historical exam subject assignment(s) by CBC level.`);
+    return repaired;
+  },
+
   // ---- school-scoped bundle (what every view renders from) ----
   async current() {
     const schoolId = this.activeSchoolId;
@@ -157,6 +246,14 @@ const Store = {
     this._throwIfError('load subjects', subjectsRes.error);
     this._throwIfError('load exam types', examTypesRes.error);
     this._throwIfError('load exams', examsRes.error);
+
+    // Repair historical exam -> subject links before loading results.
+    // The results themselves are never rewritten or deleted.
+    await this._repairExamSubjectLevels(
+      examsRes.data || [],
+      classesRes.data || [],
+      subjectsRes.data || []
+    );
 
     // Fetch results only after the school-scoped exam list is known.
     // This is deliberately a simple results -> exam_id filter so marks

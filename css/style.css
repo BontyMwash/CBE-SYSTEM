@@ -1880,6 +1880,13 @@ table.ledger-table th.sortable .sort-arrow { margin-left: 4px; opacity: 0.6; }
   #bsAnalysisArea .grid-4, #bsAnalysisArea .grid-2 {
     grid-template-columns: 1fr;
   }
+  /* The printable broadsheet ends with its compact Subject Performance
+     Summary inside #bsPrintArea.  The on-screen analysis dashboards below
+     are intentionally not printed as extra pages. */
+  #bsAnalysisArea, #bsSummaryArea {
+    display: none !important;
+  }
+
   #bsAnalysisArea .card {
     box-shadow: none;
     border: 1px solid #ddd;
