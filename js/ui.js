@@ -467,25 +467,36 @@ const UI = {
       });
       // Give a wide table (many subject columns) more room to work
       // with by trimming the on-screen padding/font-size, matching
+      // The broadsheet Download PDF is rasterized by html2canvas.
+      // Small web-font glyphs can be painted with fallback + final font
+      // metrics during that capture, producing the doubled/squeezed
+      // digits visible in the exported PDF. Flatten ONLY the PDF clone
+      // to a deterministic local font; the live screen is unchanged.
+      const isBroadsheetPdf = clone.id === 'bsPrintArea';
+      if (isBroadsheetPdf) {
+        clone.style.fontFamily = 'Arial, Helvetica, sans-serif';
+        clone.style.fontVariantNumeric = 'tabular-nums';
+        clone.style.textRendering = 'geometricPrecision';
+        clone.querySelectorAll('*').forEach(node => {
+          node.style.fontFamily = 'Arial, Helvetica, sans-serif';
+          node.style.textRendering = 'geometricPrecision';
+        });
+      }
+
       // what the print stylesheet already does for @media print.
       clone.querySelectorAll('table.ledger-table').forEach(t => {
-        // Every table now carries a measured <colgroup> (see above),
-        // so every column has a real, guaranteed share of the page
-        // width — numeric cells can safely stay on one line rather
-        // than wrapping, matching how they render on screen.
         t.querySelectorAll('th, td').forEach(c => {
-          c.style.padding = '5px 12px';
-          c.style.fontSize = '10px';
+          c.style.padding = isBroadsheetPdf ? '4px 7px' : '5px 12px';
+          c.style.fontSize = isBroadsheetPdf ? '9px' : '10px';
           c.style.overflowWrap = 'break-word';
           c.style.whiteSpace = c.classList.contains('num') ? 'nowrap' : 'normal';
-          // Do not let html2canvas rasterize IBM Plex Mono from the
-          // remote Google Fonts stylesheet. When that web font is still
-          // swapping, html2canvas can paint the same digit with fallback
-          // metrics and produce the characteristic doubled/overlapping
-          // marks seen in exported broadsheets. A local system sans font
-          // is deterministic in the PDF capture and is also easier to read
-          // at the compact size used by wide broadsheet tables.
-          if (c.classList.contains('num')) {
+          if (isBroadsheetPdf) {
+            c.style.fontFamily = 'Arial, Helvetica, sans-serif';
+            c.style.fontWeight = '400';
+            c.style.fontVariantNumeric = 'tabular-nums';
+            c.style.fontFeatureSettings = 'normal';
+            c.style.letterSpacing = '0';
+          } else if (c.classList.contains('num')) {
             c.style.fontFamily = 'Arial, Helvetica, sans-serif';
             c.style.fontWeight = '600';
             c.style.fontVariantNumeric = 'tabular-nums';
@@ -557,7 +568,7 @@ const UI = {
     try {
       const pdf = await html2pdf().set({
         margin: UI._pdfMarginArray(),
-        html2canvas: { scale: UI._safePdfScale(chunk), useCORS: true, backgroundColor: '#ffffff' },
+        html2canvas: { scale: UI._safePdfScale(chunk), useCORS: true, backgroundColor: '#ffffff', foreignObjectRendering: chunk.some(el => el && el.id === 'bsPrintArea') },
         jsPDF: { unit: 'mm', format, orientation },
         pagebreak: { mode: ['css'] }
       }).from(wrap).toPdf().get('pdf');
@@ -599,7 +610,7 @@ const UI = {
       try {
         const pdf = await html2pdf().set({
           margin: UI._pdfMarginArray(),
-          html2canvas: { scale: UI._safePdfScale(els), useCORS: true, backgroundColor: '#ffffff' },
+          html2canvas: { scale: UI._safePdfScale(els), useCORS: true, backgroundColor: '#ffffff', foreignObjectRendering: els.some(el => el && el.id === 'bsPrintArea') },
           jsPDF: { unit: 'mm', format, orientation },
           pagebreak: { mode: ['css'] }
         }).from(wrap).toPdf().get('pdf');
