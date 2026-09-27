@@ -1033,24 +1033,34 @@ Views.users = async function () {
     return map;
   }
 
-  // Reuses the same SECTION_INFO used everywhere else a level is
-  // picked (Subjects, Classes) so the two never drift apart.
-  function sectionOptions(existingScope) {
-    return `<option value="" ${!existingScope ? 'selected' : ''}>All levels (unrestricted)</option>` +
-      Object.entries(SECTION_INFO).map(([k, info]) => `<option value="${k}" ${existingScope === k ? 'selected' : ''}>${info.label} only</option>`).join('');
+  // A login can be granted access to one or more CBC levels.
+  // Primary here is the parent band (Grades 1-6); Junior Secondary is 7-9;
+  // Senior School is 10-12. The checkboxes are deliberately multi-select.
+  const ACCESS_LEVELS = [
+    ['primary', 'Primary (Grade 1–6)'],
+    ['junior-secondary', 'Junior Secondary (Grade 7–9)'],
+    ['senior-school', 'Senior School (Grade 10–12)']
+  ];
+  function normalizedScopes(u) {
+    const xs = Array.isArray(u?.sectionScopes) ? u.sectionScopes : (u?.sectionScope ? [u.sectionScope] : []);
+    return [...new Set(xs.filter(x => ACCESS_LEVELS.some(([k]) => k === x)))];
   }
-  // Different meaning per role: for an admin, Section RESTRICTS which
-  // classes/students/exams they can create or edit (a gate — see
-  // admin_class_allowed in the SQL). For a teacher, Section GRANTS
-  // automatic access to every subject and class in that band, on top
-  // of whatever's picked in "Manage subjects"/"Manage classes" (an
-  // extra source of access, not a gate — see teacher_has_subject /
-  // teacher_has_class). Same field, opposite direction, so the hint
-  // text below it is written per-role rather than shared.
+  function sectionCheckboxes(existingScopes = []) {
+    const selected = new Set(existingScopes);
+    return ACCESS_LEVELS.map(([key, label]) => `
+      <label style="display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--line,#ddd);border-radius:10px;cursor:pointer;">
+        <input type="checkbox" class="f_level_access" value="${key}" ${selected.has(key) ? 'checked' : ''}>
+        <span>${label}</span>
+      </label>`).join('');
+  }
+  function sectionAccessLabel(u) {
+    const scopes = normalizedScopes(u);
+    return scopes.length ? scopes.map(k => sectionLabel(k)).join(', ') : 'All levels';
+  }
   function sectionHint(role) {
     return role === 'admin'
-      ? 'Restrict this admin login to just one level — useful if different levels are run day-to-day by different admins under you. Leave as "All levels" for a full-access admin.'
-      : 'Automatically gives this teacher every subject and class in the chosen level, so you don’t have to tick each one by hand in "Manage subjects" / "Manage classes" below. Leave as "All levels" and assign subjects/classes individually instead if this teacher’s subjects don’t line up with one clean band.';
+      ? 'Check every level this admin may access. Leave all unchecked for unrestricted access.'
+      : 'Check every level this teacher may access. You can still assign specific subjects/classes separately.';
   }
 
   function renderTable() {
@@ -1061,13 +1071,13 @@ Views.users = async function () {
       <div class="ledger">
         <div class="ledger-scroll">
           <table class="ledger-table">
-            <thead><tr><th>#</th><th>Name</th><th>Role</th><th>Section</th><th>Subjects</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>Name</th><th>Role</th><th>Level access</th><th>Subjects</th><th></th></tr></thead>
             <tbody>
               ${users.map((u, i) => `<tr>
                 <td class="row-index">${i + 1}</td>
                 <td>${UI.esc(u.name)}</td>
                 <td><span class="badge badge-${u.role === 'admin' ? 'ME' : 'EE'}">${u.role}</span></td>
-                <td>${u.sectionScope ? UI.esc(sectionLabel(u.sectionScope)) : '<span class="row-index">All levels</span>'}</td>
+                <td>${UI.esc(sectionAccessLabel(u))}</td>
                 <td>${u.role === 'user'
                   ? (subjectsForTeacher(u.id).size
                       ? [...subjectsForTeacher(u.id)].map(id => UI.esc(st.subjects.find(s => s.id === id)?.name || '?')).join(', ')
@@ -1112,8 +1122,8 @@ Views.users = async function () {
           <select id="f_role">${roleOptions(existing.role)}</select>
         </div>
         <div class="field full" id="f_section_wrap">
-          <label>Section</label>
-          <select id="f_section">${sectionOptions(existing.sectionScope)}</select>
+          <label>Level access</label>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;">${sectionCheckboxes(normalizedScopes(existing))}</div>
           <p class="field-hint" id="f_section_hint">${sectionHint(existing.role)}</p>
         </div>
       </div>
@@ -1129,10 +1139,10 @@ Views.users = async function () {
       root.querySelector('#saveBtn').onclick = async () => {
         const name = root.querySelector('#f_name').value.trim();
         const role = root.querySelector('#f_role').value;
-        const sectionScope = root.querySelector('#f_section')?.value || '';
+        const sectionScopes = [...root.querySelectorAll('.f_level_access:checked')].map(x => x.value);
         if (!name) { UI.toast('Name is required'); return; }
         try {
-          await Store.updateUserProfile(existing.id, { name, role, sectionScope: sectionScope || '' });
+          await Store.updateUserProfile(existing.id, { name, role, sectionScopes });
           UI.toast('Login updated');
           UI.closeModal();
           Views.users();
@@ -1164,8 +1174,8 @@ Views.users = async function () {
           <select id="f_role">${roleOptions('user')}</select>
         </div>
         <div class="field full" id="f_section_wrap">
-          <label>Section</label>
-          <select id="f_section">${sectionOptions('')}</select>
+          <label>Level access</label>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;">${sectionCheckboxes([])}</div>
           <p class="field-hint" id="f_section_hint">${sectionHint('user')}</p>
         </div>
       </div>
@@ -1183,14 +1193,14 @@ Views.users = async function () {
         const email = root.querySelector('#f_email').value.trim();
         const password = root.querySelector('#f_password').value;
         const role = root.querySelector('#f_role').value;
-        const sectionScope = root.querySelector('#f_section')?.value || '';
+        const sectionScopes = [...root.querySelectorAll('.f_level_access:checked')].map(x => x.value);
         if (!name || !email || !password) { UI.toast('All fields are required'); return; }
         if (password.length < 6) { UI.toast('Password must be at least 6 characters'); return; }
 
         const saveBtn = root.querySelector('#saveBtn');
         saveBtn.disabled = true;
         saveBtn.textContent = 'Creating…';
-        const result = await Auth.createUser({ email, password, name, role, schoolId, sectionScope });
+        const result = await Auth.createUser({ email, password, name, role, schoolId, sectionScopes });
         saveBtn.disabled = false;
         saveBtn.textContent = 'Create login';
         if (!result.ok) { UI.toast('Could not create login: ' + result.error); return; }
@@ -1249,11 +1259,12 @@ Views.users = async function () {
     // Same Section-vs-explicit-picks note as Manage classes — a Section
     // grants every subject in that band automatically, on top of
     // whatever's ticked here, not instead of it.
-    const sectionNotice = existing.sectionScope ? `
+    const existingScopes = normalizedScopes(existing);
+    const sectionNotice = existingScopes.length ? `
       <div class="field-hint" style="background:var(--warn-bg, #fff3cd); border:1px solid var(--warn-border, #ffe69c); border-radius:6px; padding:10px 12px; margin-bottom:12px;">
-        <strong>Heads up:</strong> ${UI.esc(existing.name)}'s Section is set to <strong>${UI.esc(sectionLabel(existing.sectionScope))}</strong>. That already grants them EVERY subject in EVERY class in ${UI.esc(sectionLabel(existing.sectionScope))}, automatically — the checkboxes below only ADD extra subjects on top of that (useful for a subject they also teach outside their Section, e.g. one Junior Secondary class). If you want this teacher restricted to only what you tick below, first clear their Section: "Edit name/role" → Section → "All levels".
+        <strong>Heads up:</strong> ${UI.esc(existing.name)} has access to <strong>${UI.esc(existingScopes.map(sectionLabel).join(', '))}</strong>. That already grants them every subject in every class in those levels. The checkboxes below add specific assignments outside those levels.
       </div>` : '';
-    const classInScope = (c) => existing.sectionScope && (() => { const band = gradeSection(c.name); return band && sectionCovers(existing.sectionScope, band.key); })();
+    const classInScope = (c) => existingScopes.length && (() => { const band = gradeSection(c.name); return band && existingScopes.some(scope => sectionCovers(scope, band.key)); })();
     UI.openModal(`
       <h2>Manage subjects — ${UI.esc(existing.name)}</h2>
       ${sectionNotice}
@@ -1324,17 +1335,18 @@ Views.users = async function () {
     // TOP of whatever's checked below, not instead of it. Without this
     // notice, an admin who ticks just one class here is baffled when
     // the teacher still sees every other class in their Section.
-    const sectionNotice = existing.sectionScope ? `
+    const existingScopes = normalizedScopes(existing);
+    const sectionNotice = existingScopes.length ? `
       <div class="field-hint" style="background:var(--warn-bg, #fff3cd); border:1px solid var(--warn-border, #ffe69c); border-radius:6px; padding:10px 12px; margin-bottom:12px;">
-        <strong>Heads up:</strong> ${UI.esc(existing.name)}'s Section is set to <strong>${UI.esc(sectionLabel(existing.sectionScope))}</strong>. That already grants them EVERY class in ${UI.esc(sectionLabel(existing.sectionScope))}, automatically — the checkboxes below only ADD to that, they don't replace it. If you want this teacher restricted to only the class(es) you check here, first clear their Section: "Edit name/role" → Section → "All levels".
+        <strong>Heads up:</strong> ${UI.esc(existing.name)} has access to <strong>${UI.esc(existingScopes.map(sectionLabel).join(', '))}</strong>. That already grants them every class in those levels; the checkboxes below add specific class-teacher assignments outside those levels.
       </div>` : '';
-    const classInScope = (c) => existing.sectionScope && (() => { const band = gradeSection(c.name); return band && sectionCovers(existing.sectionScope, band.key); })();
+    const classInScope = (c) => existingScopes.length && (() => { const band = gradeSection(c.name); return band && existingScopes.some(scope => sectionCovers(scope, band.key)); })();
     UI.openModal(`
       <h2>Manage classes — ${UI.esc(existing.name)}</h2>
       ${sectionNotice}
       <p class="field-hint" style="margin-bottom:12px;">
         A class has exactly ONE class teacher — only that person (or admin) can take attendance or add a learner for it.
-        ${existing.sectionScope ? 'Check any EXTRA class(es) this teacher should be the class teacher of, beyond their Section (above).' : `Check the class(es) ${UI.esc(existing.name)} is THE class teacher of. Checking a class already owned by someone else moves it to ${UI.esc(existing.name)} — it's shown below so you don't do that by accident.`}
+        ${existingScopes.length ? 'Check any EXTRA class(es) this teacher should be the class teacher of, beyond their level access.' : `Check the class(es) ${UI.esc(existing.name)} is THE class teacher of. Checking a class already owned by someone else moves it to ${UI.esc(existing.name)} — it's shown below so you don't do that by accident.`}
       </p>
       <div class="form-grid">
         ${[...st.classes].sort((a, b) => a.label.localeCompare(b.label)).map(c => {
@@ -1380,6 +1392,7 @@ Views.users = async function () {
     const classLabels = [...classesForTeacher(existing.id)].map(id => st.classes.find(c => c.id === id)?.label || '?');
     const joined = existing.createdAt ? new Date(existing.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }) : '—';
     const initials = existing.name.trim().split(/\s+/).slice(0, 2).map(p => p[0]?.toUpperCase() || '').join('') || '?';
+    const existingScopes = normalizedScopes(existing);
     UI.openModal(`
       <div style="display:flex; align-items:center; gap:14px; margin-bottom:18px;">
         <div style="width:52px; height:52px; border-radius:50%; background:var(--primary, #4F46E5); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:18px; flex-shrink:0;">${UI.esc(initials)}</div>
@@ -1396,11 +1409,11 @@ Views.users = async function () {
         ${existing.role === 'admin' ? `
         <div class="field full">
           <label>Section access</label>
-          <p style="margin:0;">${existing.sectionScope ? UI.esc(sectionLabel(existing.sectionScope)) : 'All levels (unrestricted)'}</p>
+          <p style="margin:0;">${(existing.sectionScopes && existing.sectionScopes.length) ? UI.esc(existing.sectionScopes.map(sectionLabel).join(', ')) : (existing.sectionScope ? UI.esc(sectionLabel(existing.sectionScope)) : 'All levels (unrestricted)')}</p>
         </div>` : `
         <div class="field full">
           <label>Section access</label>
-          <p style="margin:0;">${existing.sectionScope ? `Every subject &amp; class in ${UI.esc(sectionLabel(existing.sectionScope))}` : 'None — relies entirely on the assignments below'}</p>
+          <p style="margin:0;">${normalizedScopes(existing).length ? `Every subject &amp; class in ${UI.esc(normalizedScopes(existing).map(sectionLabel).join(', '))}` : 'None — relies entirely on the assignments below'}</p>
         </div>
         <div class="field full">
           <label>Assigned subjects, per class</label>

@@ -55,23 +55,24 @@ const App = {
       return;
     }
     const LABELS = { primary: 'Primary', 'lower-primary': 'Lower Primary', 'upper-primary': 'Upper Primary', 'junior-secondary': 'Junior Secondary', 'senior-school': 'Senior School' };
-    if (user.section_scope && (user.role === 'admin' || user.role === 'user')) {
+    const assignedLevels = Array.isArray(user.section_scopes) && user.section_scopes.length
+      ? user.section_scopes
+      : (user.section_scope ? [user.section_scope] : []);
+    if (assignedLevels.length && (user.role === 'admin' || user.role === 'user')) {
+      const labels = assignedLevels.map(x => LABELS[x] || x).join(', ');
       const why = user.role === 'admin' ? 'This login is limited to' : 'This teacher is limited to';
-      wrap.innerHTML = `<div class="level-locked-badge" title="${why} ${LABELS[user.section_scope]}."><i class="fa-solid fa-lock"></i> ${LABELS[user.section_scope]}</div>`;
-      return;
+      if (assignedLevels.length === 1) {
+        wrap.innerHTML = `<div class="level-locked-badge" title="${why} ${labels}."><i class="fa-solid fa-lock"></i> ${UI.esc(labels)}</div>`;
+        return;
+      }
     }
     let current = '';
     try { current = localStorage.getItem(levelStorageKey()) || ''; } catch (e) {}
-    wrap.innerHTML = `
-      <select id="levelSwitcherSel" title="Filter the whole app to one section">
-        <option value="" ${current === '' ? 'selected' : ''}>All levels</option>
-        <option value="primary" ${current === 'primary' ? 'selected' : ''}>Primary (Grade 1&ndash;6)</option>
-        <option value="lower-primary" ${current === 'lower-primary' ? 'selected' : ''}>&nbsp;&nbsp;&mdash; Lower Primary (Grade 1&ndash;3)</option>
-        <option value="upper-primary" ${current === 'upper-primary' ? 'selected' : ''}>&nbsp;&nbsp;&mdash; Upper Primary (Grade 4&ndash;6)</option>
-        <option value="junior-secondary" ${current === 'junior-secondary' ? 'selected' : ''}>Junior Secondary</option>
-        <option value="senior-school" ${current === 'senior-school' ? 'selected' : ''}>Senior School</option>
-      </select>
-    `;
+    const allowed = assignedLevels.length ? assignedLevels : ['primary','lower-primary','upper-primary','junior-secondary','senior-school'];
+    if (current && !allowed.includes(current)) current = '';
+    const labels = {primary:'Primary (Grade 1–6)','lower-primary':'Lower Primary (Grade 1–3)','upper-primary':'Upper Primary (Grade 4–6)','junior-secondary':'Junior Secondary (Grade 7–9)','senior-school':'Senior School (Grade 10–12)'};
+    const opts = allowed.map(x => `<option value="${x}" ${current === x ? 'selected' : ''}>${labels[x] || x}</option>`).join('');
+    wrap.innerHTML = `<select id="levelSwitcherSel" title="Filter the whole app to an assigned level"><option value="" ${current === '' ? 'selected' : ''}>All assigned levels</option>${opts}</select>`;
     document.getElementById('levelSwitcherSel').onchange = (e) => {
       try { localStorage.setItem(levelStorageKey(), e.target.value); } catch (err) {}
       App.renderShell();

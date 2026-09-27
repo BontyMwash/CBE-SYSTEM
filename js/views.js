@@ -201,16 +201,28 @@ function levelStorageKey() {
   return `cbeLevel:${schoolId}:${userId}`;
 }
 
-function effectiveLevel() {
+function allowedLevels() {
   const user = Auth.currentUser();
-  // A section-scoped Admin OR Teacher is hard-locked to that level.
-  // This is important for Teachers: previously only Admins were locked,
-  // so a teacher assigned to Junior/Senior could inherit a stale browser
-  // level from another login and see the wrong school section.
-  if (user && (user.role === 'admin' || user.role === 'user') && user.section_scope) {
-    return user.section_scope;
-  }
-  try { return localStorage.getItem(levelStorageKey()) || ''; } catch (e) { return ''; }
+  if (!user || !['admin','user'].includes(user.role)) return Object.keys(SECTION_INFO);
+  const raw = Array.isArray(user.section_scopes) ? user.section_scopes.filter(Boolean) : [];
+  if (raw.length) return raw;
+  if (user.section_scope) return [user.section_scope];
+  return Object.keys(SECTION_INFO);
+}
+
+function userSectionScopes(user) {
+  if (!user || !['admin', 'user'].includes(user.role)) return [];
+  const xs = Array.isArray(user.section_scopes) ? user.section_scopes : (user.section_scope ? [user.section_scope] : []);
+  return [...new Set(xs.filter(Boolean))];
+}
+
+function effectiveLevel() {
+  const allowed = allowedLevels();
+  try {
+    const picked = localStorage.getItem(levelStorageKey()) || '';
+    if (!picked || !allowed.includes(picked)) return allowed.length === 1 ? allowed[0] : '';
+    return picked;
+  } catch (e) { return allowed.length === 1 ? allowed[0] : ''; }
 }
 
 // True if `klassName` belongs to the currently active level filter.
@@ -219,10 +231,15 @@ function effectiveLevel() {
 // rule the RLS side uses (see admin_class_allowed in the SQL migration).
 function levelAllows(klassName) {
   const level = effectiveLevel();
-  if (!level) return true;
+  const user = Auth.currentUser();
+  const assigned = user && ['admin','user'].includes(user.role)
+    ? ((Array.isArray(user.section_scopes) && user.section_scopes.length) ? user.section_scopes : (user.section_scope ? [user.section_scope] : []))
+    : [];
   const section = gradeSection(klassName);
-  // A "Primary" filter/scope keeps both Lower and Upper Primary classes.
-  return !section || sectionCovers(level, section.key);
+  if (!section) return true;
+  if (level) return sectionCovers(level, section.key);
+  if (assigned.length) return assigned.some(sc => sectionCovers(sc, section.key));
+  return true;
 }
 
 // Shared masthead for every printable report (report card, single-exam
@@ -553,7 +570,8 @@ function teacherScope(st, user) {
     };
   }
 
-  const sectionScope = user.section_scope || '';
+  const sectionScopes = (Array.isArray(user.section_scopes) && user.section_scopes.length) ? user.section_scopes : (user.section_scope ? [user.section_scope] : []);
+  const sectionScope = sectionScopes.length === 1 ? sectionScopes[0] : '';
 
   // ---- 1. Homeroom classes ("THE class teacher" of) ----
   // A class has exactly ONE class teacher (classes.classTeacherId —
@@ -561,10 +579,10 @@ function teacherScope(st, user) {
   // Manage classes for this class" — that distinction is what makes
   // Attendance and Add Learner strictly class-teacher-only.
   let homeroomClasses = st.classes.filter(c => c.classTeacherId === user.id);
-  if (sectionScope) {
+  if (sectionScopes.length) {
     const inScope = st.classes.filter(c => {
       const band = gradeSection(c.name);
-      return band && sectionCovers(sectionScope, band.key);
+      return band && sectionScopes.some(sc => sectionCovers(sc, band.key));
     });
     const already = new Set(homeroomClasses.map(c => c.id));
     inScope.forEach(c => { if (!already.has(c.id)) { homeroomClasses.push(c); already.add(c.id); } });
@@ -581,11 +599,11 @@ function teacherScope(st, user) {
     const cls = st.classes.find(c => c.id === tsc.classId);
     if (cls) grant(cls.label, tsc.subjectId);
   });
-  if (sectionScope) {
-    const bandSubjects = st.subjects.filter(s => sectionsOverlap(s.section || '', sectionScope));
+  if (sectionScopes.length) {
+    const bandSubjects = st.subjects.filter(s => sectionScopes.some(sc => sectionsOverlap(s.section || '', sc)));
     const bandClasses = st.classes.filter(c => {
       const band = gradeSection(c.name);
-      return band && sectionCovers(sectionScope, band.key);
+      return band && sectionScopes.some(sc => sectionCovers(sc, band.key));
     });
     bandClasses.forEach(c => bandSubjects.forEach(s => grant(c.label, s.id)));
   }

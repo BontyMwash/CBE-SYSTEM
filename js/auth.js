@@ -176,8 +176,8 @@ const Auth = {
     return { ok: true, ...json };
   },
 
-  createUser({ email, password, name, role, schoolId, schoolName, sectionScope }) {
-    return this._callManageUser({ action: 'create', email, password, name, role, schoolId, schoolName, sectionScope });
+  createUser({ email, password, name, role, schoolId, schoolName, sectionScope, sectionScopes }) {
+    return this._callManageUser({ action: 'create', email, password, name, role, schoolId, schoolName, sectionScope, sectionScopes });
   },
   resetUserPassword(userId, newPassword) {
     return this._callManageUser({ action: 'resetPassword', userId, newPassword });

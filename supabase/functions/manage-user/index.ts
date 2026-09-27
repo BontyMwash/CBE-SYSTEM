@@ -59,14 +59,20 @@ serve(async (req) => {
 });
 
 async function handleCreate(adminClient: any, callerProfile: any, body: any) {
-  const { email, password, name, role, schoolId, schoolName, sectionScope } = body;
+  const { email, password, name, role, schoolId, schoolName, sectionScope, sectionScopes } = body;
   if (!email || !password || !name || !role) {
     return json({ error: "email, password, name, and role are required" }, 400);
   }
   if (!["admin", "user"].includes(role)) {
     return json({ error: "role must be 'admin' or 'user'" }, 400);
   }
-  const VALID_SECTIONS = ["primary", "lower-primary", "upper-primary", "junior-secondary", "senior-school"];
+  const VALID_SECTIONS = ["primary", "junior-secondary", "senior-school"];
+  if (sectionScopes !== undefined && (!Array.isArray(sectionScopes) || sectionScopes.some((x: any) => !VALID_SECTIONS.includes(x)))) {
+    return json({ error: `sectionScopes must contain only: ${VALID_SECTIONS.join(", ")}` }, 400);
+  }
+  const scopes = Array.isArray(sectionScopes)
+    ? [...new Set(sectionScopes)]
+    : (sectionScope && VALID_SECTIONS.includes(sectionScope) ? [sectionScope] : []);
   if (sectionScope && !VALID_SECTIONS.includes(sectionScope)) {
     return json({ error: `sectionScope must be one of: ${VALID_SECTIONS.join(", ")}` }, 400);
   }
@@ -105,7 +111,8 @@ async function handleCreate(adminClient: any, callerProfile: any, body: any) {
   // 025_teacher_section_scope.sql). Save it as given for either role.
   const { error: insertErr } = await adminClient.from("profiles").insert({
     id: created.user.id, school_id: targetSchoolId, role, name,
-    section_scope: sectionScope || null,
+    section_scope: scopes[0] || null,
+    section_scopes: scopes.length ? scopes : null,
   });
   if (insertErr) {
     await adminClient.auth.admin.deleteUser(created.user.id); // roll back

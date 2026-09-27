@@ -241,7 +241,7 @@ const Store = {
   async listUsersForSchool(schoolId) {
     const { data, error } = await supabase.from('profiles').select('*').eq('school_id', schoolId).order('name');
     this._throwIfError('list users', error);
-    return data.map(u => ({ id: u.id, name: u.name, role: u.role, schoolId: u.school_id, sectionScope: u.section_scope || '', createdAt: u.created_at || null }));
+    return data.map(u => ({ id: u.id, name: u.name, role: u.role, schoolId: u.school_id, sectionScope: u.section_scope || '', sectionScopes: Array.isArray(u.section_scopes) ? u.section_scopes : (u.section_scope ? [u.section_scope] : []), createdAt: u.created_at || null }));
   },
   // Creating/deleting logins and resetting other people's passwords go
   // through Auth.manageUser(...) (calls the manage-user Edge Function)
@@ -258,8 +258,13 @@ const Store = {
     // teacher_has_class in 025_teacher_section_scope.sql). So it's
     // saved as given, for either role — no more forcing it to null
     // for teachers.
-    if (patch.sectionScope !== undefined) {
+    if (patch.sectionScopes !== undefined) {
+      const scopes = Array.isArray(patch.sectionScopes) ? [...new Set(patch.sectionScopes.filter(Boolean))] : [];
+      dbPatch.section_scopes = scopes.length ? scopes : null;
+      dbPatch.section_scope = scopes[0] || null;
+    } else if (patch.sectionScope !== undefined) {
       dbPatch.section_scope = patch.sectionScope || null;
+      dbPatch.section_scopes = patch.sectionScope ? [patch.sectionScope] : null;
     }
     const { data, error } = await supabase.from('profiles').update(dbPatch).eq('id', id).select().single();
     this._throwIfError('update profile', error);
