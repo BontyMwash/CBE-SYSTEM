@@ -2989,3 +2989,78 @@ table.ledger-table.sticky-head thead th {
     padding: 3px 4px;
   }
 }
+
+/* ============================================================
+   Broadsheet screen readability fix
+   Keep numeric cells from being visually compressed/overlapped on
+   wide class sheets. The PDF print rules remain unchanged below.
+   ============================================================ */
+#bsPrintArea .ledger-scroll-y {
+  overflow-x: auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+#bsPrintArea .ledger-scroll-y > table.ledger-table {
+  min-width: 1260px;
+  table-layout: fixed;
+}
+
+/* The compact monospace face was making the percentage/total glyphs
+   look doubled and cramped in Chromium at this table density. Use the
+   normal UI face with tabular figures instead. */
+#bsPrintArea table.ledger-table td.num,
+#bsPrintArea table.ledger-table td.subj-cell,
+#bsPrintArea table.ledger-table th {
+  font-family: var(--font-body);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  font-stretch: normal;
+}
+
+#bsPrintArea table.ledger-table td.num,
+#bsPrintArea table.ledger-table td.subj-cell {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.25;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+#bsPrintArea table.ledger-table td.freeze-2 {
+  font-family: var(--font-body);
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+#bsPrintArea table.ledger-table th {
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+/* Give the summary columns a little more breathing room while keeping
+   the whole sheet visible on a normal desktop viewport. */
+#bsPrintArea table.ledger-table col:nth-last-child(4) { width: 11% !important; } /* Total */
+#bsPrintArea table.ledger-table col:nth-last-child(3) { width: 9% !important; }  /* Mean */
+#bsPrintArea table.ledger-table col:nth-last-child(2) { width: 6.5% !important; }/* Points */
+#bsPrintArea table.ledger-table col:nth-last-child(1) { width: 7% !important; }  /* Level */
+
+@media (max-width: 1200px) {
+  #bsPrintArea .ledger-scroll-y > table.ledger-table { min-width: 1180px; }
+}
+
+@media print {
+  /* Print/PDF uses the existing page-fit rules; do not carry the
+     screen minimum width into printed pages. */
+  #bsPrintArea .ledger-scroll-y > table.ledger-table {
+    min-width: 0;
+  }
+  #bsPrintArea table.ledger-table td.num,
+  #bsPrintArea table.ledger-table td.subj-cell,
+  #bsPrintArea table.ledger-table th {
+    font-family: var(--font-body);
+  }
+}
