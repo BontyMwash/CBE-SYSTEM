@@ -182,6 +182,9 @@ const Auth = {
   updateManagedUserProfile(userId, { name, role, sectionScopes }) {
     return this._callManageUser({ action: 'updateProfile', userId, name, role, sectionScopes });
   },
+  updateSuperAdminAdminProfile(userId, { name, role, sectionScopes }) {
+    return this._callManageUser({ action: 'updateAdminProfile', userId, name, role, sectionScopes });
+  },
   resetUserPassword(userId, newPassword) {
     return this._callManageUser({ action: 'resetPassword', userId, newPassword });
   },

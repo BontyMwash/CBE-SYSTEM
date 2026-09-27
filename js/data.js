@@ -248,9 +248,13 @@ const Store = {
   // because they require the service role key, which never reaches the
   // browser. Editing name/role/section only (not password) can go direct:
   async updateUserProfile(id, patch) {
-    const result = await Auth.updateManagedUserProfile(id, {
-      name: patch.name, role: patch.role, sectionScopes: patch.sectionScopes
-    });
+    const result = Auth.currentUser()?.role === 'superadmin' && patch.role === 'admin'
+      ? await Auth.updateSuperAdminAdminProfile(id, {
+          name: patch.name, role: patch.role, sectionScopes: patch.sectionScopes
+        })
+      : await Auth.updateManagedUserProfile(id, {
+          name: patch.name, role: patch.role, sectionScopes: patch.sectionScopes
+        });
     if (!result.ok) throw new Error(result.error || 'Could not update profile');
     const users = await this.listUsersForSchool(this.activeSchoolId);
     return users.find(u => u.id === id) || null;
