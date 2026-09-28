@@ -3140,3 +3140,50 @@ table.ledger-table.sticky-head thead th {
   .marks-setup-grid .field:last-child { max-width: none; }
   .marks-setup-actions .btn { width: 100%; }
 }
+
+/* ---------- Marks entry: mobile responsiveness ---------- */
+.marks-entry { max-width: 100%; min-width: 0; }
+.marks-setup-grid .field { min-width: 0; }
+.marks-setup-grid select,
+.marks-setup-grid input { max-width: 100%; min-width: 0; }
+.ms-adm { display: none; }
+
+@media (max-width: 700px) {
+  /* minmax(0,1fr) stops long option text stretching the column past the screen */
+  .marks-setup-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .marks-setup-card { padding: 16px; margin-bottom: 16px; }
+  .marks-setup-heading { gap: 10px; margin-bottom: 16px; }
+  .marks-setup-icon { width: 38px; height: 38px; font-size: 16px; }
+  .marks-setup-heading h2 { font-size: 18px; }
+  .marks-setup-summary,
+  .marks-setup-warning { overflow-wrap: anywhere; }
+  /* 16px inputs stop iOS Safari zooming the page on focus */
+  .marks-entry select,
+  .marks-entry input[type="number"] { font-size: 16px; }
+  .marks-setup-actions { justify-content: stretch; }
+
+  .marks-entry .total-marks-bar { flex-direction: column; align-items: stretch; gap: 12px; }
+  .marks-entry .total-marks-bar .field input { width: 100% !important; }
+  .marks-entry .total-marks-bar .field-hint { min-width: 0 !important; flex: none !important; }
+  .marks-entry .total-marks-icon { display: none; }
+}
+
+@media (max-width: 600px) {
+  .marks-entry table.ledger-table { table-layout: auto; }
+  .marks-entry table.ledger-table th,
+  .marks-entry table.ledger-table td { padding: 8px 6px; font-size: 13px; }
+  .marks-entry table.ledger-table th:first-child,
+  .marks-entry table.ledger-table td:first-child { padding-left: 8px; }
+  .marks-entry .ms-idx,
+  .marks-entry .ms-adm-col { display: none; }
+  .marks-entry .ms-adm { display: block; font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+  .marks-entry .ms-name { min-width: 110px; overflow-wrap: anywhere; }
+  .marks-entry table.ledger-table .mark-input[data-student] {
+    width: 72px; padding: 8px 6px; font-size: 16px;
+  }
+  /* save status sits under the input instead of widening the row */
+  .marks-entry .mark-save-status {
+    display: block !important; margin: 3px 0 0 !important; min-width: 0 !important; font-size: 10px !important;
+  }
+  .marks-entry table.ledger-table .levelCell { white-space: nowrap; }
+}

@@ -2667,16 +2667,16 @@ Views.results = async function () {
       <div class="ledger">
         <div class="ledger-scroll">
           <table class="ledger-table">
-            <thead><tr><th>#</th><th>Name</th><th>ADM NO.</th><th style="text-align:center;">Marks (/${exam.totalMarks})</th><th style="text-align:center;">Level</th></tr></thead>
+            <thead><tr><th class="ms-idx">#</th><th>Name</th><th class="ms-adm-col">ADM NO.</th><th style="text-align:center;">Marks (/${exam.totalMarks})</th><th style="text-align:center;">Level</th></tr></thead>
             <tbody>
               ${students.map((s, i) => {
                 const res = findResult(exam.id, s.id);
                 const marks = res ? res.marks : '';
                 const band = res ? Grading.levelForMarks(res.marks, exam.totalMarks, st.settings.gradingBands) : null;
                 return `<tr>
-                  <td class="row-index">${i + 1}</td>
-                  <td>${UI.esc(s.name)}</td>
-                  <td class="num">${UI.esc(s.admissionNo) || '—'}</td>
+                  <td class="row-index ms-idx">${i + 1}</td>
+                  <td class="ms-name">${UI.esc(s.name)}<span class="ms-adm">ADM ${UI.esc(s.admissionNo) || '—'}</span></td>
+                  <td class="num ms-adm-col">${UI.esc(s.admissionNo) || '—'}</td>
                   <td style="text-align:center;"><input type="number" class="mark-input${marks !== '' ? ' filled' : ''}" min="0" max="${exam.totalMarks}" data-student="${s.id}" value="${marks}" placeholder="—" ${locked ? 'disabled' : ''}></td>
                   <td class="levelCell" data-level-for="${s.id}">${UI.badge(band)}</td>
                 </tr>`;
