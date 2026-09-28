@@ -2427,12 +2427,16 @@ Views.results = async function () {
     );
   };
 
+  // Base class names (e.g. "GRADE 9") that have at least one exam in the
+  // chosen sitting. Streams are chosen separately, so this must NOT return
+  // full labels like "GRADE 9 NORTH" — that is what stopped Class/Stream
+  // from switching.
   function classesForSetup() {
-    const labels = [...new Set(st.exams.map(e => e.klass))];
-    return labels.filter(label => {
-      const c = st.classes.find(x => x.label === label);
-      return !!c && levelAllows(c.name);
-    }).sort();
+    const labels = new Set(examsForSetup().map(e => e.klass));
+    const names = st.classes
+      .filter(c => labels.has(c.label) && levelAllows(c.name))
+      .map(c => c.name);
+    return [...new Set(names)].sort();
   }
 
   function streamOptionsForClass(className) {
@@ -2473,21 +2477,30 @@ Views.results = async function () {
 
     const classes = classesForSetup();
     const exams = examsForSetup();
-    const initialClassExam = exams.find(e => e.subjectId === setup.subjectId) || exams[0];
-    const classFromExam = initialClassExam?.klass || classes[0] || '';
-    const classRecord = st.classes.find(c => c.label === classFromExam);
-    setup.className = classRecord?.name || classFromExam;
 
-    const streams = streamOptionsForClass(setup.className);
+    // Keep the user's class if it is still valid for this sitting; only
+    // pick a default when it is empty/invalid.
+    let preferredStream = null;
+    if (!classes.includes(setup.className)) {
+      const pref = exams.find(e => e.subjectId === setup.subjectId) || exams[0];
+      const rec = st.classes.find(c => c.label === pref?.klass);
+      if (rec && classes.includes(rec.name)) {
+        setup.className = rec.name;
+        preferredStream = rec.stream;
+      } else {
+        setup.className = classes[0] || '';
+      }
+    }
+
+    // Same for stream: keep it if valid, otherwise fall back.
     const examLabels = new Set(exams.map(e => e.klass));
-    const validStreams = streams.filter(c => examLabels.has(c.label));
+    const validStreams = streamOptionsForClass(setup.className).filter(c => examLabels.has(c.label));
     if (!validStreams.length) {
-      // Legacy/no-stream class records may not exist in st.classes; use the
-      // exact exam label as a fallback so old exams remain enterable.
-      setup.stream = classRecord?.stream || '';
-    } else {
-      const matching = validStreams.find(c => c.label === classFromExam);
-      setup.stream = matching ? matching.stream : validStreams[0].stream;
+      setup.stream = '';
+    } else if (preferredStream !== null && validStreams.some(c => c.stream === preferredStream)) {
+      setup.stream = preferredStream;
+    } else if (!validStreams.some(c => c.stream === setup.stream)) {
+      setup.stream = validStreams[0].stream;
     }
 
     const subjects = subjectsForSetup();
@@ -2579,12 +2592,10 @@ Views.results = async function () {
     root.querySelector('#marksSetupClass').onchange = (e) => {
       setup.className = e.target.value;
       setup.stream = '';
-      setup.subjectId = '';
       repaint();
     };
     root.querySelector('#marksSetupStream').onchange = (e) => {
       setup.stream = e.target.value;
-      setup.subjectId = '';
       repaint();
     };
     root.querySelector('#marksSetupSubject').onchange = (e) => {
