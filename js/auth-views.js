@@ -1033,20 +1033,42 @@ Views.users = async function () {
     return map;
   }
 
-  // A login can be granted access to one or more CBC levels.
-  // Primary here is the parent band (Grades 1-6); Junior Secondary is 7-9;
-  // Senior School is 10-12. The checkboxes are deliberately multi-select.
+  // A login can be granted access to one or more CBC levels. Primary is
+  // split into Lower Primary (Grade 1-3) and Upper Primary (Grade 4-6) —
+  // same leaf bands already used on the Classes and Subjects pages — so an
+  // admin/teacher can be allocated to just one primary band instead of all
+  // of Grade 1-6 at once. Junior Secondary is 7-9; Senior School is 10-12.
+  // The checkboxes are deliberately multi-select.
   const ACCESS_LEVELS = [
-    ['primary', 'Primary (Grade 1–6)'],
+    ['lower-primary', 'Lower Primary (Grade 1–3)'],
+    ['upper-primary', 'Upper Primary (Grade 4–6)'],
     ['junior-secondary', 'Junior Secondary (Grade 7–9)'],
     ['senior-school', 'Senior School (Grade 10–12)']
   ];
+  // Accounts saved before this split may still have the old combined
+  // 'primary' value. sectionCovers() (views.js) already treats 'primary'
+  // as covering both bands everywhere access is checked, so those logins
+  // keep working exactly as before with no data migration needed — this
+  // is purely about what stays valid to DISPLAY/carry forward, decoupled
+  // from ACCESS_LEVELS (which only lists what's newly selectable).
+  const KNOWN_SECTIONS = typeof SECTION_INFO === 'object'
+    ? Object.keys(SECTION_INFO)
+    : ['primary', 'lower-primary', 'upper-primary', 'junior-secondary', 'senior-school'];
   function normalizedScopes(u) {
     const xs = Array.isArray(u?.sectionScopes) ? u.sectionScopes : (u?.sectionScope ? [u.sectionScope] : []);
-    return [...new Set(xs.filter(x => ACCESS_LEVELS.some(([k]) => k === x)))];
+    return [...new Set(xs.filter(x => KNOWN_SECTIONS.includes(x)))];
   }
   function sectionCheckboxes(existingScopes = []) {
-    const selected = new Set(existingScopes);
+    // A legacy 'primary' scope covers both bands (see sectionCovers), so
+    // show it as both boxes checked. Saving from here then writes the two
+    // leaf values explicitly — a natural, one-time, non-destructive
+    // migration off the old combined value, without touching untouched
+    // accounts.
+    const selected = new Set(
+      existingScopes.includes('primary')
+        ? [...existingScopes, 'lower-primary', 'upper-primary']
+        : existingScopes
+    );
     return ACCESS_LEVELS.map(([key, label]) => `
       <label style="display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--line,#ddd);border-radius:10px;cursor:pointer;">
         <input type="checkbox" class="f_level_access" value="${key}" ${selected.has(key) ? 'checked' : ''}>

@@ -68,7 +68,6 @@ async function handleCreate(adminClient: any, callerProfile: any, body: any) {
   if (!["admin", "user"].includes(role)) {
     return json({ error: "role must be 'admin' or 'user'" }, 400);
   }
-  const VALID_SECTIONS = ["primary", "junior-secondary", "senior-school"];
   if (sectionScopes !== undefined && (!Array.isArray(sectionScopes) || sectionScopes.some((x: any) => !VALID_SECTIONS.includes(x)))) {
     return json({ error: `sectionScopes must contain only: ${VALID_SECTIONS.join(", ")}` }, 400);
   }
@@ -79,15 +78,17 @@ async function handleCreate(adminClient: any, callerProfile: any, body: any) {
     return json({ error: `sectionScope must be one of: ${VALID_SECTIONS.join(", ")}` }, 400);
   }
 
-  // A scoped admin may only create teachers whose level access is a subset
-  // of the admin's own level access. Empty/unrestricted is NOT allowed for
-  // a scoped admin because it would be an escalation.
+  // A scoped admin may only create teachers whose level access is covered
+  // by the admin's own level access. Empty/unrestricted is NOT allowed for
+  // a scoped admin because it would be an escalation. scopesCoverAll() is
+  // hierarchy-aware: an admin still holding the legacy combined 'primary'
+  // scope covers both 'lower-primary' and 'upper-primary' requests.
   if (callerProfile.role === "admin" && role === "user") {
     const { data: callerRow } = await adminClient
       .from("profiles").select("section_scopes, section_scope").eq("id", callerProfile.id || "").single();
     const callerScopes = normalizedScopes(callerRow);
     if (callerScopes.length) {
-      if (!scopes.length || scopes.some((x: string) => !callerScopes.includes(x))) {
+      if (!scopes.length || !scopesCoverAll(callerScopes, scopes)) {
         return json({ error: "You can only create teachers within the levels assigned to your admin account." }, 403);
       }
     }
@@ -143,7 +144,34 @@ function normalizedScopes(row: any): string[] {
   return [...new Set(xs.filter((x: any) => VALID_SECTIONS.includes(x)))];
 }
 
-const VALID_SECTIONS = ["primary", "junior-secondary", "senior-school"];
+// Primary is split into 'lower-primary' (Grade 1-3) and 'upper-primary'
+// (Grade 4-6) for allocating admins/teachers to one band instead of all of
+// Grade 1-6. 'primary' stays valid so accounts saved before the split keep
+// working unchanged — see SECTION_PARENT / scopesCoverAll below, and
+// sql/025_teacher_section_scope.sql + sql/032_multi_level_access.sql,
+// which already treat 'primary' as covering both bands everywhere access
+// is actually checked (RLS, subject/class visibility).
+const VALID_SECTIONS = ["primary", "lower-primary", "upper-primary", "junior-secondary", "senior-school"];
+
+// 'lower-primary' and 'upper-primary' are children of 'primary'. Mirrors
+// SECTION_PARENT/sectionCovers() in js/views.js and section_scope_covers()
+// in sql/025_teacher_section_scope.sql — keep all three in sync.
+const SECTION_PARENT: Record<string, string> = { "lower-primary": "primary", "upper-primary": "primary" };
+
+// True if `callerScope` covers `requestedScope`: either they're the same
+// band, or callerScope is the parent 'primary' band and requestedScope is
+// one of its two children. Used so an admin who still holds the legacy
+// combined 'primary' scope isn't suddenly blocked from assigning either
+// primary band to a teacher once lower/upper became separately selectable.
+function scopeCovers(callerScope: string, requestedScope: string): boolean {
+  return callerScope === requestedScope || SECTION_PARENT[requestedScope] === callerScope;
+}
+
+// True if every entry in `requestedScopes` is covered by at least one
+// entry in `callerScopes`.
+function scopesCoverAll(callerScopes: string[], requestedScopes: string[]): boolean {
+  return requestedScopes.every((r) => callerScopes.some((c) => scopeCovers(c, r)));
+}
 
 async function handleUpdateAdminProfile(adminClient: any, callerProfile: any, body: any) {
   if (callerProfile.role !== "superadmin") {
@@ -205,7 +233,7 @@ async function handleUpdateProfile(adminClient: any, callerProfile: any, callerI
     const callerScopes = normalizedScopes(callerProfile);
     const requested = sectionScopes === undefined ? normalizedScopes(target) : [...new Set(sectionScopes)];
     if (callerScopes.length) {
-      if (!requested.length || requested.some((x: string) => !callerScopes.includes(x))) {
+      if (!requested.length || !scopesCoverAll(callerScopes, requested)) {
         return json({ error: "You can only assign teachers levels that are assigned to your own admin account." }, 403);
       }
     }

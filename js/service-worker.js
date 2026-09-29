@@ -10,7 +10,7 @@
 // have the app installed — without it, the cache-first fetch strategy below
 // keeps serving the OLD file indefinitely (this is why a shipped fix can
 // look like it "didn't take" until this number changes).
-const CACHE_VERSION = 'v13';
+const CACHE_VERSION = 'v14';
 const CACHE_NAME = `cbe-shell-${CACHE_VERSION}`;
 
 const APP_SHELL = [
