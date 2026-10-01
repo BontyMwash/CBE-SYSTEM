@@ -105,6 +105,33 @@ const Store = {
     this._throwIfError('clear error log', error);
   },
 
+  // Supabase/PostgREST caps a single response at a fixed number of rows
+  // (1000 by default) regardless of how many rows actually match the
+  // query — it is not an error, the response just silently stops there.
+  // A school with enough exam sittings easily has more than 1000 rows in
+  // `results` (one row per student, per subject, per sitting, building up
+  // over terms/years), and `exams` or `students` can pass 1000 too for a
+  // large or long-running school. Without paging past that cap, whatever
+  // falls after row 1000 just never comes back from a fetch — a mark that
+  // is genuinely saved in the database looks, from the Marks Entry
+  // screen, exactly like it "disappeared" on the next refresh. This pages
+  // through in batches of 1000 so nothing past the first page goes
+  // missing. `buildQuery(from, to)` must return a FRESH query builder for
+  // that page each call (a builder can't be re-awaited after use).
+  async _fetchAllRows(buildQuery) {
+    const PAGE = 1000;
+    let from = 0;
+    let rows = [];
+    for (;;) {
+      const { data, error } = await buildQuery(from, from + PAGE - 1);
+      if (error) return { data: rows, error };
+      rows = rows.concat(data || []);
+      if (!data || data.length < PAGE) break;
+      from += PAGE;
+    }
+    return { data: rows, error: null };
+  },
+
   // ---- school-scoped bundle (what every view renders from) ----
   async current() {
     const schoolId = this.activeSchoolId;
@@ -124,10 +151,17 @@ const Store = {
     const [schoolRes, classesRes, studentsRes, subjectsRes, examTypesRes, examsRes, teacherSubjectsRes, teacherClassesRes, teacherSubjectClassesRes, publishedRes] = await Promise.all([
       supabase.from('schools').select('*').eq('id', schoolId).single(),
       supabase.from('classes').select('*').eq('school_id', schoolId).order('name').order('stream'),
-      supabase.from('students').select('*').eq('school_id', schoolId).order('name'),
+      // Paginated: a large or long-running school can have more students
+      // than fit in one PostgREST response page. See _fetchAllRows above.
+      this._fetchAllRows((from, to) =>
+        supabase.from('students').select('*').eq('school_id', schoolId).order('name').range(from, to)),
       supabase.from('subjects').select('*').eq('school_id', schoolId).order('name'),
       supabase.from('exam_types').select('*').eq('school_id', schoolId).order('sort_order').order('name'),
-      supabase.from('exams').select('*').eq('school_id', schoolId),
+      // Paginated: enough terms/years of exam sittings can pass one page
+      // too — and if the exam list is cut short, every result tied to
+      // the missing exams silently vanishes as well (see below).
+      this._fetchAllRows((from, to) =>
+        supabase.from('exams').select('*').eq('school_id', schoolId).range(from, to)),
       // Legacy flat list — kept for the one-time migration backfill only.
       // No permission check anywhere in the app or the database reads
       // this anymore; teacherSubjectClasses below is the source of
@@ -144,8 +178,10 @@ const Store = {
       // The real, per-class subject assignment ("this teacher teaches
       // this subject IN THIS class") — see sql/026_teacher_subject_
       // per_class.sql. Drives Marks Entry, Assessments, Gradebook,
-      // Competency Assessment and Broadsheet column-editing.
-      supabase.from('teacher_subject_classes').select('*').eq('school_id', schoolId),
+      // Competency Assessment and Broadsheet column-editing. Paginated:
+      // (teacher x subject x class) rows can add up across a big staff.
+      this._fetchAllRows((from, to) =>
+        supabase.from('teacher_subject_classes').select('*').eq('school_id', schoolId).range(from, to)),
       // Which (class, exam type, term, year) sittings the admin has
       // published — this is what unlocks the Analysis page for teachers.
       supabase.from('published_results').select('*').eq('school_id', schoolId)
@@ -161,13 +197,15 @@ const Store = {
     // Fetch results only after the school-scoped exam list is known.
     // This is deliberately a simple results -> exam_id filter so marks
     // survive a browser refresh reliably even when nested PostgREST joins
-    // behave differently under RLS.
+    // behave differently under RLS. Paginated for the same reason as
+    // `exams` above: one row per student per subject per sitting adds up
+    // fast, and this is the table where a silent page cut-off is most
+    // directly "a mark that was definitely saved is no longer showing".
     const examIds = (examsRes.data || []).map(e => e.id).filter(Boolean);
     let resultsRes = { data: [], error: null };
     if (examIds.length) {
-      resultsRes = await supabase.from('results')
-        .select('*')
-        .in('exam_id', examIds);
+      resultsRes = await this._fetchAllRows((from, to) =>
+        supabase.from('results').select('*').in('exam_id', examIds).range(from, to));
     }
     this._throwIfError('load results', resultsRes.error);
     this._throwIfError('load teacher subjects', teacherSubjectsRes.error);
