@@ -31,7 +31,7 @@
 // order — pct values are rounded and don't need to sum to exactly
 // 100; the browser scales proportionally either way.
 function bsColWidths(subjectCount) {
-  const fixed = { pos: 5, name: 17, admno: 8, total: 10, mean: 8, points: 6, level: 6 };
+  const fixed = { pos: 5, name: 17, admno: 8, stream: 4, total: 11, mean: 8, points: 6, level: 6 };
   const fixedSum = Object.values(fixed).reduce((a, b) => a + b, 0);
   const subjectBudget = Math.max(0, 100 - fixedSum);
   const subjectPct = subjectCount > 0 ? Math.max(5, subjectBudget / subjectCount) : 0;
@@ -49,6 +49,7 @@ function bsColgroupHTML(subjectCount) {
     `<col style="width:${w.pos}%">`,
     `<col style="width:${w.name}%">`,
     `<col style="width:${w.admno}%">`,
+    `<col style="width:${w.stream}%">`,
     ...Array(subjectCount).fill(`<col style="width:${w.subject}%">`),
     `<col style="width:${w.total}%">`,
     `<col style="width:${w.mean}%">`,
@@ -328,13 +329,18 @@ Views.broadsheet = async function () {
       const totalObtained = enteredCells.length ? enteredCells.reduce((a, c) => a + Number(c.marks), 0) : null;
       const totalPossible = enteredCells.length ? enteredCells.reduce((a, c) => a + Number(c.totalMarks), 0) : null;
       const meanPct = Grading.average(validPcts);
+      // Total % = sum of the subject percentages, out of 100 per subject sat.
+      const totalPct = validPcts.length ? validPcts.reduce((a, v) => a + v, 0) : null;
+      const totalPctPossible = validPcts.length * 100;
+      const streamRec = (st.classes || []).find(c => c.label === stu.klass);
+      const streamInitial = ((streamRec && streamRec.stream) || '').trim().charAt(0).toUpperCase();
       // Complete = a mark entered for every subject on this sitting. A
       // student missing even one subject still gets a real (partial)
       // Mean/Total above — those are left alone — but the Level badge
       // below is awarded Z rather than a grade band computed off an
       // incomplete record.
       const complete = availableCells.length > 0 && enteredCells.length === availableCells.length;
-      return { student: stu, cells, availableCells, totalObtained, totalPossible, meanPct, complete };
+      return { student: stu, cells, availableCells, totalObtained, totalPossible, totalPct, totalPctPossible, streamInitial, meanPct, complete };
     });
 
     // Rank by mean % (descending), ties share a rank. A student
@@ -344,18 +350,15 @@ Views.broadsheet = async function () {
     // 'Z' instead of a number, so an incomplete sitting can't outrank
     // a classmate who actually finished, no matter how high the
     // partial score looks.
-    const ranked = [...rows].sort((a, b) => {
-      if (!a.complete && !b.complete) return 0;
-      if (!a.complete) return 1;
-      if (!b.complete) return -1;
-      return (b.meanPct ?? -1) - (a.meanPct ?? -1);
-    });
+    // Ordered strictly by Total % (highest first) so the Total column
+    // never reads out of order; only complete records get a position.
+    const ranked = [...rows].sort((a, b) => (b.totalPct ?? -1) - (a.totalPct ?? -1));
     let rank = 0, lastMean = null, seen = 0;
     const rankMap = new Map();
     ranked.forEach(r => {
-      seen++;
       if (!r.complete) { rankMap.set(r.student.id, 'Z'); return; }
-      if (r.meanPct !== lastMean) { rank = seen; lastMean = r.meanPct; }
+      seen++;
+      if (r.totalPct !== lastMean) { rank = seen; lastMean = r.totalPct; }
       rankMap.set(r.student.id, rank);
     });
 
@@ -371,11 +374,11 @@ Views.broadsheet = async function () {
 
     lastCsv = {
       filename: `broadsheet-${klass}-${type}-${term}-${year}`.replace(/\s+/g, '_'),
-      header: ['Pos.', 'Name', 'Adm. No.', ...subjectCols.map(c => c.subject.name), 'Total Marks', 'Mean %', 'Points', 'Level'],
+      header: ['Pos.', 'Name', 'Adm. No.', 'Str.', ...subjectCols.map(c => c.subject.name), 'Total %', 'Mean %', 'Points', 'Level'],
       rows: rowsExtra.map(r => [
-        r.rank, r.student.name, r.student.admissionNo || '',
+        r.rank, r.student.name, r.student.admissionNo || '', r.streamInitial || '',
         ...r.cells.map(c => c.pct === null ? '' : c.pct.toFixed(1)),
-        r.totalObtained === null ? '' : `${r.totalObtained}/${r.totalPossible}`,
+        r.totalPct === null ? '' : `${r.totalPct.toFixed(1)}/${r.totalPctPossible}`,
         r.meanPct === null ? 'Z' : r.meanPct.toFixed(1),
         r.points === null ? '' : r.points,
         r.band ? r.band.code : ''
@@ -544,7 +547,7 @@ Views.broadsheet = async function () {
       });
       const mean = Grading.average(pointsList);
       return { label: subject.name, teacherName: '', entry, bandCounts, z: 0, mean, grade: mean === null ? null : Grading.bandForPoints(mean, gradeBands) };
-    }).filter(Boolean).sort((a, b) => a.label.localeCompare(b.label));
+    }).filter(Boolean).sort((a, b) => (b.mean ?? -1) - (a.mean ?? -1) || a.label.localeCompare(b.label));
 
     const overallSummary = { label: 'OVERALL', teacherName: '', ...summarizeStudents(gradeStudents.map(s => s.id)) };
     const showSummary = gradeBands.length > 0 && gradeStudents.length > 0;
@@ -608,10 +611,8 @@ Views.broadsheet = async function () {
           if (!b.complete) return -1;
           return dir * (a.meanPct - b.meanPct);
         }
-        if (a.rank === 'Z' && b.rank === 'Z') return 0;
-        if (a.rank === 'Z') return 1;
-        if (b.rank === 'Z') return -1;
-        return dir * (a.rank - b.rank);
+        // dir 'asc' = best first = highest Total % first.
+        return dir * ((b.totalPct ?? -1) - (a.totalPct ?? -1));
       });
       return list;
     }
@@ -638,14 +639,15 @@ Views.broadsheet = async function () {
 
     function rowsHtml(list) {
       if (list.length === 0) {
-        return `<tr><td colspan="${5 + subjectCols.length}" style="text-align:center; color:var(--ink-soft); padding:24px;">No students match the current search / filter.</td></tr>`;
+        return `<tr><td colspan="${6 + subjectCols.length}" style="text-align:center; color:var(--ink-soft); padding:24px;">No students match the current search / filter.</td></tr>`;
       }
       return list.map(r => `<tr>
         <td class="num freeze-1">${r.rank === 'Z' ? UI.badge(Grading.MISSING_BAND) : r.rank}</td>
         <td class="freeze-2">${UI.esc(r.student.name)}</td>
         <td class="num">${UI.esc(r.student.admissionNo) || '—'}</td>
+        <td class="num">${UI.esc(r.streamInitial) || '—'}</td>
         ${subjectCols.map(col => subjectCellHtml(r, col)).join('')}
-        <td class="num" data-total-cell>${r.totalObtained === null ? '—' : `${r.totalObtained}\u00A0/\u00A0${r.totalPossible}`}</td>
+        <td class="num" data-total-cell>${r.totalPct === null ? '—' : `${r.totalPct.toFixed(1)}\u00A0/\u00A0${r.totalPctPossible}`}</td>
         <td class="num" data-mean-cell>${r.meanPct === null ? UI.badge(Grading.MISSING_BAND) : r.meanPct.toFixed(1) + '%'}</td>
         <td class="num" data-points-cell>${r.points === null ? '—' : r.points}</td>
         <td data-level-cell>${UI.badge(r.band)}</td>
@@ -685,7 +687,7 @@ Views.broadsheet = async function () {
         low: values.length ? Math.min(...values) : null,
         performance: values.length ? Grading.levelForMarks(Grading.average(values), 100, st.settings.gradingBands) : null
       };
-    });
+    }).sort((a, b) => (b.mean ?? -1) - (a.mean ?? -1));
 
     // Class performance headline for the exact population in the PDF.
     const classMeans = performanceStudents.map(stu => {
@@ -784,16 +786,17 @@ Views.broadsheet = async function () {
         <section class="bs-bottom-section">
           <div class="bs-bottom-section-title">1. SUBJECT PERFORMANCE</div>
           <table class="bs-bottom-table">
-            <thead><tr><th>Subject</th><th>Entries</th><th>Mean %</th><th>High %</th><th>Low %</th><th>Performance</th></tr></thead>
+            <thead><tr><th>Rank</th><th>Subject</th><th>Entries</th><th>Mean %</th><th>High %</th><th>Low %</th><th>Performance</th></tr></thead>
             <tbody>
-              ${bottomSubjectStats.map(s => `<tr>
+              ${bottomSubjectStats.map((s, i) => `<tr>
+                <td class="num">${i + 1}</td>
                 <td><strong>${UI.esc(s.subject.code || s.subject.name)}</strong> <span class="bs-bottom-muted">${UI.esc(s.subject.name)}</span></td>
                 <td class="num">${s.entries}</td>
                 <td class="num">${s.mean === null ? '—' : s.mean.toFixed(1) + '%'}</td>
                 <td class="num">${s.high === null ? '—' : s.high.toFixed(1) + '%'}</td>
                 <td class="num">${s.low === null ? '—' : s.low.toFixed(1) + '%'}</td>
                 <td>${s.performance ? UI.esc(s.performance.code || s.performance.label || '') : '—'}</td>
-              </tr>`).join('') || '<tr><td colspan="6">No subject performance data available.</td></tr>'}
+              </tr>`).join('') || '<tr><td colspan="7">No subject performance data available.</td></tr>'}
             </tbody>
           </table>
         </section>
@@ -887,8 +890,9 @@ Views.broadsheet = async function () {
                 <th class="sortable freeze-1" data-sort="rank" data-label="Pos.">Pos. ${sortArrow('rank')}</th>
                 <th class="sortable freeze-2" data-sort="name" data-label="Name">Name ${sortArrow('name')}</th>
                 <th>Adm. No.</th>
+                <th title="Stream (first letter)">Str.</th>
                 ${subjectCols.map(c => `<th title="${UI.esc(c.subject.name)}">${UI.esc(c.subject.code || c.subject.name)}${editMode && !canEditCol(c) ? ' <i class="fa-solid fa-lock" title="Not your subject to edit" style="font-size:10px; opacity:0.6;"></i>' : ''}</th>`).join('')}
-                <th>Total Marks</th>
+                <th title="Sum of subject percentages, out of 100 per subject">Total %</th>
                 <th class="sortable" data-sort="mean" data-label="Mean %">Mean % ${sortArrow('mean')}</th>
                 <th>Points</th>
                 <th>Level</th>
@@ -899,7 +903,7 @@ Views.broadsheet = async function () {
             </tbody>
             <tfoot>
               <tr>
-                <td colspan="3" style="font-weight:600;">Subject mean</td>
+                <td colspan="4" style="font-weight:600;">Subject mean</td>
                 ${subjectAverages.map(a => {
                   // Just the percentage — no grade code appended.
                   // Every attempt to combine two pieces of information
@@ -1069,7 +1073,7 @@ Views.broadsheet = async function () {
       const complete = cells.length > 0 && entered === cells.length;
       const band = !complete ? Grading.MISSING_BAND : Grading.levelForMarks(meanPct, 100, st.settings.gradingBands);
       const points = !complete ? null : Grading.pointsForBand(band, st.settings.gradingBands);
-      tr.querySelector('[data-total-cell]').textContent = pcts.length ? `${obtained}\u00A0/\u00A0${possible}` : '—';
+      tr.querySelector('[data-total-cell]').textContent = pcts.length ? `${pcts.reduce((a, v) => a + v, 0).toFixed(1)}\u00A0/\u00A0${pcts.length * 100}` : '—';
       tr.querySelector('[data-mean-cell]').innerHTML = meanPct === null ? UI.badge(Grading.MISSING_BAND) : `${meanPct.toFixed(1)}%`;
       tr.querySelector('[data-points-cell]').textContent = points === null ? '—' : points;
       tr.querySelector('[data-level-cell]').innerHTML = UI.badge(band);
