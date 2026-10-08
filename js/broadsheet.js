@@ -94,6 +94,15 @@ Views.broadsheet = async function () {
   setTopbarActions('');
   showLoading();
   let st = await Store.current();
+  // Class teacher names: classes only store the teacher's user id, so
+  // load the school's logins once. Falls back to the class's own
+  // teacherName field if the list can't be read for this login.
+  let userNameById = new Map();
+  try {
+    const us = await Store.listUsersForSchool(Store.activeSchoolId);
+    userNameById = new Map((us || []).map(u => [u.id, u.name]));
+  } catch (e) { /* non-fatal */ }
+  const classTeacherOf = (cls) => cls ? (userNameById.get(cls.classTeacherId) || cls.teacherName || '') : '';
   const user = Auth.currentUser();
   // Broadsheet exposes every subject for a whole class — only reachable
   // in the nav for class teachers (see auth.js), and even then scoped
@@ -352,7 +361,12 @@ Views.broadsheet = async function () {
     // partial score looks.
     // Ordered strictly by Total % (highest first) so the Total column
     // never reads out of order; only complete records get a position.
-    const ranked = [...rows].sort((a, b) => (b.totalPct ?? -1) - (a.totalPct ?? -1));
+    // Students with a missing mark (Z) always sit at the very bottom,
+    // below every complete record, ordered by total among themselves.
+    const ranked = [...rows].sort((a, b) => {
+      if (a.complete !== b.complete) return a.complete ? -1 : 1;
+      return (b.totalPct ?? -1) - (a.totalPct ?? -1);
+    });
     let rank = 0, lastMean = null, seen = 0;
     const rankMap = new Map();
     ranked.forEach(r => {
@@ -611,7 +625,9 @@ Views.broadsheet = async function () {
           if (!b.complete) return -1;
           return dir * (a.meanPct - b.meanPct);
         }
-        // dir 'asc' = best first = highest Total % first.
+        // dir 'asc' = best first = highest Total % first; Z rows
+        // always stay at the bottom whichever way it's sorted.
+        if (a.complete !== b.complete) return a.complete ? -1 : 1;
         return dir * ((b.totalPct ?? -1) - (a.totalPct ?? -1));
       });
       return list;
@@ -619,6 +635,12 @@ Views.broadsheet = async function () {
 
     // One editable subject cell: an input if this column is editable and
     // we're in edit mode, else the usual read-only percentage.
+    // Small level code (e.g. ME1) shown beside each mark.
+    function levelTag(pct) {
+      if (pct === null || pct === undefined) return '';
+      const b = Grading.levelForMarks(pct, 100, st.settings.gradingBands);
+      return b ? ` <span class="cell-level" style="font-size:10px;font-weight:700;opacity:.75;">${UI.esc(b.code)}</span>` : '';
+    }
     function subjectCellHtml(row, col) {
       const idx = subjectCols.indexOf(col);
       const c = row.cells[idx];
@@ -626,7 +648,7 @@ Views.broadsheet = async function () {
       const exam = c.exam;
       const editable = editMode && !isLockedForStudent(row.student) && canEditCol(col, row.student);
       if (!editable) {
-        return `<td class="num subj-cell" data-max="${exam.totalMarks}" data-marks="${c.marks === null ? '' : c.marks}" ${c.marks !== null ? `title="${c.marks}/${c.totalMarks} raw"` : ''}>${c.pct === null ? '<span class="row-index">—</span>' : c.pct.toFixed(1) + '%'}</td>`;
+        return `<td class="num subj-cell" data-max="${exam.totalMarks}" data-marks="${c.marks === null ? '' : c.marks}" ${c.marks !== null ? `title="${c.marks}/${c.totalMarks} raw"` : ''}>${c.pct === null ? '<span class="row-index">—</span>' : c.pct.toFixed(1) + '%' + levelTag(c.pct)}</td>`;
       }
       const key = `${exam.id}::${row.student.id}`;
       const overridden = pending.get(key);
@@ -634,6 +656,7 @@ Views.broadsheet = async function () {
       return `<td class="subj-cell" data-max="${exam.totalMarks}" data-marks="${val === '' ? '' : val}">
         <input type="number" class="mark-input-compact ${overridden ? 'dirty' : ''}" min="0" max="${exam.totalMarks}"
           data-exam="${exam.id}" data-student="${row.student.id}" data-max="${exam.totalMarks}" value="${val}">
+        <span class="cell-level-wrap">${val === '' ? '' : levelTag(Grading.percent(Number(val), exam.totalMarks))}</span>
       </td>`;
     }
 
@@ -882,6 +905,15 @@ Views.broadsheet = async function () {
       </div>
       <div class="ledger" id="bsPrintArea">
         <div style="padding:16px 16px 0 16px;">${buildReportMastheadHTML(st, `${klassTitlePrefix(st, isWholeGrade ? gradeName : klass)}Broadsheet — ${isWholeGrade ? `${gradeName} (Whole Class)` : klass}`, `${type} Results`, term, year)}</div>
+        <div class="bs-class-teacher" style="padding:6px 16px 0 16px;font-size:13px;">${(() => {
+          const labels = isWholeGrade ? streamLabels : [klass];
+          const parts = labels.map(l => {
+            const c = st.classes.find(x => x.label === l);
+            const nm = classTeacherOf(c);
+            return isWholeGrade ? `${UI.esc(l)}: <strong>${UI.esc(nm) || '—'}</strong>` : `<strong>${UI.esc(nm) || '—'}</strong>`;
+          });
+          return `Class Teacher${labels.length > 1 ? 's' : ''}: ${parts.join(' &nbsp;•&nbsp; ')}`;
+        })()}</div>
         <div class="ledger-scroll ledger-scroll-y">
           <table class="ledger-table">
             ${bsColgroupHTML(subjectCols.length)}
@@ -1065,6 +1097,8 @@ Views.broadsheet = async function () {
           pcts.push(Grading.percent(marksVal, max));
           entered++;
         }
+        const lw = td.querySelector('.cell-level-wrap');
+        if (lw) lw.innerHTML = (raw !== '' && raw !== undefined) ? levelTag(Grading.percent(Number(raw), max)) : '';
       });
       const meanPct = Grading.average(pcts);
       // Same rule as the initial render: Level is Z unless every
