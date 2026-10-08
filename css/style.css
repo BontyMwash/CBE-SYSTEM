@@ -3187,3 +3187,44 @@ table.ledger-table.sticky-head thead th {
   }
   .marks-entry table.ledger-table .levelCell { white-space: nowrap; }
 }
+
+
+/* ---------- Broadsheet: full grid borders (screen, print and PDF) ---------- */
+#bsPrintArea table.ledger-table { border-collapse: collapse; }
+#bsPrintArea table.ledger-table th,
+#bsPrintArea table.ledger-table td,
+#bsPrintArea table.ledger-table tfoot td { border: 1px solid #64748b; }
+#bsPrintArea .bs-bottom-table th,
+#bsPrintArea .bs-bottom-table td { border: 1px solid #64748b; }
+#bsPrintArea .bs-bottom-section-title { border: 1px solid #64748b; border-bottom: 0; }
+
+
+/* ---------- Broadsheet: neat grid, small level codes, print fit ---------- */
+/* Level code sits under the percentage, small, so it never widens the cell */
+#bsPrintArea .cell-level {
+  display: block; font-size: 8px; line-height: 1; font-weight: 700;
+  letter-spacing: .02em; color: #475569; margin-top: 2px; white-space: nowrap;
+}
+#bsPrintArea td.subj-cell { text-align: center; line-height: 1.15; padding-top: 5px; padding-bottom: 5px; }
+/* Tidy grid: darker header, zebra rows, bold ruled edge round the sheet */
+#bsPrintArea table.ledger-table { border: 2px solid #334155; }
+#bsPrintArea table.ledger-table thead th {
+  background: #e8edf5; color: #1f2937; border-bottom: 2px solid #334155; text-align: center;
+}
+#bsPrintArea table.ledger-table tbody tr:nth-child(even) td { background: #f7f9fc; }
+#bsPrintArea table.ledger-table tfoot td { background: #e8edf5; border-top: 2px solid #334155; font-weight: 700; }
+/* Level column badge: compact so it fits its narrow column */
+#bsPrintArea td[data-level-cell] { text-align: center; padding-left: 2px; padding-right: 2px; }
+#bsPrintArea td[data-level-cell] .badge {
+  font-size: 9px; padding: 2px 4px; min-width: 0; line-height: 1.2; white-space: nowrap;
+}
+#bsPrintArea th { white-space: normal; padding-left: 4px; padding-right: 4px; font-size: 10px; letter-spacing: .02em; }
+@media print {
+  #bsPrintArea .cell-level { font-size: 7px; }
+  #bsPrintArea table.ledger-table { font-size: 9px; }
+  #bsPrintArea td[data-level-cell] .badge { font-size: 8px; padding: 1px 3px; }
+  #bsPrintArea table.ledger-table th, #bsPrintArea table.ledger-table td { padding: 3px 3px; }
+  #bsPrintArea table.ledger-table tbody tr:nth-child(even) td,
+  #bsPrintArea table.ledger-table thead th,
+  #bsPrintArea table.ledger-table tfoot td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

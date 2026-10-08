@@ -31,7 +31,7 @@
 // order — pct values are rounded and don't need to sum to exactly
 // 100; the browser scales proportionally either way.
 function bsColWidths(subjectCount) {
-  const fixed = { pos: 5, name: 17, admno: 8, stream: 4, total: 11, mean: 8, points: 6, level: 6 };
+  const fixed = { pos: 5, name: 16, admno: 8, stream: 4, total: 11, mean: 7, points: 5, level: 7 };
   const fixedSum = Object.values(fixed).reduce((a, b) => a + b, 0);
   const subjectBudget = Math.max(0, 100 - fixedSum);
   const subjectPct = subjectCount > 0 ? Math.max(5, subjectBudget / subjectCount) : 0;
@@ -639,7 +639,7 @@ Views.broadsheet = async function () {
     function levelTag(pct) {
       if (pct === null || pct === undefined) return '';
       const b = Grading.levelForMarks(pct, 100, st.settings.gradingBands);
-      return b ? ` <span class="cell-level" style="font-size:10px;font-weight:700;opacity:.75;">${UI.esc(b.code)}</span>` : '';
+      return b ? `<span class="cell-level">${UI.esc(b.code)}</span>` : '';
     }
     function subjectCellHtml(row, col) {
       const idx = subjectCols.indexOf(col);
