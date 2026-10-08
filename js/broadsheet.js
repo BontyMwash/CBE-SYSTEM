@@ -730,12 +730,15 @@ Views.broadsheet = async function () {
     const bottomStreamStats = bottomStreamLabels.map(label => {
       const streamRows = rows.filter(r => r.student.klass === label);
       const means = streamRows.map(r => r.meanPct).filter(v => v !== null);
+      const streamMean = means.length ? Grading.average(means) : null;
       return {
         label,
+        teacher: classTeacherOf(st.classes.find(c => c.label === label)),
         students: streamRows.length,
-        mean: means.length ? Grading.average(means) : null,
+        mean: streamMean,
         high: means.length ? Math.max(...means) : null,
-        low: means.length ? Math.min(...means) : null
+        low: means.length ? Math.min(...means) : null,
+        level: streamMean === null ? null : Grading.levelForMarks(streamMean, 100, st.settings.gradingBands)
       };
     });
 
@@ -827,14 +830,14 @@ Views.broadsheet = async function () {
         <section class="bs-bottom-section">
           <div class="bs-bottom-section-title">2. CLASS PERFORMANCE</div>
           <table class="bs-bottom-table bs-class-performance-table">
-            <thead><tr><th>Students</th><th>Mean %</th><th>High %</th><th>Low %</th><th>Pass Rate</th><th>Grade</th></tr></thead>
+            <thead><tr><th>Students</th><th>Mean %</th><th>High %</th><th>Low %</th><th>Pass Rate</th><th>Level</th></tr></thead>
             <tbody><tr>
               <td class="num">${performanceStudents.length}</td>
               <td class="num">${classMeanBottom === null ? '—' : classMeanBottom.toFixed(1) + '%'}</td>
               <td class="num">${classHighBottom === null ? '—' : classHighBottom.toFixed(1) + '%'}</td>
               <td class="num">${classLowBottom === null ? '—' : classLowBottom.toFixed(1) + '%'}</td>
               <td class="num">${classPassBottom === null ? '—' : classPassBottom.toFixed(1) + '%'}</td>
-              <td>${classBandBottom ? UI.esc(classBandBottom.code || classBandBottom.label || '') : '—'}</td>
+              <td class="num">${classBandBottom ? UI.esc(classBandBottom.code || classBandBottom.label || '') : '—'}</td>
             </tr></tbody>
           </table>
         </section>
@@ -842,13 +845,14 @@ Views.broadsheet = async function () {
         <section class="bs-bottom-section">
           <div class="bs-bottom-section-title">3. STREAM PERFORMANCE</div>
           <table class="bs-bottom-table">
-            <thead><tr><th>Stream</th><th>Students</th><th>Mean %</th><th>High %</th><th>Low %</th></tr></thead>
+            <thead><tr><th>Stream</th><th>Class Teacher</th><th>Students</th><th>Mean %</th><th>High %</th><th>Low %</th><th>Level</th></tr></thead>
             <tbody>
               ${bottomStreamStats.map(s => `<tr>
-                <td>${UI.esc(s.label)}</td><td class="num">${s.students}</td>
+                <td>${UI.esc(s.label)}</td><td>${UI.esc(s.teacher) || '—'}</td><td class="num">${s.students}</td>
                 <td class="num">${s.mean === null ? '—' : s.mean.toFixed(1) + '%'}</td>
                 <td class="num">${s.high === null ? '—' : s.high.toFixed(1) + '%'}</td>
                 <td class="num">${s.low === null ? '—' : s.low.toFixed(1) + '%'}</td>
+                <td class="num">${s.level ? UI.esc(s.level.code || s.level.label || '') : '—'}</td>
               </tr>`).join('')}
             </tbody>
           </table>
@@ -905,15 +909,6 @@ Views.broadsheet = async function () {
       </div>
       <div class="ledger" id="bsPrintArea">
         <div style="padding:16px 16px 0 16px;">${buildReportMastheadHTML(st, `${klassTitlePrefix(st, isWholeGrade ? gradeName : klass)}Broadsheet — ${isWholeGrade ? `${gradeName} (Whole Class)` : klass}`, `${type} Results`, term, year)}</div>
-        <div class="bs-class-teacher" style="padding:6px 16px 0 16px;font-size:13px;">${(() => {
-          const labels = isWholeGrade ? streamLabels : [klass];
-          const parts = labels.map(l => {
-            const c = st.classes.find(x => x.label === l);
-            const nm = classTeacherOf(c);
-            return isWholeGrade ? `${UI.esc(l)}: <strong>${UI.esc(nm) || '—'}</strong>` : `<strong>${UI.esc(nm) || '—'}</strong>`;
-          });
-          return `Class Teacher${labels.length > 1 ? 's' : ''}: ${parts.join(' &nbsp;•&nbsp; ')}`;
-        })()}</div>
         <div class="ledger-scroll ledger-scroll-y">
           <table class="ledger-table">
             ${bsColgroupHTML(subjectCols.length)}
