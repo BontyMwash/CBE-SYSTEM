@@ -588,12 +588,24 @@ const UI = {
       c.style.textAlign = 'left';
     });
     card.querySelectorAll('.badge').forEach(b => {
+      // Level codes (ME1, AE2 ...) were rendering with the letters
+      // squeezed together in the PDF (monospace at a tiny size, and
+      // html2canvas ignores letter-spacing). Give the pill a plain bold
+      // sans font, a larger size, and put each character in its own
+      // spaced box so the letters/number can never touch.
+      const code = (b.textContent || '').trim();
+      if (code && code.length <= 4) {
+        b.innerHTML = Array.from(code)
+          .map(ch => `<span style="display:inline-block;margin:0 1.5px;">${ch}</span>`).join('');
+      }
       b.style.display = 'inline-block';
-      b.style.marginLeft = '8px';
-      b.style.padding = '2px 8px';
-      b.style.fontSize = '9px';
+      b.style.marginLeft = '10px';
+      b.style.padding = '3px 9px';
+      b.style.fontFamily = 'Arial, Helvetica, sans-serif';
+      b.style.fontSize = '11px';
+      b.style.fontWeight = '700';
       b.style.lineHeight = '1.3';
-      b.style.letterSpacing = '0.04em';
+      b.style.whiteSpace = 'nowrap';
       b.style.verticalAlign = 'middle';
     });
     // Badges that stand on their own (not after a percentage) don't need the lead gap.
