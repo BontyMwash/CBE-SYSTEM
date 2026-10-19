@@ -248,9 +248,11 @@ const Store = {
     this._throwIfError('update school', error);
     return data;
   },
+  // Goes through the manage-user Edge Function so the school's logins
+  // (auth accounts) are deleted along with it, not left behind.
   async deleteSchool(id) {
-    const { error } = await supabase.from('schools').delete().eq('id', id);
-    this._throwIfError('delete school', error);
+    const result = await Auth.deleteSchoolAccount(id);
+    if (!result || !result.ok) throw new Error((result && result.error) || 'Could not delete school');
   },
   // Freeze locks a school to read-only (superadmin unaffected) — for
   // accounts that haven't paid. `reason` is optional, shown to other

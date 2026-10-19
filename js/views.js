@@ -328,8 +328,10 @@ function buildReportCardHTML(st, student, term, year, examType) {
 
   const reportLabel = isSingle ? `${examType} Report` : 'Report Card';
   const colCount = typesToShow.length + (isSingle ? 1 : 2);
-  const teacherComment = Grading.autoComment(overallComplete ? overallAvg : null, 'teacher');
-  const headComment = Grading.autoComment(overallComplete ? overallAvg : null, 'head');
+  // Remarks follow the learner's overall LEVEL (overallBand) so they always
+  // match what the report itself shows for that learner.
+  const teacherComment = Grading.commentForBand(overallBand, st.settings.gradingBands, 'teacher');
+  const headComment = Grading.commentForBand(overallBand, st.settings.gradingBands, 'head');
 
   // Position in stream (this exact class/stream label) and in class
   // (the whole grade, all streams combined) — the two collapse to the

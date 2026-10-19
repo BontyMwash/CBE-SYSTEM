@@ -3228,3 +3228,7 @@ table.ledger-table.sticky-head thead th {
   #bsPrintArea table.ledger-table thead th,
   #bsPrintArea table.ledger-table tfoot td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+/* Report cards: give level badges (ME1, AE1 ...) breathing room */
+.report-card table.ledger-table td .badge { margin-left: 6px; padding: 2px 8px; letter-spacing: .04em; }
+.report-card table.ledger-table td.num { text-align: center; }

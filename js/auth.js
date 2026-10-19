@@ -188,6 +188,9 @@ const Auth = {
   resetUserPassword(userId, newPassword) {
     return this._callManageUser({ action: 'resetPassword', userId, newPassword });
   },
+  deleteSchoolAccount(schoolId) {
+    return this._callManageUser({ action: 'deleteSchool', schoolId });
+  },
   deleteUserAccount(userId) {
     return this._callManageUser({ action: 'delete', userId });
   },

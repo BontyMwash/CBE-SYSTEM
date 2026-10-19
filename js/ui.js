@@ -555,9 +555,75 @@ const UI = {
       clone.style.background = '#fff';
       clone.style.width = '100%';
       wrap.appendChild(clone);
+      // Report cards: make each one exactly one page tall, with the
+      // content spread to fill it (no big blank gap at the bottom).
+      if (clone.classList.contains('report-card')) {
+        UI._fitReportCardToPage(clone, UI._pdfPageContentHeightPx(orientation, format));
+      }
     });
     wrap._pdfHideBox = hideBox;
     return wrap;
+  },
+
+  // Lays ONE report card out as exactly one PDF page: the card is given the
+  // page's full content height, its sections are spread evenly down the
+  // page (so there is no empty strip at the bottom), and table rows grow a
+  // little when there is room — or the type shrinks a step at a time when
+  // the card is taller than a page. Level badges (ME1, AE1 ...) get real
+  // spacing so they no longer sit tight against the percentage or the
+  // neighbouring column.
+  _fitReportCardToPage(card, pageH) {
+    const target = Math.max(200, pageH - 8);
+    card.style.boxSizing = 'border-box';
+    card.style.border = 'none';
+    card.style.borderRadius = '0';
+    card.style.maxWidth = 'none';
+    card.style.margin = '0';
+    card.style.padding = '8px 6px';
+
+    card.querySelectorAll('table.ledger-table td, table.ledger-table th').forEach(c => {
+      c.style.textAlign = 'center';
+    });
+    card.querySelectorAll('table.ledger-table td:first-child, table.ledger-table th:first-child').forEach(c => {
+      c.style.textAlign = 'left';
+    });
+    card.querySelectorAll('.badge').forEach(b => {
+      b.style.display = 'inline-block';
+      b.style.marginLeft = '8px';
+      b.style.padding = '2px 8px';
+      b.style.fontSize = '9px';
+      b.style.lineHeight = '1.3';
+      b.style.letterSpacing = '0.04em';
+      b.style.verticalAlign = 'middle';
+    });
+    // Badges that stand on their own (not after a percentage) don't need the lead gap.
+    card.querySelectorAll('.report-meta-grid .badge').forEach(b => { b.style.marginLeft = '0'; });
+
+    const cells = Array.from(card.querySelectorAll('table.ledger-table th, table.ledger-table td'));
+    const setPad = (v) => cells.forEach(c => { c.style.paddingTop = v + 'px'; c.style.paddingBottom = v + 'px'; });
+    const setFont = (v) => cells.forEach(c => { c.style.fontSize = v + 'px'; });
+    const svg = card.querySelector('svg');
+
+    // Shrink in steps until it fits on one page.
+    let pad = 5, font = 10.5;
+    setPad(pad); setFont(font);
+    for (let pass = 0; pass < 8 && card.scrollHeight > target; pass++) {
+      pad = Math.max(1, pad - 1);
+      font = Math.max(7.5, font - 0.4);
+      setPad(pad); setFont(font);
+      if (svg && pass >= 3) svg.style.maxHeight = Math.max(50, 110 - (pass - 2) * 15) + 'px';
+    }
+    // Grow rows into any spare room (capped so it stays tidy).
+    const rows = card.querySelectorAll('table.ledger-table tbody tr').length || 1;
+    const spare = target - card.scrollHeight;
+    if (spare > 0) {
+      const add = Math.min(10, Math.floor(spare / (rows * 2 * 1.6)));
+      if (add > 0) setPad(pad + add);
+    }
+    card.style.height = target + 'px';
+    card.style.display = 'flex';
+    card.style.flexDirection = 'column';
+    card.style.justifyContent = 'space-between';
   },
 
   // Removes a wrap element created by _buildPdfWrap, including its

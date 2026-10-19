@@ -53,6 +53,7 @@ serve(async (req) => {
     if (body.action === "updateProfile") return await handleUpdateProfile(adminClient, callerProfile, caller.id, body);
     if (body.action === "resetPassword") return await handleResetPassword(adminClient, callerProfile, body);
     if (body.action === "delete") return await handleDelete(adminClient, callerProfile, caller.id, body);
+    if (body.action === "deleteSchool") return await handleDeleteSchool(adminClient, callerProfile, body);
 
     return json({ error: "Unknown action" }, 400);
   } catch (e) {
@@ -293,4 +294,31 @@ function json(body: unknown, status = 200) {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+
+// Deleting a school must also delete that school's logins. The schools ->
+// profiles foreign key only cascades the profile ROWS; the underlying
+// auth.users accounts would stay behind as orphans, which is why a deleted
+// school's users were still around. Super Admin only. Never touches
+// superadmin accounts.
+async function handleDeleteSchool(adminClient: any, callerProfile: any, body: any) {
+  if (callerProfile.role !== "superadmin") return json({ error: "Only Super Admins can delete a school." }, 403);
+  const { schoolId } = body;
+  if (!schoolId) return json({ error: "schoolId is required" }, 400);
+
+  const { data: members, error: listErr } = await adminClient
+    .from("profiles").select("id, role").eq("school_id", schoolId).neq("role", "superadmin");
+  if (listErr) return json({ error: listErr.message }, 400);
+
+  const failed: string[] = [];
+  for (const m of members || []) {
+    const { error } = await adminClient.auth.admin.deleteUser(m.id);
+    if (error) failed.push(`${m.id}: ${error.message}`);
+  }
+  if (failed.length) return json({ error: `Could not delete some users, school not deleted: ${failed.join("; ")}` }, 400);
+
+  const { error: schoolErr } = await adminClient.from("schools").delete().eq("id", schoolId);
+  if (schoolErr) return json({ error: schoolErr.message }, 400);
+  return json({ ok: true, deletedUsers: (members || []).length });
 }

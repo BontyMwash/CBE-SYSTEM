@@ -118,6 +118,59 @@ const Grading = {
       : 'The learner needs significant extra support and remedial attention to improve.';
   },
 
+  // Comment driven by the learner's OVERALL LEVEL (the same band shown on
+  // the report), so the remark can never disagree with the level beside
+  // it. The old autoComment() used fixed 80/65/50/30 % cut-offs that
+  // ignore the school's own grading bands, so a learner on e.g. ME2 could
+  // get an "excellent" remark. Works with 8-level codes (EE1, EE2, ME1,
+  // ME2, AE1, AE2, BE1, BE2) and 4-level codes (EE, ME, AE, BE); for any
+  // other custom codes it falls back to the band's rank among the school's
+  // own bands. `role` is 'teacher' or 'head'.
+  commentForBand(band, bands, role) {
+    const head = role === 'head';
+    if (!band || band.code === 'Z') {
+      return head ? 'Results for this sitting are not yet complete.'
+                  : 'Not enough marks have been recorded yet to comment on performance.';
+    }
+    const code = String(band.code || '').toUpperCase().trim();
+    let family = (code.match(/^(EE|ME|AE|BE)/) || [])[1];
+    let upper = /1$/.test(code);            // EE1/ME1/AE1/BE1 = upper sub-level
+    if (!family) {
+      const sorted = [...(bands || [])].sort((a, b) => b.min - a.min);
+      const i = Math.max(0, sorted.findIndex(b => b.code === band.code));
+      const frac = sorted.length > 1 ? i / (sorted.length - 1) : 0;   // 0 = best band
+      family = frac < 0.25 ? 'EE' : frac < 0.5 ? 'ME' : frac < 0.75 ? 'AE' : 'BE';
+      upper = (frac * 4) % 1 < 0.5;
+    }
+    const T = {
+      EE: [
+        ['Outstanding work. The learner exceeds expectations — keep up this excellent standard.',
+         'An outstanding overall result. Keep up this standard.'],
+        ['Excellent work this term — keep up the consistency and hard work.',
+         'An excellent overall result. Keep up this standard.']
+      ],
+      ME: [
+        ['A very good performance that meets expectations well. A little more effort in weaker areas can push this even higher.',
+         'A very good result. Encourage the learner to keep pushing.'],
+        ['A good, steady performance that meets expectations. More consistent revision would help raise this further.',
+         'A good result overall that meets expectations.']
+      ],
+      AE: [
+        ['The learner is approaching expectation. With more practice and focus this can improve to the next level.',
+         'Approaching expectation — encourage continued effort and practice.'],
+        ['The learner is approaching expectation but needs closer guidance and more practice.',
+         'Performance is below expectation — needs closer support.']
+      ],
+      BE: [
+        ['Performance is below expectation. The learner needs extra support and regular practice to improve.',
+         'Performance is below expectation — needs closer support.'],
+        ['The learner needs significant extra support and remedial attention to improve.',
+         'Performance needs urgent attention and support.']
+      ]
+    };
+    return T[family][upper ? 0 : 1][head ? 1 : 0];
+  },
+
   // Ordered list of exam type names for a school — from its own
   // admin-defined exam_types list, falling back to whatever exam type
   // text already shows up on its exams if none have been set up yet.
