@@ -3256,3 +3256,10 @@ table.ledger-table.sticky-head thead th {
  .report-card table.ledger-table th,.report-card table.ledger-table td { padding:3px 5px!important; }
  .report-card .report-comments { margin-top:8px; padding:6px 8px; font-size:11px; }
 }
+
+/* Full average performance description beside the existing circular grade. */
+.report-card .performance-level-block { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; min-width:185px; max-width:240px; text-align:center; }
+.report-card .performance-level-title { font-size:10px; font-weight:750; letter-spacing:.55px; color:#183451; }
+.report-card .performance-level-circle { width:78px; height:78px; min-width:78px; border:2px solid #183451; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:22px; font-weight:800; background:#fff; box-sizing:border-box; }
+.report-card .performance-level-description { font-size:12px; line-height:1.25; font-weight:750; color:#183451; max-width:220px; overflow-wrap:break-word; }
+@media print { .report-card .performance-level-block { min-width:155px; gap:3px; } .report-card .performance-level-circle { width:60px; height:60px; min-width:60px; font-size:18px; } .report-card .performance-level-description { font-size:10px; } }

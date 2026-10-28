@@ -310,6 +310,13 @@ function buildReportCardHTML(st, student, term, year, examType) {
   const overallComplete = relevantExams.length > 0 && relevantExams.every(e => st.results.some(r => r.examId === e.id && r.studentId === student.id));
   const overallBand = !overallComplete ? Grading.MISSING_BAND : Grading.levelForMarks(overallAvg, 100, st.settings.gradingBands);
   const overallPoints = !overallComplete ? null : Grading.pointsForBand(overallBand, st.settings.gradingBands);
+  const performanceLevelName = (() => {
+    const code = String(overallBand.code || '').toUpperCase();
+    const names = { EE: 'Exceeding Expectations', ME: 'Meeting Expectations', AE: 'Approaching Expectations', BE: 'Below Expectations', Z: 'Marks Pending' };
+    const match = code.match(/^(EE|ME|AE|BE)([12])?$/);
+    if (match) return names[match[1]] + (match[2] ? ' ' + match[2] : '');
+    return overallBand.label || overallBand.name || code;
+  })();
 
   const rowsHtml = grid.map(row => {
     const cellHtml = (type) => {
@@ -385,7 +392,11 @@ function buildReportCardHTML(st, student, term, year, examType) {
           <p class="stat-sub" style="margin:0 0 6px 0;"><strong>Average performance:</strong> ${!overallComplete ? "Didn't finish exam (Z)" : `${overallAvg.toFixed(1)}%`}</p>
           <p class="stat-sub" style="margin:0;"><strong>Points:</strong> ${overallPoints === null ? '—' : overallPoints}</p>
         </div>
-        <div class="stamp badge-${overallBand.code}" style="color:inherit;">${overallBand.code}</div>
+        <div class="performance-level-block">
+          <div class="performance-level-title">AVERAGE PERFORMANCE LEVEL</div>
+          <div class="stamp badge-${overallBand.code} performance-level-circle" style="color:inherit;">${UI.esc(overallBand.code)}</div>
+          <div class="performance-level-description">${UI.esc(performanceLevelName)}</div>
+        </div>
       </div>
       <div class="report-comments">
         <p style="margin:0 0 8px 0;"><strong>Class Teacher's comment:</strong> ${UI.esc(teacherComment)}</p>
