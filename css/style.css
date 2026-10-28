@@ -3232,3 +3232,27 @@ table.ledger-table.sticky-head thead th {
 /* Report cards: give level badges (ME1, AE1 ...) breathing room */
 .report-card table.ledger-table td .badge { margin-left: 6px; padding: 2px 8px; letter-spacing: .04em; }
 .report-card table.ledger-table td.num { text-align: center; }
+
+/* Professional student report-card presentation: screen, PDF and print. */
+.report-card { --report-navy:#183451; --report-line:#a9b8c7; border:2px solid var(--report-navy); border-radius:5px; box-shadow:0 5px 22px rgba(19,46,74,.10); color:#172b40; }
+.report-card .report-title-band { border-bottom:3px double var(--report-navy); padding-bottom:13px; }
+.report-card .report-title-band h2 { color:var(--report-navy); letter-spacing:.25px; }
+.report-card .report-meta-grid { gap:0; border:1px solid var(--report-line); grid-template-columns:repeat(2,minmax(0,1fr)); margin-bottom:15px; }
+.report-card .report-meta-grid > div { min-width:0; padding:7px 10px; border-bottom:1px solid var(--report-line); overflow-wrap:anywhere; }
+.report-card .report-meta-grid > div:nth-child(odd) { border-right:1px solid var(--report-line); }
+.report-card .report-meta-grid > div .k { font-weight:700; color:var(--report-navy); }
+.report-card table.ledger-table { border-collapse:collapse!important; border:1.5px solid var(--report-navy)!important; table-layout:auto; }
+.report-card table.ledger-table th { background:#e8eef4!important; color:var(--report-navy)!important; font-weight:750; text-align:center; border:1px solid var(--report-line)!important; padding:9px 7px; }
+.report-card table.ledger-table td { border:1px solid var(--report-line)!important; padding:8px 7px; vertical-align:middle; }
+.report-card table.ledger-table tbody tr:nth-child(even) { background:#f5f8fb; }
+.report-card table.ledger-table td:first-child { font-weight:600; }
+.report-card .report-footer { margin-top:14px; }
+.report-card .report-comments { border:1px solid var(--report-line); padding:10px 12px; margin-top:14px; font-size:12.5px; line-height:1.5; }
+.report-card .report-comments p + p { border-top:1px solid var(--report-line); padding-top:7px; }
+.report-card .signature-line { border-top:1px solid var(--report-navy); }
+@media print {
+ .report-card { border:1.5px solid #183451!important; padding:8px!important; box-shadow:none!important; border-radius:0!important; }
+ .report-card .report-meta-grid > div { padding:4px 7px; }
+ .report-card table.ledger-table th,.report-card table.ledger-table td { padding:3px 5px!important; }
+ .report-card .report-comments { margin-top:8px; padding:6px 8px; font-size:11px; }
+}

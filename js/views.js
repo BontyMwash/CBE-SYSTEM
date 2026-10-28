@@ -387,7 +387,7 @@ function buildReportCardHTML(st, student, term, year, examType) {
         </div>
         <div class="stamp badge-${overallBand.code}" style="color:inherit;">${overallBand.code}</div>
       </div>
-      <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--paper-line); font-size:13.5px; color:var(--ink); line-height:1.6;">
+      <div class="report-comments">
         <p style="margin:0 0 8px 0;"><strong>Class Teacher's comment:</strong> ${UI.esc(teacherComment)}</p>
         <p style="margin:0;"><strong>Head of Institution's comment:</strong> ${UI.esc(headComment)}</p>
       </div>
