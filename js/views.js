@@ -382,10 +382,6 @@ function buildReportCardHTML(st, student, term, year, examType) {
         <div><span class="k">Position in class:</span>${classPos.position === 'Z' ? `${UI.badge(Grading.MISSING_BAND)} — marks pending, ranked last of ${showStreamRow ? gradeMates.length : streamMates.length}` : classPos.position === null ? '—' : `${ordinal(classPos.position)} out of ${classPos.outOf}`}</div>
         ${showStreamRow ? `<div><span class="k">Position in stream:</span>${streamPos.position === 'Z' ? `${UI.badge(Grading.MISSING_BAND)} — marks pending, ranked last of ${streamMates.length}` : streamPos.position === null ? '—' : `${ordinal(streamPos.position)} out of ${streamPos.outOf}`}</div>` : ''}
       </div>
-      <div class="report-term-dates">
-        <div><strong>Closing Date:</strong> ${st.settings.closingDate ? UI.esc(new Date(st.settings.closingDate + 'T12:00:00').toLocaleDateString('en-GB', {day:'2-digit',month:'long',year:'numeric'})) : 'Not set'}</div>
-        <div><strong>Opening Date:</strong> ${st.settings.openingDate ? UI.esc(new Date(st.settings.openingDate + 'T12:00:00').toLocaleDateString('en-GB', {day:'2-digit',month:'long',year:'numeric'})) : 'Not set'}</div>
-      </div>
       <table class="ledger-table" style="width:100%;">
         <thead><tr><th>Subject</th>${typesToShow.map(t => `<th>${UI.esc(t)}</th>`).join('')}${isSingle ? '' : '<th>Average</th>'}</tr></thead>
         <tbody>${rowsHtml || `<tr><td colspan="${colCount}" class="row-index">No subjects added yet.</td></tr>`}</tbody>
@@ -411,6 +407,10 @@ function buildReportCardHTML(st, student, term, year, examType) {
       <div class="report-footer">
         <div class="signature-line">${classTeacherName ? `<strong>${UI.esc(classTeacherName)}</strong><br>` : ''}Class Teacher</div>
         <div class="signature-line">${headName ? `<strong>${UI.esc(headName)}</strong><br>` : ''}Head of Institution</div>
+      </div>
+      <div class="report-term-dates">
+        <div><strong>Closing Date:</strong> ${st.settings.closingDate ? UI.esc(new Date(st.settings.closingDate + 'T12:00:00').toLocaleDateString('en-GB', {day:'2-digit',month:'long',year:'numeric'})) : 'Not set'}</div>
+        <div><strong>Opening Date:</strong> ${st.settings.openingDate ? UI.esc(new Date(st.settings.openingDate + 'T12:00:00').toLocaleDateString('en-GB', {day:'2-digit',month:'long',year:'numeric'})) : 'Not set'}</div>
       </div>
       ${buildPrintFooterHTML()}
     </div>
