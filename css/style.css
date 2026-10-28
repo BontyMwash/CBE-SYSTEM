@@ -3279,3 +3279,8 @@ table.ledger-table.sticky-head thead th {
  .report-card .performance-level-circle { flex:0 0 60px!important; }
  .report-card .performance-level-description { font-size:11px!important; }
 }
+
+/* Term dates on printable student report cards */
+.report-term-dates { display:flex; justify-content:center; gap:28px; flex-wrap:wrap; text-align:center; border:1px solid #b8c4d2; border-radius:5px; padding:9px 12px; margin:12px 0; font-size:12px; color:#1b3048; background:#f8fafc; }
+.report-term-dates > div { flex:1 1 180px; }
+@media print { .report-term-dates { break-inside:avoid; -webkit-print-color-adjust:exact; print-color-adjust:exact; } }

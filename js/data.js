@@ -40,7 +40,7 @@ const Store = {
   _mapPublished: (r) => ({ id: r.id, klass: r.klass, type: r.type, term: r.term, year: r.year, publishedAt: r.published_at, publishedBy: r.published_by }),
   _mapSchoolSettings: (r) => ({
     schoolName: r.name, schoolCode: r.code || '', motto: r.motto || '', term: r.term, year: r.year, gradingBands: r.grading_bands,
-    frozen: !!r.frozen, frozenAt: r.frozen_at || null, frozenReason: r.frozen_reason || '', headName: r.head_name || ''
+    frozen: !!r.frozen, frozenAt: r.frozen_at || null, frozenReason: r.frozen_reason || '', headName: r.head_name || '', closingDate: r.closing_date || '', openingDate: r.opening_date || ''
   }),
 
   // Builds a real Error from a Supabase/PostgREST error object, but
@@ -656,6 +656,8 @@ const Store = {
     if (patch.term !== undefined) dbPatch.term = patch.term;
     if (patch.year !== undefined) dbPatch.year = patch.year;
     if (patch.headName !== undefined) dbPatch.head_name = patch.headName;
+    if (patch.closingDate !== undefined) dbPatch.closing_date = patch.closingDate;
+    if (patch.openingDate !== undefined) dbPatch.opening_date = patch.openingDate;
     const { data, error } = await supabase.from('schools').update(dbPatch).eq('id', this.activeSchoolId).select().single();
     this._throwIfError('update settings', error);
     return this._mapSchoolSettings(data);

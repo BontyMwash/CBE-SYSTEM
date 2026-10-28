@@ -382,6 +382,10 @@ function buildReportCardHTML(st, student, term, year, examType) {
         <div><span class="k">Position in class:</span>${classPos.position === 'Z' ? `${UI.badge(Grading.MISSING_BAND)} — marks pending, ranked last of ${showStreamRow ? gradeMates.length : streamMates.length}` : classPos.position === null ? '—' : `${ordinal(classPos.position)} out of ${classPos.outOf}`}</div>
         ${showStreamRow ? `<div><span class="k">Position in stream:</span>${streamPos.position === 'Z' ? `${UI.badge(Grading.MISSING_BAND)} — marks pending, ranked last of ${streamMates.length}` : streamPos.position === null ? '—' : `${ordinal(streamPos.position)} out of ${streamPos.outOf}`}</div>` : ''}
       </div>
+      <div class="report-term-dates">
+        <div><strong>Closing Date:</strong> ${st.settings.closingDate ? UI.esc(new Date(st.settings.closingDate + 'T12:00:00').toLocaleDateString('en-GB', {day:'2-digit',month:'long',year:'numeric'})) : 'Not set'}</div>
+        <div><strong>Opening Date:</strong> ${st.settings.openingDate ? UI.esc(new Date(st.settings.openingDate + 'T12:00:00').toLocaleDateString('en-GB', {day:'2-digit',month:'long',year:'numeric'})) : 'Not set'}</div>
+      </div>
       <table class="ledger-table" style="width:100%;">
         <thead><tr><th>Subject</th>${typesToShow.map(t => `<th>${UI.esc(t)}</th>`).join('')}${isSingle ? '' : '<th>Average</th>'}</tr></thead>
         <tbody>${rowsHtml || `<tr><td colspan="${colCount}" class="row-index">No subjects added yet.</td></tr>`}</tbody>
@@ -3475,6 +3479,14 @@ Views.settings = async function () {
             <label>Current year</label>
             <input type="number" id="s_year" value="${st.settings.year}">
           </div>
+          <div class="field">
+            <label>Term closing date</label>
+            <input type="date" id="s_closing_date" value="${UI.esc(st.settings.closingDate || '')}">
+          </div>
+          <div class="field">
+            <label>Next term opening date</label>
+            <input type="date" id="s_opening_date" value="${UI.esc(st.settings.openingDate || '')}">
+          </div>
         </div>
         <div class="modal-actions" style="border-top:none; margin-top:16px;">
           <button class="btn btn-primary" id="saveSchool">Save</button>
@@ -3642,7 +3654,9 @@ Views.settings = async function () {
         motto: document.getElementById('s_motto').value.trim(),
         headName: document.getElementById('s_head').value.trim(),
         term: document.getElementById('s_term').value,
-        year: Number(document.getElementById('s_year').value)
+        year: Number(document.getElementById('s_year').value),
+        closingDate: document.getElementById('s_closing_date').value || null,
+        openingDate: document.getElementById('s_opening_date').value || null
       });
       UI.toast('School details saved');
       App.renderShell();
