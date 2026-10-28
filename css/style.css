@@ -3263,3 +3263,19 @@ table.ledger-table.sticky-head thead th {
 .report-card .performance-level-circle { width:78px; height:78px; min-width:78px; border:2px solid #183451; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:22px; font-weight:800; background:#fff; box-sizing:border-box; }
 .report-card .performance-level-description { font-size:12px; line-height:1.25; font-weight:750; color:#183451; max-width:220px; overflow-wrap:break-word; }
 @media print { .report-card .performance-level-block { min-width:155px; gap:3px; } .report-card .performance-level-circle { width:60px; height:60px; min-width:60px; font-size:18px; } .report-card .performance-level-description { font-size:10px; } }
+
+/* Centered, horizontal performance-level display for screen and A4 PDF. */
+.report-card .report-performance-footer { position:relative; display:grid; grid-template-columns:1fr; justify-items:center; align-items:center; gap:10px; padding:12px 10px; border:1px solid var(--report-line,#ccd5df); }
+.report-card .report-performance-summary { width:100%; display:flex; justify-content:center; gap:28px; flex-wrap:wrap; text-align:center; }
+.report-card .performance-level-block { width:100%; max-width:none; min-width:0; display:flex; flex-direction:column; align-items:center; gap:9px; text-align:center; }
+.report-card .performance-level-title { text-align:center; font-size:12px; }
+.report-card .performance-level-horizontal { display:flex; flex-direction:row; align-items:center; justify-content:center; gap:16px; width:100%; }
+.report-card .performance-level-circle { flex:0 0 78px; }
+.report-card .performance-level-description { max-width:none; font-size:14px; text-align:left; }
+@media print {
+ .report-card .report-performance-footer { padding:7px 9px!important; gap:5px!important; break-inside:avoid; }
+ .report-card .performance-level-block { min-width:0!important; width:100%!important; gap:5px!important; }
+ .report-card .performance-level-horizontal { gap:12px!important; }
+ .report-card .performance-level-circle { flex:0 0 60px!important; }
+ .report-card .performance-level-description { font-size:11px!important; }
+}

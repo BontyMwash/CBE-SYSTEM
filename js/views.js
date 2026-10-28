@@ -387,15 +387,17 @@ function buildReportCardHTML(st, student, term, year, examType) {
         <tbody>${rowsHtml || `<tr><td colspan="${colCount}" class="row-index">No subjects added yet.</td></tr>`}</tbody>
       </table>
       ${buildTrendChartSVG(trendPoints)}
-      <div class="report-footer">
-        <div>
+      <div class="report-footer report-performance-footer">
+        <div class="report-performance-summary">
           <p class="stat-sub" style="margin:0 0 6px 0;"><strong>Average performance:</strong> ${!overallComplete ? "Didn't finish exam (Z)" : `${overallAvg.toFixed(1)}%`}</p>
           <p class="stat-sub" style="margin:0;"><strong>Points:</strong> ${overallPoints === null ? '—' : overallPoints}</p>
         </div>
         <div class="performance-level-block">
           <div class="performance-level-title">AVERAGE PERFORMANCE LEVEL</div>
-          <div class="stamp badge-${overallBand.code} performance-level-circle" style="color:inherit;">${UI.esc(overallBand.code)}</div>
-          <div class="performance-level-description">${UI.esc(performanceLevelName)}</div>
+          <div class="performance-level-horizontal">
+            <div class="stamp badge-${overallBand.code} performance-level-circle" style="color:inherit;">${UI.esc(overallBand.code)}</div>
+            <div class="performance-level-description">${UI.esc(performanceLevelName)}</div>
+          </div>
         </div>
       </div>
       <div class="report-comments">
