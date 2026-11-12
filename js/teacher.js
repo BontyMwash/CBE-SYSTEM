@@ -302,7 +302,7 @@ Views.assessments = async function () {
             <tbody>
               ${rows.map((e, i) => {
                 const count = st.results.filter(r => r.examId === e.id).length;
-                const classSize = new Set([...st.students.filter(s => s.klass === e.klass).map(s => s.id), ...st.results.filter(r => r.examId === e.id).map(r => r.studentId)]).size;
+                const classSize = new Set([...currentMembersForSitting(st, new Set([e.klass]), e.term, e.year).map(s => s.id), ...st.results.filter(r => r.examId === e.id).map(r => r.studentId)]).size;
                 return `<tr>
                   <td class="row-index">${i + 1}</td>
                   <td>${UI.esc(e.type)}</td>

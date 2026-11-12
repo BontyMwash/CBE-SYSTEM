@@ -63,9 +63,49 @@ function isPreviousClass(st, label) {
 // results in that class's exams. Those extra learners come back as copies
 // with klass set to the class they were in at the time (previousClass:true),
 // so report cards, positions, broadsheets etc. read their old class's exams.
+
+// Which classes each learner has marks in, per term+year (cached while the
+// results/exams arrays are unchanged). This is how we tell, for a past
+// sitting, that a learner currently in "Grade 9" was really in "Grade 8"
+// at the time: their marks that term sit in Grade 8's exams.
+function termYearKlassIndex(st) {
+  const c = st._tyIndex;
+  if (c && c.r === st.results && c.rl === st.results.length && c.e === st.exams && c.el === st.exams.length) return c.index;
+  const examById = new Map(st.exams.map(e => [e.id, e]));
+  const index = new Map();
+  st.results.forEach(r => {
+    const e = examById.get(r.examId);
+    if (!e) return;
+    const key = `${e.term}|${e.year}`;
+    if (!index.has(key)) index.set(key, new Map());
+    const m = index.get(key);
+    if (!m.has(r.studentId)) m.set(r.studentId, new Set());
+    m.get(r.studentId).add(e.klass);
+  });
+  st._tyIndex = { r: st.results, rl: st.results.length, e: st.exams, el: st.exams.length, index };
+  return index;
+}
+
+// Learners currently in the class label(s) who really belong to that class
+// for this term/year: not ruled out by having marks only in a DIFFERENT class
+// that term (e.g. promoted Grade 8 -> 9 learners are not part of Grade 9's
+// earlier-term sitting, which belongs to the old Grade 9 who have graduated).
+function currentMembersForSitting(st, labelSet, term, year) {
+  const members = st.students.filter(s => labelSet.has(s.klass));
+  if (!term || year === undefined || year === null || year === '') return members;
+  const m = termYearKlassIndex(st).get(`${term}|${year}`);
+  if (!m) return members;
+  return members.filter(s => {
+    const ks = m.get(s.id);
+    if (!ks) return true;                       // nothing recorded that term: pending, keep
+    for (const k of ks) if (labelSet.has(k)) return true;
+    return false;                               // marks only in another class: was elsewhere then
+  });
+}
+
 function rosterForLabels(st, labels, term, year, type) {
   const labelSet = new Set(Array.isArray(labels) ? labels : [labels]);
-  const current = st.students.filter(s => labelSet.has(s.klass));
+  const current = currentMembersForSitting(st, labelSet, term, year);
   const currentIds = new Set(current.map(s => s.id));
   const examKlass = new Map();
   st.exams.forEach(e => {
@@ -83,6 +123,13 @@ function rosterForLabels(st, labels, term, year, type) {
     const s = byId.get(r.studentId);
     if (s) past.set(r.studentId, { ...s, klass: examKlass.get(r.examId), previousClass: true });
   });
+  // If most of the learners who sat this sitting have since left the class
+  // (e.g. the whole old Grade 9 graduated), it is an ARCHIVED sitting: show only
+  // those who sat it, not whoever happens to sit in the class label today.
+  const sat = new Set();
+  st.results.forEach(r => { if (examKlass.has(r.examId)) sat.add(r.studentId); });
+  const currentWhoSat = current.filter(s => sat.has(s.id));
+  if (past.size > currentWhoSat.length) return currentWhoSat.concat([...past.values()]);
   return current.concat([...past.values()]);
 }
 function rosterForSitting(st, klass, term, year, type) {
@@ -803,8 +850,18 @@ Views.dashboard = async function () {
   // of the live dashboard so old marks don't mix with the current class.
   const liveClassLabels = new Set(st.students.map(s => s.klass));
   const exams = st.exams.filter(e => liveClassLabels.has(e.klass) && levelAllows(e.klass) && (!isTeacher || !!scope.subjectsByClass.get(e.klass)?.has(e.subjectId)));
+  // Only marks earned by learners who are in that exam's class NOW count on the
+  // live dashboard. Marks in the same class label from learners who have since
+  // graduated/moved on (e.g. last year's Grade 9) are archive, not "this" Grade 9.
+  const studentNowKlass = new Map(st.students.map(s => [s.id, s.klass]));
+  const examById = new Map(exams.map(e => [e.id, e]));
+  const results = st.results.filter(r => { const e = examById.get(r.examId); return e && studentNowKlass.get(r.studentId) === e.klass; });
+  const examsWithAnyResult = new Set(st.results.map(r => r.examId));
+  const examsWithLiveResult = new Set(results.map(r => r.examId));
+  // an exam is live if nobody has marks yet (being set up) or a current member has
+  const liveExams = exams.filter(e => !examsWithAnyResult.has(e.id) || examsWithLiveResult.has(e.id));
+  exams.length = 0; liveExams.forEach(e => exams.push(e));
   const examIdsInLevel = new Set(exams.map(e => e.id));
-  const results = st.results.filter(r => examIdsInLevel.has(r.examId));
   const subjectIdsInLevel = new Set(exams.map(e => e.subjectId));
   const subjects = st.subjects.filter(s => subjectIdsInLevel.has(s.id));
 
@@ -1904,13 +1961,19 @@ Views.exams = async function () {
   function buildRows() {
     const resultIdsByExam = new Map();
     st.results.forEach(r => { if (!resultIdsByExam.has(r.examId)) resultIdsByExam.set(r.examId, new Set()); resultIdsByExam.get(r.examId).add(r.studentId); });
-    const currentIdsByKlass = new Map();
-    st.students.forEach(s => { if (!currentIdsByKlass.has(s.klass)) currentIdsByKlass.set(s.klass, []); currentIdsByKlass.get(s.klass).push(s.id); });
+    const nowIdsByKlass = new Map();
+    st.students.forEach(s => { if (!nowIdsByKlass.has(s.klass)) nowIdsByKlass.set(s.klass, new Set()); nowIdsByKlass.get(s.klass).add(s.id); });
     const rows = [...st.exams].filter(e => levelAllows(e.klass)).map(e => {
       // Learners expected = those in the class now PLUS anyone promoted out who
       // already has a mark in this exam, so an archived exam reads 40/40, not 40/0.
       const examResultIds = resultIdsByExam.get(e.id) || new Set();
-      const studentCount = new Set([...(currentIdsByKlass.get(e.klass) || []), ...examResultIds]).size;
+      const members = currentMembersForSitting(st, new Set([e.klass]), e.term, e.year).map(s => s.id);
+      const memberSet = new Set(members);
+      const memberMarked = [...examResultIds].filter(id => memberSet.has(id)).length;
+      const nowIds = nowIdsByKlass.get(e.klass) || new Set();
+      const leftMarked = [...examResultIds].filter(id => !nowIds.has(id)).length;
+      // archived exam (most who sat it have left the class): count only those who sat it
+      const studentCount = leftMarked > memberMarked ? examResultIds.size : new Set([...members, ...examResultIds]).size;
       const entries = examResultIds.size;
       const pct = studentCount > 0 ? Math.round((entries / studentCount) * 100) : 0;
       const status = entries === 0 ? 'not-started' : (studentCount > 0 && entries >= studentCount ? 'complete' : 'in-progress');
