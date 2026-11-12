@@ -203,7 +203,9 @@ const App = {
       const pcts = [];
       st.results.filter(r => r.studentId === s.id).forEach(r => {
         const exam = st.exams.find(e => e.id === r.examId);
-        if (exam) pcts.push(Grading.percent(r.marks, exam.totalMarks));
+        // Only marks from the class the learner is in NOW — previous-class
+        // marks (before promotion) are archived, not averaged in.
+        if (exam && exam.klass === s.klass) pcts.push(Grading.percent(r.marks, exam.totalMarks));
       });
       const avg = Grading.average(pcts);
       if (avg !== null && avg < 50) out.push({ ...s, average: avg });

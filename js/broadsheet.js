@@ -124,7 +124,7 @@ Views.broadsheet = async function () {
 
   document.getElementById('content').innerHTML = `
     <div class="filter-row no-print">
-      <select id="bsClass"><option value="">Select class / stream</option>${classes.map(c => `<option value="${UI.esc(c)}">${UI.esc(c)}</option>`).join('')}</select>
+      <select id="bsClass"><option value="">Select class / stream</option>${classPickerOptions(st, classes, '')}</select>
       <select id="bsScope" title="Choose whether the broadsheet is for one stream or the whole grade/class">
         <option value="stream">This stream only</option>
         <option value="grade">Whole class / grade (all streams)</option>

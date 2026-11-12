@@ -503,8 +503,10 @@ Views.sms = async function () {
 
     function studentAverage(studentId) {
       const examsById = new Map(st.exams.map(e => [e.id, e]));
+      const stuNow = st.students.find(s => s.id === studentId);
       const marks = st.results.filter(r => r.studentId === studentId).map(r => {
         const e = examsById.get(r.examId);
+        if (e && stuNow && e.klass !== stuNow.klass) return null; // previous class: not counted
         return e ? (r.marks / e.totalMarks) * 100 : null;
       }).filter(v => v !== null);
       if (!marks.length) return null;

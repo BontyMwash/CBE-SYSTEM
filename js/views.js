@@ -40,6 +40,24 @@ function classesWithHistory(st) {
   return [...set].sort();
 }
 
+// <option>s for a class dropdown, with classes that have been promoted away
+// (exams on record but no learners in them now) tucked into their own
+// "Previous classes" group so they never sit beside the live classes.
+function classPickerOptions(st, labels, selected) {
+  const active = new Set(st.students.map(s => s.klass));
+  const hasExams = new Set(st.exams.map(e => e.klass));
+  const isPrev = (l) => !active.has(l) && hasExams.has(l);
+  const opt = (l) => `<option value="${UI.esc(l)}" ${l === selected ? 'selected' : ''}>${UI.esc(l)}</option>`;
+  const prev = labels.filter(isPrev);
+  return labels.filter(l => !isPrev(l)).map(opt).join('') +
+    (prev.length ? `<optgroup label="Previous classes (promoted — archive)">${prev.map(opt).join('')}</optgroup>` : '');
+}
+
+// True when nobody is in this class any more but it has marks on record.
+function isPreviousClass(st, label) {
+  return !st.students.some(s => s.klass === label) && st.exams.some(e => e.klass === label);
+}
+
 // Learners of the given class label(s) for a sitting: everyone currently in
 // the class, PLUS learners who have since been promoted/moved but have
 // results in that class's exams. Those extra learners come back as copies
@@ -780,7 +798,11 @@ Views.dashboard = async function () {
   // The exam's class AND subject must form an actual (subject, class)
   // pair the teacher is assigned — see teacherScope()'s subjectsByClass
   // above for why intersecting two flat sets isn't enough.
-  const exams = st.exams.filter(e => levelAllows(e.klass) && (!isTeacher || !!scope.subjectsByClass.get(e.klass)?.has(e.subjectId)));
+  // Exams of classes that have been promoted away (no learners left in them)
+  // are archived: they stay viewable under Previous classes but are kept out
+  // of the live dashboard so old marks don't mix with the current class.
+  const liveClassLabels = new Set(st.students.map(s => s.klass));
+  const exams = st.exams.filter(e => liveClassLabels.has(e.klass) && levelAllows(e.klass) && (!isTeacher || !!scope.subjectsByClass.get(e.klass)?.has(e.subjectId)));
   const examIdsInLevel = new Set(exams.map(e => e.id));
   const results = st.results.filter(r => examIdsInLevel.has(r.examId));
   const subjectIdsInLevel = new Set(exams.map(e => e.subjectId));
@@ -839,7 +861,7 @@ Views.dashboard = async function () {
     const pcts = [];
     results.filter(r => r.studentId === s.id).forEach(r => {
       const exam = exams.find(e => e.id === r.examId);
-      if (exam) pcts.push(Grading.percent(r.marks, exam.totalMarks));
+      if (exam && exam.klass === s.klass) pcts.push(Grading.percent(r.marks, exam.totalMarks));
     });
     const avg = Grading.average(pcts);
     const band = avg === null ? null : Grading.levelForMarks(avg, 100, bands);
@@ -854,7 +876,7 @@ Views.dashboard = async function () {
     const weak = [];
     results.filter(r => r.studentId === student.id).forEach(r => {
       const exam = exams.find(e => e.id === r.examId);
-      if (!exam) return;
+      if (!exam || exam.klass !== student.klass) return;
       const pct = Grading.percent(r.marks, exam.totalMarks);
       if (pct !== null && pct < 50) {
         const subj = st.subjects.find(s => s.id === exam.subjectId);
@@ -1880,9 +1902,16 @@ Views.exams = async function () {
 
   // ---- augmented rows: one per exam, with real, calculated stats ----
   function buildRows() {
+    const resultIdsByExam = new Map();
+    st.results.forEach(r => { if (!resultIdsByExam.has(r.examId)) resultIdsByExam.set(r.examId, new Set()); resultIdsByExam.get(r.examId).add(r.studentId); });
+    const currentIdsByKlass = new Map();
+    st.students.forEach(s => { if (!currentIdsByKlass.has(s.klass)) currentIdsByKlass.set(s.klass, []); currentIdsByKlass.get(s.klass).push(s.id); });
     const rows = [...st.exams].filter(e => levelAllows(e.klass)).map(e => {
-      const studentCount = st.students.filter(s => s.klass === e.klass).length;
-      const entries = st.results.filter(r => r.examId === e.id).length;
+      // Learners expected = those in the class now PLUS anyone promoted out who
+      // already has a mark in this exam, so an archived exam reads 40/40, not 40/0.
+      const examResultIds = resultIdsByExam.get(e.id) || new Set();
+      const studentCount = new Set([...(currentIdsByKlass.get(e.klass) || []), ...examResultIds]).size;
+      const entries = examResultIds.size;
       const pct = studentCount > 0 ? Math.round((entries / studentCount) * 100) : 0;
       const status = entries === 0 ? 'not-started' : (studentCount > 0 && entries >= studentCount ? 'complete' : 'in-progress');
       return { exam: e, studentCount, entries, pct, status, locked: isLockedExam(e) };
@@ -2080,7 +2109,7 @@ Views.exams = async function () {
                   <td>${UI.esc(e.term)}</td>
                   <td class="num">${UI.esc(e.year)}</td>
                   <td>
-                    <div class="class-cell">${UI.esc(e.klass)}</div>
+                    <div class="class-cell">${UI.esc(e.klass)}${isPreviousClass(st, e.klass) ? ' <span class="badge badge-none" title="This class has been promoted — its marks are kept as an archive">Previous class</span>' : ''}</div>
                     ${r.studentCount ? `<div class="class-cell-sub">${r.studentCount} learner${r.studentCount === 1 ? '' : 's'}</div>` : ''}
                   </td>
                   <td>${UI.esc(subjectName(e.subjectId))}${r.duplicateSuspect ? ` <i class="fa-solid fa-triangle-exclamation" style="color:var(--danger);" title="Another exam exists for this exact class/type/term/year with a subject of the same name but a DIFFERENT subject record. Marks entered against one won't show on the other — see the notice above."></i>` : ''}</td>
@@ -2821,11 +2850,12 @@ Views.results = async function () {
   function renderGrid(examId) {
     const exam = st.exams.find(e => e.id === examId);
     const locked = isLocked(exam);
-    const students = st.students.filter(s => s.klass === exam.klass).sort(admissionNoCompare);
+    const students = rosterForSitting(st, exam.klass, exam.term, exam.year, exam.type).sort(admissionNoCompare);
     if (students.length === 0) {
       return `<div class="empty"><div class="empty-title">No students in ${UI.esc(exam.klass)}</div><p>Add students to this class first.</p></div>`;
     }
     return `
+      ${isPreviousClass(st, exam.klass) ? `<p class="field-hint" style="margin-bottom:10px;"><strong>Previous class (archive).</strong> ${UI.esc(exam.klass)} has been promoted; these are the marks learners earned in it. They are kept separate from the learners' new class.</p>` : ''}
       <div class="ledger">
         <div class="ledger-scroll">
           <table class="ledger-table">
@@ -3091,7 +3121,7 @@ function renderStudentReportCard(st, scope) {
     <div class="filter-row no-print">
       <select id="classSel">
         <option value="">Select class</option>
-        ${classes.map(c => `<option value="${UI.esc(c)}">${UI.esc(c)}</option>`).join('')}
+        ${classPickerOptions(st, classes, '')}
       </select>
       <select id="studentSel"><option value="">Select student</option></select>
       <select id="termSel">
@@ -3256,7 +3286,7 @@ function renderSingleExamReport(st, scope) {
 
     return `
       <div class="filter-row no-print">
-        <select id="esKlass">${klasses.map(k => `<option value="${UI.esc(k)}" ${k === picked.klass ? 'selected' : ''}>${UI.esc(k)}</option>`).join('')}</select>
+        <select id="esKlass">${classPickerOptions(st, klasses, picked.klass)}</select>
         <select id="esType">${types.map(t => `<option value="${UI.esc(t)}" ${t === picked.type ? 'selected' : ''}>${UI.esc(t)}</option>`).join('')}</select>
         <select id="esTerm">${terms.map(t => `<option value="${UI.esc(t)}" ${t === picked.term ? 'selected' : ''}>${UI.esc(t)}</option>`).join('')}</select>
         <select id="esYear">${years.map(y => `<option value="${UI.esc(y)}" ${y === picked.year ? 'selected' : ''}>${UI.esc(y)}</option>`).join('')}</select>

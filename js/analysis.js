@@ -394,7 +394,7 @@ Views.analysis = async function () {
 
     document.getElementById('anPickerWrap').innerHTML = `
       <div class="filter-row no-print">
-        <select id="anClass">${classes.map(c => `<option value="${UI.esc(c)}" ${c === picked.klass ? 'selected' : ''}>${UI.esc(c)}</option>`).join('')}</select>
+        <select id="anClass">${classPickerOptions(st, classes, picked.klass)}</select>
         <select id="anType">${examTypeNames.map(t => `<option value="${UI.esc(t)}" ${t === picked.type ? 'selected' : ''}>${UI.esc(t)}</option>`).join('')}</select>
         <select id="anTerm">${['Term 1', 'Term 2', 'Term 3'].map(t => `<option value="${t}" ${t === picked.term ? 'selected' : ''}>${t}</option>`).join('')}</select>
         <input type="number" id="anYear" value="${UI.esc(picked.year)}" style="width:90px;">

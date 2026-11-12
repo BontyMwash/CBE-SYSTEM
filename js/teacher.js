@@ -165,8 +165,10 @@ Views.learners = async function () {
 
   function overallAverage(studentId) {
     const pcts = [];
+    const stuNow = st.students.find(s => s.id === studentId);
     st.results.filter(r => r.studentId === studentId).forEach(r => {
       const exam = st.exams.find(e => e.id === r.examId);
+      if (exam && stuNow && exam.klass !== stuNow.klass) return; // previous class: archived
       // Must be a subject the teacher teaches IN THAT EXAM'S OWN CLASS
       // — scope.subjectIds alone would also count a subject they teach
       // in a different class, since a subject id can be shared across
@@ -300,7 +302,7 @@ Views.assessments = async function () {
             <tbody>
               ${rows.map((e, i) => {
                 const count = st.results.filter(r => r.examId === e.id).length;
-                const classSize = st.students.filter(s => s.klass === e.klass).length;
+                const classSize = new Set([...st.students.filter(s => s.klass === e.klass).map(s => s.id), ...st.results.filter(r => r.examId === e.id).map(r => r.studentId)]).size;
                 return `<tr>
                   <td class="row-index">${i + 1}</td>
                   <td>${UI.esc(e.type)}</td>
