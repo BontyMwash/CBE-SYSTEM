@@ -47,6 +47,7 @@ Views.classes = async function () {
                   <td class="num">${studentCount}</td>
                   <td>
                     <button class="btn btn-sm btn-ghost" data-edit="${c.id}">Edit</button>
+                    <button class="btn btn-sm btn-ghost" data-moveexams="${c.id}" title="Move this class's old exams to another class (e.g. the class its learners were promoted into)">Move exams</button>
                     <button class="btn btn-sm" data-promote="${c.id}" ${studentCount ? '' : 'disabled title="No students in this class yet"'}>Promote</button>
                     <button class="btn btn-sm btn-danger" data-del="${c.id}">Delete</button>
                   </td>
@@ -62,6 +63,9 @@ Views.classes = async function () {
   function wireRowActions() {
     document.querySelectorAll('[data-edit]').forEach(btn => {
       btn.onclick = () => openForm(st.classes.find(c => c.id === btn.dataset.edit));
+    });
+    document.querySelectorAll('[data-moveexams]').forEach(btn => {
+      btn.onclick = () => openMoveExamsForm(st.classes.find(c => c.id === btn.dataset.moveexams));
     });
     document.querySelectorAll('[data-promote]').forEach(btn => {
       btn.onclick = () => openPromoteForm(st.classes.find(c => c.id === btn.dataset.promote));
@@ -126,6 +130,87 @@ Views.classes = async function () {
             Views.classes();
           } catch (err) {
             UI.toast('Could not promote: ' + err.message);
+          }
+        });
+      };
+    });
+  }
+
+  // "Move exams" — transfer a class's exam sittings to another class label
+  // (typically the class its learners were promoted into). Results are tied
+  // to learners, so they come along untouched; only the exam's class changes.
+  function openMoveExamsForm(from) {
+    const examsOfClass = st.exams.filter(e => e.klass === from.label);
+    // group into sittings (type + term + year)
+    const groups = new Map();
+    examsOfClass.forEach(e => {
+      const key = `${e.type}|${e.term}|${e.year}`;
+      if (!groups.has(key)) groups.set(key, { type: e.type, term: e.term, year: e.year, exams: [] });
+      groups.get(key).exams.push(e);
+    });
+    const byId = new Map(st.students.map(s => [s.id, s]));
+    const sittings = [...groups.values()].map(g => {
+      const ids = new Set(g.exams.map(e => e.id));
+      const learners = new Set();
+      st.results.forEach(r => { if (ids.has(r.examId)) learners.add(r.studentId); });
+      const nowIn = {};
+      learners.forEach(id => { const s = byId.get(id); const k = s ? s.klass : '(deleted)'; nowIn[k] = (nowIn[k] || 0) + 1; });
+      const stayed = nowIn[from.label] || 0;
+      const left = learners.size - stayed;
+      return { ...g, learners: learners.size, nowIn, archived: learners.size > 0 && left > stayed };
+    }).sort((a, b) => (b.year - a.year) || b.term.localeCompare(a.term) || a.type.localeCompare(b.type));
+
+    if (!sittings.length) {
+      UI.openModal(`<h2>Move exams from "${UI.esc(from.label)}"</h2><p class="field-hint">This class has no exams to move.</p><div class="modal-actions"><button class="btn btn-primary" id="okBtn">Close</button></div>`,
+        root => { root.querySelector('#okBtn').onclick = () => UI.closeModal(); });
+      return;
+    }
+    // Suggest where most of the learners who sat the archived sittings are now.
+    const tally = {};
+    sittings.filter(s => s.archived).forEach(s => Object.entries(s.nowIn).forEach(([k, n]) => { if (k !== from.label) tally[k] = (tally[k] || 0) + n; }));
+    const suggested = Object.entries(tally).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+    const targets = allClassOptionLabels(st).filter(l => l !== from.label);
+    UI.openModal(`
+      <h2>Move exams from "${UI.esc(from.label)}"</h2>
+      <p class="field-hint">Moves the chosen exam sittings (and their marks, which stay with the learners) to another class. Use this to take last year's exams out of "${UI.esc(from.label)}" so the name is clean for the new learners.</p>
+      <div class="form-grid">
+        <div class="field full">
+          <label>Move to class</label>
+          <select id="f_moveTarget">${targets.map(t => `<option value="${UI.esc(t)}" ${t === suggested ? 'selected' : ''}>${UI.esc(t)}</option>`).join('')}</select>
+          ${suggested ? `<p class="field-hint">Suggested: <strong>${UI.esc(suggested)}</strong> — that's where most learners from the old sittings are now.</p>` : ''}
+        </div>
+        <div class="field full">
+          <label>Sittings to move</label>
+          <div style="max-height:260px; overflow:auto; border:1px solid var(--paper-line); border-radius:8px; padding:6px 10px;">
+            ${sittings.map((s, i) => `<label style="display:flex; gap:8px; align-items:flex-start; padding:5px 0;">
+              <input type="checkbox" class="mvChk" data-i="${i}" ${s.archived ? 'checked' : ''}>
+              <span><strong>${UI.esc(s.type)} · ${UI.esc(s.term)} ${UI.esc(s.year)}</strong> — ${s.exams.length} exam${s.exams.length === 1 ? '' : 's'}, ${s.learners} learner${s.learners === 1 ? '' : 's'} with marks
+                <span class="field-hint" style="display:block; margin:0;">Now in: ${Object.entries(s.nowIn).map(([k, n]) => `${UI.esc(k)} (${n})`).join(', ') || '—'}${s.archived ? ' · <em>old sitting — learners have moved on</em>' : ''}</span></span>
+            </label>`).join('')}
+          </div>
+        </div>
+      </div>
+      <p class="field-hint">Note: report cards and broadsheets for moved sittings will show the new class name, and the section heading (e.g. Junior Secondary) is taken from that class's name.</p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="mvCancel">Cancel</button>
+        <button class="btn btn-primary" id="mvGo">Move selected exams</button>
+      </div>
+    `, (root) => {
+      root.querySelector('#mvCancel').onclick = () => UI.closeModal();
+      root.querySelector('#mvGo').onclick = () => {
+        const target = root.querySelector('#f_moveTarget').value;
+        const chosen = [...root.querySelectorAll('.mvChk')].filter(c => c.checked).map(c => sittings[Number(c.dataset.i)]);
+        if (!target) { UI.toast('Pick a class to move the exams to'); return; }
+        if (!chosen.length) { UI.toast('Tick at least one sitting'); return; }
+        const n = chosen.reduce((sum, s) => sum + s.exams.length, 0);
+        UI.confirmAction(`Move ${n} exam${n === 1 ? '' : 's'} (${chosen.length} sitting${chosen.length === 1 ? '' : 's'}) from "${from.label}" to "${target}"? Marks stay with the learners.`, async () => {
+          try {
+            const moved = await Store.moveExams(from.label, target, chosen);
+            UI.toast(`Moved ${moved} exam${moved === 1 ? '' : 's'} to ${target}`);
+            UI.closeModal();
+            Views.classes();
+          } catch (err) {
+            UI.toast('Could not move: ' + err.message);
           }
         });
       };

@@ -563,6 +563,38 @@ const Store = {
     this._throwIfError('update exam', error);
     return this._mapExam(data);
   },
+  // Move whole sittings of exams from one class label to another (e.g. last
+  // year's "Grade 9" exams -> "Graduated", so "Grade 9" is clean for the new
+  // intake). Results stay attached to the learners — only exams.klass changes.
+  // Published locks and the "sent to parents" log follow the sitting so the
+  // sitting stays published and nothing is orphaned under the old class name.
+  // sittings: [{ type, term, year }]
+  async moveExams(fromKlass, toKlass, sittings) {
+    const target = (toKlass || '').trim();
+    if (!target || target === fromKlass) throw new Error('Pick a different target class');
+    let moved = 0;
+    for (const s of sittings) {
+      const { data, error } = await supabase.from('exams')
+        .update({ klass: target })
+        .eq('school_id', this.activeSchoolId).eq('klass', fromKlass)
+        .eq('type', s.type).eq('term', s.term).eq('year', Number(s.year))
+        .select('id');
+      this._throwIfError('move exams', error);
+      moved += (data || []).length;
+      // carry the published lock + parent-notification log with the sitting
+      const pub = await supabase.from('published_results')
+        .update({ klass: target })
+        .eq('school_id', this.activeSchoolId).eq('klass', fromKlass)
+        .eq('type', s.type).eq('term', s.term).eq('year', Number(s.year));
+      this._throwIfError('move published sitting', pub.error);
+      const nt = await supabase.from('result_notifications')
+        .update({ klass: target })
+        .eq('school_id', this.activeSchoolId).eq('klass', fromKlass)
+        .eq('type', s.type).eq('term', s.term).eq('year', Number(s.year));
+      this._throwIfError('move notification log', nt.error);
+    }
+    return moved;
+  },
   async deleteExam(id) {
     const { error } = await supabase.from('exams').delete().eq('id', id);
     this._throwIfError('delete exam', error);
