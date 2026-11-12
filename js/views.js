@@ -58,6 +58,64 @@ function isPreviousClass(st, label) {
   return !st.students.some(s => s.klass === label) && st.exams.some(e => e.klass === label);
 }
 
+// Learner "History": every class/term/year this learner has results in,
+// including classes they have since been promoted out of. Each row opens
+// the full report card exactly as it was for that class.
+function openLearnerHistory(st, s) {
+  const history = studentHistory(st, s.id);
+  const types = Grading.examTypeNames(st);
+  const bands = st.settings.gradingBands;
+  const body = history.length ? `
+    <div class="ledger"><div class="ledger-scroll"><table class="ledger-table">
+      <thead><tr><th>Year</th><th>Term</th><th>Class</th>${types.map(t => `<th>${UI.esc(t)}</th>`).join('')}<th>Average</th><th>Level</th><th></th></tr></thead>
+      <tbody>${history.map((g, i) => {
+        const avg = Grading.average(g.pcts);
+        const band = avg === null ? Grading.MISSING_BAND : Grading.levelForMarks(avg, 100, bands);
+        const isNow = g.klass === s.klass;
+        return `<tr>
+          <td>${UI.esc(g.year)}</td><td>${UI.esc(g.term)}</td>
+          <td>${UI.esc(g.klass)}${isNow ? ' <span class="row-index">(current)</span>' : ''}</td>
+          ${types.map(t => { const a = Grading.average(g.byType[t] || []); return `<td class="num">${a === null ? '—' : a.toFixed(1) + '%'}</td>`; }).join('')}
+          <td class="num">${avg === null ? '—' : avg.toFixed(1) + '%'}</td>
+          <td>${UI.badge(band)}</td>
+          <td><button class="btn btn-sm" data-hrow="${i}">View report card</button></td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table></div></div>` : `<div class="empty"><div class="empty-title">No results on record yet</div><p>Results appear here once marks are entered for this learner.</p></div>`;
+  UI.openModal(`
+    <span class="modal-wide-marker" style="display:none"></span>
+    <h2>${UI.esc(s.name)} — results history</h2>
+    <p class="field-hint">Currently in <strong>${UI.esc(s.klass)}</strong>. Results from previous classes stay on record after promotion.</p>
+    ${body}
+    <div class="modal-actions"><button class="btn btn-primary" id="histCloseBtn">Close</button></div>
+  `, (root) => {
+    root.querySelector('#histCloseBtn').onclick = () => UI.closeModal();
+    root.querySelectorAll('[data-hrow]').forEach(b => {
+      b.onclick = () => openHistoricReport(st, s, history[Number(b.dataset.hrow)]);
+    });
+  });
+}
+
+function openHistoricReport(st, s, g) {
+  // Same learner, but placed back in the class they were in at the time
+  // so the card reads that class's exams, position and class teacher.
+  const asThen = { ...s, klass: g.klass };
+  UI.openModal(`
+    <span class="modal-wide-marker" style="display:none"></span>
+    <div class="history-reportwrap" id="histReportWrap">${buildReportCardHTML(st, asThen, g.term, String(g.year), '')}</div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="histBackBtn">&larr; Back to history</button>
+      <button class="btn btn-brass" id="histPdfBtn"><i class="fa-solid fa-file-pdf"></i> Download PDF</button>
+    </div>
+  `, (root) => {
+    root.querySelector('#histBackBtn').onclick = () => openLearnerHistory(st, s);
+    root.querySelector('#histPdfBtn').onclick = (e) => {
+      UI.downloadPDF(root.querySelectorAll('#histReportWrap .report-card'), `report-card-${s.name}-${g.klass}-${g.term}-${g.year}`.replace(/\s+/g, '_'), e.currentTarget);
+    };
+  });
+}
+
+
 // Learners of the given class label(s) for a sitting: everyone currently in
 // the class, PLUS learners who have since been promoted/moved but have
 // results in that class's exams. Those extra learners come back as copies
@@ -1417,62 +1475,7 @@ Views.students = async function () {
     };
   }
 
-  // Learner "History": every class/term/year this learner has results in,
-  // including classes they have since been promoted out of. Each row opens
-  // the full report card exactly as it was for that class.
-  function openStudentHistory(s) {
-    const history = studentHistory(st, s.id);
-    const types = Grading.examTypeNames(st);
-    const bands = st.settings.gradingBands;
-    const body = history.length ? `
-      <div class="ledger"><div class="ledger-scroll"><table class="ledger-table">
-        <thead><tr><th>Year</th><th>Term</th><th>Class</th>${types.map(t => `<th>${UI.esc(t)}</th>`).join('')}<th>Average</th><th>Level</th><th></th></tr></thead>
-        <tbody>${history.map((g, i) => {
-          const avg = Grading.average(g.pcts);
-          const band = avg === null ? Grading.MISSING_BAND : Grading.levelForMarks(avg, 100, bands);
-          const isNow = g.klass === s.klass;
-          return `<tr>
-            <td>${UI.esc(g.year)}</td><td>${UI.esc(g.term)}</td>
-            <td>${UI.esc(g.klass)}${isNow ? ' <span class="row-index">(current)</span>' : ''}</td>
-            ${types.map(t => { const a = Grading.average(g.byType[t] || []); return `<td class="num">${a === null ? '—' : a.toFixed(1) + '%'}</td>`; }).join('')}
-            <td class="num">${avg === null ? '—' : avg.toFixed(1) + '%'}</td>
-            <td>${UI.badge(band)}</td>
-            <td><button class="btn btn-sm" data-hrow="${i}">View report card</button></td>
-          </tr>`;
-        }).join('')}</tbody>
-      </table></div></div>` : `<div class="empty"><div class="empty-title">No results on record yet</div><p>Results appear here once marks are entered for this learner.</p></div>`;
-    UI.openModal(`
-      <span class="modal-wide-marker" style="display:none"></span>
-      <h2>${UI.esc(s.name)} — results history</h2>
-      <p class="field-hint">Currently in <strong>${UI.esc(s.klass)}</strong>. Results from previous classes stay on record after promotion.</p>
-      ${body}
-      <div class="modal-actions"><button class="btn btn-primary" id="histCloseBtn">Close</button></div>
-    `, (root) => {
-      root.querySelector('#histCloseBtn').onclick = () => UI.closeModal();
-      root.querySelectorAll('[data-hrow]').forEach(b => {
-        b.onclick = () => openHistoricReport(s, history[Number(b.dataset.hrow)]);
-      });
-    });
-  }
-
-  function openHistoricReport(s, g) {
-    // Same learner, but placed back in the class they were in at the time
-    // so the card reads that class's exams, position and class teacher.
-    const asThen = { ...s, klass: g.klass };
-    UI.openModal(`
-      <span class="modal-wide-marker" style="display:none"></span>
-      <div class="history-reportwrap" id="histReportWrap">${buildReportCardHTML(st, asThen, g.term, String(g.year), '')}</div>
-      <div class="modal-actions">
-        <button class="btn btn-ghost" id="histBackBtn">&larr; Back to history</button>
-        <button class="btn btn-brass" id="histPdfBtn"><i class="fa-solid fa-file-pdf"></i> Download PDF</button>
-      </div>
-    `, (root) => {
-      root.querySelector('#histBackBtn').onclick = () => openStudentHistory(s);
-      root.querySelector('#histPdfBtn').onclick = (e) => {
-        UI.downloadPDF(root.querySelectorAll('#histReportWrap .report-card'), `report-card-${s.name}-${g.klass}-${g.term}-${g.year}`.replace(/\s+/g, '_'), e.currentTarget);
-      };
-    });
-  }
+  const openStudentHistory = (stu) => openLearnerHistory(st, stu);
 
   function wireRowActions() {
     document.querySelectorAll('[data-history]').forEach(btn => {
@@ -3187,6 +3190,9 @@ function renderStudentReportCard(st, scope) {
         ${classPickerOptions(st, classes, '')}
       </select>
       <select id="studentSel"><option value="">Select student</option></select>
+      <select id="recordSel" title="Jump to any of this learner's previous classes / terms / years — their results travel with them after promotion">
+        <option value="">Learner's records…</option>
+      </select>
       <select id="termSel">
         ${['Term 1', 'Term 2', 'Term 3'].map(t => `<option value="${t}" ${st.settings.term === t ? 'selected' : ''}>${t}</option>`).join('')}
       </select>
@@ -3206,6 +3212,7 @@ function renderStudentReportCard(st, scope) {
 
   const classSel = document.getElementById('classSel');
   const studentSel = document.getElementById('studentSel');
+  const recordSel = document.getElementById('recordSel');
   const termSel = document.getElementById('termSel');
   const yearSel = document.getElementById('yearSel');
   const examTypeSel = document.getElementById('examTypeSel');
@@ -3213,46 +3220,84 @@ function renderStudentReportCard(st, scope) {
   const downloadCsvBtn = document.getElementById('downloadCsvBtn');
   const downloadPdfBtn = document.getElementById('downloadPdfBtn');
 
-  // Learners of the chosen class for the chosen term/year — includes
-  // learners who have since been promoted out of it (their old results
-  // are still on record), shown with the class they were in then.
+  // A learner's results belong to the LEARNER, not to the class they were in.
+  // The student list therefore shows who is in the chosen class NOW (so a
+  // learner in "Graduated" or the new "Grade 9" is always findable), plus —
+  // for the chosen term/year — learners who sat this class then but have
+  // since moved on. Their report cards come from their own history.
   let rosterCache = [];
-  function rosterForPick() {
-    const klass = classSel.value;
-    if (!klass) return [];
-    return rosterForSitting(st, klass, termSel.value, yearSel.value).sort((a, b) => a.name.localeCompare(b.name));
-  }
+  const currentOf = (id) => st.students.find(x => x.id === id);
   function refreshStudentList(keepSelection) {
+    const klass = classSel.value;
     const prev = keepSelection ? studentSel.value : '';
-    rosterCache = rosterForPick();
-    studentSel.innerHTML = `<option value="">Select student</option>` + rosterCache.map(s =>
-      `<option value="${s.id}">${UI.esc(s.name)}${s.previousClass ? ' (now in ' + UI.esc((st.students.find(x => x.id === s.id) || {}).klass || '—') + ')' : ''}</option>`).join('');
-    if (prev && rosterCache.some(s => s.id === prev)) studentSel.value = prev;
+    if (!klass) { rosterCache = []; studentSel.innerHTML = `<option value="">Select student</option>`; return; }
+    const now = st.students.filter(x => x.klass === klass).sort((a, b) => a.name.localeCompare(b.name));
+    const nowIds = new Set(now.map(x => x.id));
+    const moved = rosterForSitting(st, klass, termSel.value, yearSel.value).filter(x => x.previousClass && !nowIds.has(x.id)).sort((a, b) => a.name.localeCompare(b.name));
+    rosterCache = now.concat(moved);
+    const opt = (x, suffix) => `<option value="${x.id}">${UI.esc(x.name)}${suffix}</option>`;
+    studentSel.innerHTML = `<option value="">Select student</option>` +
+      (now.length ? `<optgroup label="In ${UI.esc(klass)} now">${now.map(x => opt(x, '')).join('')}</optgroup>` : '') +
+      (moved.length ? `<optgroup label="Sat ${UI.esc(klass)} in ${UI.esc(termSel.value)} ${UI.esc(yearSel.value)} — now elsewhere">${moved.map(x => opt(x, ' (now in ' + UI.esc((currentOf(x.id) || {}).klass || '—') + ')')).join('')}</optgroup>` : '');
+    if (prev && rosterCache.some(x => x.id === prev)) studentSel.value = prev;
+  }
+
+  // Which class was this learner in for that term/year? Taken from where
+  // their marks actually are, so the card always reads the right class's exams.
+  function klassFor(base, term, year) {
+    const g = studentHistory(st, base.id).find(h => h.term === term && String(h.year) === String(year));
+    return g ? g.klass : base.klass;
+  }
+
+  function refreshRecords(base) {
+    recordSel.innerHTML = `<option value="">Learner's records…</option>`;
+    if (!base) return;
+    const hist = studentHistory(st, base.id);
+    recordSel.innerHTML = `<option value="">${hist.length ? 'All records (' + hist.length + ')' : 'No results on record yet'}</option>` +
+      hist.map((g, i) => `<option value="${i}">${UI.esc(g.klass)} · ${UI.esc(g.term)} ${UI.esc(g.year)}${g.klass === base.klass ? ' (current class)' : ''}</option>`).join('');
+    recordSel._hist = hist;
   }
 
   classSel.onchange = () => {
     const klass = classSel.value;
     refreshStudentList(false);
+    refreshRecords(null);
     printAllBtn.disabled = !klass;
     downloadCsvBtn.disabled = !klass;
     downloadPdfBtn.disabled = true; // re-enabled once a report card is actually on screen (single or whole-class)
     document.getElementById('reportWrap').innerHTML = '';
   };
 
-  [termSel, yearSel].forEach(el => el.onchange = () => { refreshStudentList(true); renderReport(); });
-  [studentSel, examTypeSel].forEach(el => el.onchange = renderReport);
+  termSel.onchange = yearSel.onchange = () => { refreshStudentList(true); renderReport(); };
+  examTypeSel.onchange = renderReport;
+  studentSel.onchange = () => {
+    const base = currentOf(studentSel.value);
+    refreshRecords(base);
+    // open straight onto the learner's most recent results
+    const latest = base && recordSel._hist && recordSel._hist[0];
+    if (latest) { termSel.value = latest.term; yearSel.value = latest.year; }
+    renderReport();
+  };
+  recordSel.onchange = () => {
+    const g = recordSel._hist && recordSel._hist[Number(recordSel.value)];
+    if (g) { termSel.value = g.term; yearSel.value = g.year; }
+    renderReport();
+  };
 
   function renderReport() {
     const studentId = studentSel.value;
     if (!studentId) { document.getElementById('reportWrap').innerHTML = ''; downloadPdfBtn.disabled = true; return; }
-    const student = rosterCache.find(s => s.id === studentId) || st.students.find(s => s.id === studentId);
-    if (!student) { document.getElementById('reportWrap').innerHTML = ''; downloadPdfBtn.disabled = true; return; }
+    const base = currentOf(studentId);
+    if (!base) { document.getElementById('reportWrap').innerHTML = ''; downloadPdfBtn.disabled = true; return; }
     const term = termSel.value;
     const year = yearSel.value;
     const examType = examTypeSel.value;
-    document.getElementById('reportWrap').innerHTML = buildReportCardHTML(st, student, term, year, examType);
+    const klass = klassFor(base, term, year);
+    const student = { ...base, klass };
+    const note = klass !== base.klass ? `<p class="field-hint no-print" style="margin-bottom:10px;"><strong>Previous class.</strong> ${UI.esc(base.name)} was in <strong>${UI.esc(klass)}</strong> in ${UI.esc(term)} ${UI.esc(year)} (now in ${UI.esc(base.klass)}). Showing the card as it was then.</p>` : '';
+    document.getElementById('reportWrap').innerHTML = note + buildReportCardHTML(st, student, term, year, examType);
     downloadPdfBtn.disabled = false;
-    downloadPdfBtn.dataset.filename = `report-card-${student.name}-${term}-${year}`.replace(/\s+/g, '_');
+    downloadPdfBtn.dataset.filename = `report-card-${student.name}-${klass}-${term}-${year}`.replace(/\s+/g, '_');
   }
 
   printAllBtn.onclick = () => {
