@@ -22,7 +22,7 @@ Views.analysis = async function () {
     return;
   }
 
-  const classes = classesFromStudents(st.students).filter(levelAllows);
+  const classes = classesWithHistory(st).filter(levelAllows);
   const examTypeNames = Grading.examTypeNames(st);
 
   document.getElementById('content').innerHTML = `
@@ -40,7 +40,7 @@ Views.analysis = async function () {
       .map(e => ({ exam: e, subject: st.subjects.find(s => s.id === e.subjectId) }))
       .filter(c => c.subject)
       .sort((a, b) => a.subject.name.localeCompare(b.subject.name));
-    const students = st.students.filter(s => s.klass === klass).sort((a, b) => a.name.localeCompare(b.name));
+    const students = rosterForSitting(st, klass, term, year, type).sort((a, b) => a.name.localeCompare(b.name));
 
     const studentRows = students.map(stu => {
       const cells = subjectCols.map(col => {

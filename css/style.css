@@ -3287,3 +3287,7 @@ table.ledger-table.sticky-head thead th {
 
 /* Keep school term dates at the bottom of each student report card, above print footer. */
 .report-card > .report-term-dates { margin-top: 18px; margin-bottom: 8px; break-inside: avoid; page-break-inside: avoid; }
+
+/* Wide modal — used by the learner "History" and past report card views */
+.modal:has(.modal-wide-marker) { max-width: 920px; }
+.history-reportwrap { overflow-x: auto; }

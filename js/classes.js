@@ -98,7 +98,7 @@ Views.classes = async function () {
     const targets = allClassOptionLabels(st).filter(label => label !== from.label);
     UI.openModal(`
       <h2>Promote "${UI.esc(from.label)}"</h2>
-      <p class="field-hint">Moves all ${roster.length} learner${roster.length === 1 ? '' : 's'} currently in <strong>${UI.esc(from.label)}</strong> into the class you pick below. Their results and report card history stay linked to them — only their current class changes.</p>
+      <p class="field-hint">Moves all ${roster.length} learner${roster.length === 1 ? '' : 's'} currently in <strong>${UI.esc(from.label)}</strong> into the class you pick below. Their results are kept: past results and report cards stay on record under the class they were sat in, and can be opened from the Students page (History button) or by picking the old class on Reports, Broadsheet and Analysis.</p>
       <div class="form-grid">
         <div class="field full">
           <label>Promote to</label>
@@ -118,7 +118,7 @@ Views.classes = async function () {
         const target = root.querySelector('#f_target').value.trim();
         if (!target) { UI.toast('Pick or type a class to promote into'); return; }
         if (target === from.label) { UI.toast('Pick a different class'); return; }
-        UI.confirmAction(`Move all ${roster.length} learner${roster.length === 1 ? '' : 's'} from "${from.label}" to "${target}"? This cannot be undone in bulk — you'd need to move them back one by one.`, async () => {
+        UI.confirmAction(`Move all ${roster.length} learner${roster.length === 1 ? '' : 's'} from "${from.label}" to "${target}"? Their previous results stay on record and remain viewable under "${from.label}".`, async () => {
           try {
             await Store.promoteStudents(roster.map(s => s.id), target);
             UI.toast(`Promoted ${roster.length} learner${roster.length === 1 ? '' : 's'} to ${target}`);

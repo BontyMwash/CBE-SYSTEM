@@ -24,6 +24,73 @@ function classesFromStudents(students) {
   return [...new Set(students.map(s => s.klass).filter(Boolean))].sort();
 }
 
+/* ---------- Previous-class history (promotion-safe results) ----------
+   Promoting learners only changes students.klass. Exams and results stay
+   attached to the class they were sat in (exams.klass), so nothing is lost
+   — but every screen used to list a class's learners from their CURRENT
+   class only, so once Grade 6 was promoted to Grade 7 the Grade 6 results
+   looked empty. These helpers rebuild "who sat that class's exams" from
+   the results themselves. */
+
+// Every class label that is a current class of some learner OR has exams
+// recorded against it (i.e. former classes that have since been promoted).
+function classesWithHistory(st) {
+  const set = new Set(st.students.map(s => s.klass).filter(Boolean));
+  st.exams.forEach(e => { if (e.klass) set.add(e.klass); });
+  return [...set].sort();
+}
+
+// Learners of the given class label(s) for a sitting: everyone currently in
+// the class, PLUS learners who have since been promoted/moved but have
+// results in that class's exams. Those extra learners come back as copies
+// with klass set to the class they were in at the time (previousClass:true),
+// so report cards, positions, broadsheets etc. read their old class's exams.
+function rosterForLabels(st, labels, term, year, type) {
+  const labelSet = new Set(Array.isArray(labels) ? labels : [labels]);
+  const current = st.students.filter(s => labelSet.has(s.klass));
+  const currentIds = new Set(current.map(s => s.id));
+  const examKlass = new Map();
+  st.exams.forEach(e => {
+    if (!labelSet.has(e.klass)) return;
+    if (term && e.term !== term) return;
+    if (year !== undefined && year !== null && year !== '' && String(e.year) !== String(year)) return;
+    if (type && e.type !== type) return;
+    examKlass.set(e.id, e.klass);
+  });
+  if (!examKlass.size) return current;
+  const byId = new Map(st.students.map(s => [s.id, s]));
+  const past = new Map();
+  st.results.forEach(r => {
+    if (!examKlass.has(r.examId) || currentIds.has(r.studentId) || past.has(r.studentId)) return;
+    const s = byId.get(r.studentId);
+    if (s) past.set(r.studentId, { ...s, klass: examKlass.get(r.examId), previousClass: true });
+  });
+  return current.concat([...past.values()]);
+}
+function rosterForSitting(st, klass, term, year, type) {
+  return rosterForLabels(st, [klass], term, year, type);
+}
+
+// Every class/term/year a learner has results in, newest first — the data
+// behind the "History" button on the Students page.
+function studentHistory(st, studentId) {
+  const examById = new Map(st.exams.map(e => [e.id, e]));
+  const groups = new Map();
+  st.results.forEach(r => {
+    if (r.studentId !== studentId) return;
+    const e = examById.get(r.examId);
+    if (!e) return;
+    const key = `${e.klass}|${e.year}|${e.term}`;
+    if (!groups.has(key)) groups.set(key, { klass: e.klass, year: e.year, term: e.term, pcts: [], byType: {} });
+    const g = groups.get(key);
+    const pct = Grading.percent(r.marks, e.totalMarks);
+    g.pcts.push(pct);
+    (g.byType[e.type] = g.byType[e.type] || []).push(pct);
+  });
+  return [...groups.values()].sort((a, b) =>
+    (b.year - a.year) || b.term.localeCompare(a.term) || a.klass.localeCompare(b.klass));
+}
+
 // Natural/alphanumeric compare for admission numbers ("2025-014" sorts
 // before "2025-100", "9" sorts before "10") — plain localeCompare would
 // sort those lexicographically instead. Students with no admission
@@ -349,8 +416,12 @@ function buildReportCardHTML(st, student, term, year, examType) {
     return ce ? ce.name : s.klass;
   };
   const gradeName = classEntry ? classEntry.name : student.klass;
-  const streamMates = st.students.filter(s => s.klass === student.klass);
-  const gradeMates = st.students.filter(s => gradeNameOf(s) === gradeName);
+  // Classmates are taken from who actually sat this class's exams in this
+  // term/year, so a learner's PREVIOUS class (since promoted) still shows
+  // a correct position out of the original class size.
+  const streamMates = rosterForSitting(st, student.klass, term, year);
+  const gradeLabels = st.classes.filter(c => c.name === gradeName).map(c => c.label);
+  const gradeMates = gradeLabels.length ? rosterForLabels(st, gradeLabels, term, year) : streamMates;
   const streamPos = positionOf(st, student.id, streamMates, term, year, examType, isSingle);
   const showStreamRow = classEntry && classEntry.stream && gradeMates.length !== streamMates.length;
   const classPos = showStreamRow ? positionOf(st, student.id, gradeMates, term, year, examType, isSingle) : streamPos;
@@ -1219,6 +1290,7 @@ Views.students = async function () {
                   <td>${sectionBadge(s)}</td>
                   <td>${UI.esc(s.parentPhone) || UI.esc(s.parentEmail) || '<span class="row-index">—</span>'}</td>
                   <td class="no-print">
+                    <button class="btn btn-sm btn-ghost" data-history="${s.id}" title="See this learner's results in previous classes">History</button>
                     <button class="btn btn-sm btn-ghost" data-edit="${s.id}">Edit</button>
                     <button class="btn btn-sm btn-danger" data-del="${s.id}">Delete</button>
                   </td>
@@ -1266,7 +1338,67 @@ Views.students = async function () {
     };
   }
 
+  // Learner "History": every class/term/year this learner has results in,
+  // including classes they have since been promoted out of. Each row opens
+  // the full report card exactly as it was for that class.
+  function openStudentHistory(s) {
+    const history = studentHistory(st, s.id);
+    const types = Grading.examTypeNames(st);
+    const bands = st.settings.gradingBands;
+    const body = history.length ? `
+      <div class="ledger"><div class="ledger-scroll"><table class="ledger-table">
+        <thead><tr><th>Year</th><th>Term</th><th>Class</th>${types.map(t => `<th>${UI.esc(t)}</th>`).join('')}<th>Average</th><th>Level</th><th></th></tr></thead>
+        <tbody>${history.map((g, i) => {
+          const avg = Grading.average(g.pcts);
+          const band = avg === null ? Grading.MISSING_BAND : Grading.levelForMarks(avg, 100, bands);
+          const isNow = g.klass === s.klass;
+          return `<tr>
+            <td>${UI.esc(g.year)}</td><td>${UI.esc(g.term)}</td>
+            <td>${UI.esc(g.klass)}${isNow ? ' <span class="row-index">(current)</span>' : ''}</td>
+            ${types.map(t => { const a = Grading.average(g.byType[t] || []); return `<td class="num">${a === null ? '—' : a.toFixed(1) + '%'}</td>`; }).join('')}
+            <td class="num">${avg === null ? '—' : avg.toFixed(1) + '%'}</td>
+            <td>${UI.badge(band)}</td>
+            <td><button class="btn btn-sm" data-hrow="${i}">View report card</button></td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div></div>` : `<div class="empty"><div class="empty-title">No results on record yet</div><p>Results appear here once marks are entered for this learner.</p></div>`;
+    UI.openModal(`
+      <span class="modal-wide-marker" style="display:none"></span>
+      <h2>${UI.esc(s.name)} — results history</h2>
+      <p class="field-hint">Currently in <strong>${UI.esc(s.klass)}</strong>. Results from previous classes stay on record after promotion.</p>
+      ${body}
+      <div class="modal-actions"><button class="btn btn-primary" id="histCloseBtn">Close</button></div>
+    `, (root) => {
+      root.querySelector('#histCloseBtn').onclick = () => UI.closeModal();
+      root.querySelectorAll('[data-hrow]').forEach(b => {
+        b.onclick = () => openHistoricReport(s, history[Number(b.dataset.hrow)]);
+      });
+    });
+  }
+
+  function openHistoricReport(s, g) {
+    // Same learner, but placed back in the class they were in at the time
+    // so the card reads that class's exams, position and class teacher.
+    const asThen = { ...s, klass: g.klass };
+    UI.openModal(`
+      <span class="modal-wide-marker" style="display:none"></span>
+      <div class="history-reportwrap" id="histReportWrap">${buildReportCardHTML(st, asThen, g.term, String(g.year), '')}</div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="histBackBtn">&larr; Back to history</button>
+        <button class="btn btn-brass" id="histPdfBtn"><i class="fa-solid fa-file-pdf"></i> Download PDF</button>
+      </div>
+    `, (root) => {
+      root.querySelector('#histBackBtn').onclick = () => openStudentHistory(s);
+      root.querySelector('#histPdfBtn').onclick = (e) => {
+        UI.downloadPDF(root.querySelectorAll('#histReportWrap .report-card'), `report-card-${s.name}-${g.klass}-${g.term}-${g.year}`.replace(/\s+/g, '_'), e.currentTarget);
+      };
+    });
+  }
+
   function wireRowActions() {
+    document.querySelectorAll('[data-history]').forEach(btn => {
+      btn.onclick = () => openStudentHistory(st.students.find(s => s.id === btn.dataset.history));
+    });
     document.querySelectorAll('[data-edit]').forEach(btn => {
       btn.onclick = () => openStudentForm(st.students.find(s => s.id === btn.dataset.edit));
     });
@@ -2953,7 +3085,7 @@ Views.reports = async function (mode) {
 
 /* ---- Mode: merged term report card (Opener + Midterm + Endterm per subject) ---- */
 function renderStudentReportCard(st, scope) {
-  const classes = scope && scope.isTeacher ? [...scope.classLabels].sort() : classesFromStudents(st.students).filter(levelAllows);
+  const classes = scope && scope.isTeacher ? [...scope.classLabels].sort() : classesWithHistory(st).filter(levelAllows);
 
   const html = `
     <div class="filter-row no-print">
@@ -2988,22 +3120,40 @@ function renderStudentReportCard(st, scope) {
   const downloadCsvBtn = document.getElementById('downloadCsvBtn');
   const downloadPdfBtn = document.getElementById('downloadPdfBtn');
 
+  // Learners of the chosen class for the chosen term/year — includes
+  // learners who have since been promoted out of it (their old results
+  // are still on record), shown with the class they were in then.
+  let rosterCache = [];
+  function rosterForPick() {
+    const klass = classSel.value;
+    if (!klass) return [];
+    return rosterForSitting(st, klass, termSel.value, yearSel.value).sort((a, b) => a.name.localeCompare(b.name));
+  }
+  function refreshStudentList(keepSelection) {
+    const prev = keepSelection ? studentSel.value : '';
+    rosterCache = rosterForPick();
+    studentSel.innerHTML = `<option value="">Select student</option>` + rosterCache.map(s =>
+      `<option value="${s.id}">${UI.esc(s.name)}${s.previousClass ? ' (now in ' + UI.esc((st.students.find(x => x.id === s.id) || {}).klass || '—') + ')' : ''}</option>`).join('');
+    if (prev && rosterCache.some(s => s.id === prev)) studentSel.value = prev;
+  }
+
   classSel.onchange = () => {
     const klass = classSel.value;
-    const students = st.students.filter(s => s.klass === klass).sort((a, b) => a.name.localeCompare(b.name));
-    studentSel.innerHTML = `<option value="">Select student</option>` + students.map(s => `<option value="${s.id}">${UI.esc(s.name)}</option>`).join('');
+    refreshStudentList(false);
     printAllBtn.disabled = !klass;
     downloadCsvBtn.disabled = !klass;
     downloadPdfBtn.disabled = true; // re-enabled once a report card is actually on screen (single or whole-class)
     document.getElementById('reportWrap').innerHTML = '';
   };
 
-  [studentSel, termSel, yearSel, examTypeSel].forEach(el => el.onchange = renderReport);
+  [termSel, yearSel].forEach(el => el.onchange = () => { refreshStudentList(true); renderReport(); });
+  [studentSel, examTypeSel].forEach(el => el.onchange = renderReport);
 
   function renderReport() {
     const studentId = studentSel.value;
     if (!studentId) { document.getElementById('reportWrap').innerHTML = ''; downloadPdfBtn.disabled = true; return; }
-    const student = st.students.find(s => s.id === studentId);
+    const student = rosterCache.find(s => s.id === studentId) || st.students.find(s => s.id === studentId);
+    if (!student) { document.getElementById('reportWrap').innerHTML = ''; downloadPdfBtn.disabled = true; return; }
     const term = termSel.value;
     const year = yearSel.value;
     const examType = examTypeSel.value;
@@ -3018,7 +3168,7 @@ function renderStudentReportCard(st, scope) {
     const term = termSel.value;
     const year = yearSel.value;
     const examType = examTypeSel.value;
-    const students = st.students.filter(s => s.klass === klass).sort((a, b) => a.name.localeCompare(b.name));
+    const students = rosterForSitting(st, klass, term, year).sort((a, b) => a.name.localeCompare(b.name));
     if (students.length === 0) { UI.toast('No students in this class'); return; }
     studentSel.value = '';
     document.getElementById('reportWrap').innerHTML =
@@ -3040,7 +3190,7 @@ function renderStudentReportCard(st, scope) {
     const term = termSel.value;
     const year = yearSel.value;
     const examType = examTypeSel.value;
-    const students = st.students.filter(s => s.klass === klass).sort((a, b) => a.name.localeCompare(b.name));
+    const students = rosterForSitting(st, klass, term, year).sort((a, b) => a.name.localeCompare(b.name));
     if (students.length === 0) { UI.toast('No students in this class'); return; }
     const allTypeNames = Grading.examTypeNames(st);
     const isSingle = !!examType;
@@ -3121,7 +3271,7 @@ function renderSingleExamReport(st, scope) {
   function buildExamReportHTML(examId) {
     const exam = st.exams.find(e => e.id === examId);
     if (!exam) return '';
-    const students = st.students.filter(s => s.klass === exam.klass).sort((a, b) => a.name.localeCompare(b.name));
+    const students = rosterForSitting(st, exam.klass, exam.term, exam.year, exam.type).sort((a, b) => a.name.localeCompare(b.name));
     const rows = students.map(s => {
       const res = st.results.find(r => r.examId === exam.id && r.studentId === s.id) || null;
       const pct = res ? Grading.percent(res.marks, exam.totalMarks) : null;
@@ -3208,7 +3358,7 @@ function renderSingleExamReport(st, scope) {
     document.getElementById('esCsvBtn').onclick = () => {
       const exam = st.exams.find(e => e.id === selectedId);
       if (!exam) return;
-      const students = st.students.filter(s => s.klass === exam.klass).sort((a, b) => a.name.localeCompare(b.name));
+      const students = rosterForSitting(st, exam.klass, exam.term, exam.year, exam.type).sort((a, b) => a.name.localeCompare(b.name));
       const header = ['Name', 'Admission No.', 'Marks', 'Out of', 'Percentage', 'Level'];
       const rows = students.map(s => {
         const res = st.results.find(r => r.examId === exam.id && r.studentId === s.id) || null;
@@ -3258,7 +3408,7 @@ function renderClassPerformanceReport(st, scope) {
     return;
   }
 
-  const classes = scope && scope.isTeacher ? [...scope.classLabels].sort() : classOptionLabels(st);
+  const classes = scope && scope.isTeacher ? [...scope.classLabels].sort() : [...new Set([...classOptionLabels(st), ...classesWithHistory(st).filter(levelAllows)])].sort();
   let picked = { term: st.settings.term, year: String(st.settings.year), type: '' };
 
   function renderFilterRow() {
@@ -3283,7 +3433,7 @@ function renderClassPerformanceReport(st, scope) {
   function computeClassStats() {
     const bands = st.settings.gradingBands || [];
     return classes.map(klass => {
-      const studentsInClass = st.students.filter(s => s.klass === klass);
+      const studentsInClass = rosterForSitting(st, klass, picked.term, picked.year, picked.type);
       const examsForClass = st.exams.filter(e =>
         e.klass === klass && e.term === picked.term && String(e.year) === picked.year &&
         (picked.type === '' || e.type === picked.type)

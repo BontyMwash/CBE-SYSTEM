@@ -120,7 +120,7 @@ Views.broadsheet = async function () {
     return;
   }
 
-  const classes = scope.isTeacher ? [...scope.classLabels].sort() : classesFromStudents(st.students).filter(levelAllows);
+  const classes = scope.isTeacher ? [...scope.classLabels].sort() : classesWithHistory(st).filter(levelAllows);
 
   document.getElementById('content').innerHTML = `
     <div class="filter-row no-print">
@@ -275,7 +275,7 @@ Views.broadsheet = async function () {
       }))
       .sort((a, b) => a.subject.name.localeCompare(b.subject.name));
 
-    const students = st.students.filter(s => targetLabels.includes(s.klass)).sort((a, b) => a.name.localeCompare(b.name));
+    const students = rosterForLabels(st, targetLabels, term, year, type).sort((a, b) => a.name.localeCompare(b.name));
 
     // Resolve the exam PER LEARNER, not once per subject/stream.  This is
     // critical for existing Grade 6 data: Agriculture, English and Science
@@ -449,7 +449,7 @@ Views.broadsheet = async function () {
     const streamStats = streamLabels.map(label => {
       const streamExams = st.exams.filter(e => e.klass === label && e.type === type && e.term === term && String(e.year) === String(year));
       const streamCols = streamExams.map(e => ({ exam: e, subject: st.subjects.find(s => s.id === e.subjectId) })).filter(c => c.subject);
-      const streamStudents = st.students.filter(s => s.klass === label);
+      const streamStudents = rosterForSitting(st, label, term, year, type);
       const means = streamStudents.map(stu => {
         const pcts = streamCols.map(col => {
           const res = st.results.find(r => r.examId === col.exam.id && r.studentId === stu.id);
@@ -484,7 +484,7 @@ Views.broadsheet = async function () {
     // band for this sitting (computed from THEIR OWN class's matching
     // exams, since streams can carry different subjects) — MISSING_BAND
     // (Z) stands in for no marks entered at all for the sitting.
-    const gradeStudents = st.students.filter(s => streamLabels.includes(s.klass));
+    const gradeStudents = rosterForLabels(st, streamLabels, term, year, type);
     const studentBand = new Map();
     gradeStudents.forEach(stu => {
       const classExams = st.exams.filter(e => e.klass === stu.klass && e.type === type && e.term === term && String(e.year) === String(year));

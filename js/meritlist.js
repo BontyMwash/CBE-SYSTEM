@@ -94,7 +94,7 @@ Views.meritList = async function () {
       classLabels = classOptionLabels(st);
     }
 
-    const candidates = st.students.filter(s => classLabels.includes(s.klass));
+    const candidates = rosterForLabels(st, classLabels, term, year, type);
 
     const rows = candidates.map(stu => {
       const exams = st.exams.filter(e => e.klass === stu.klass && e.type === type && e.term === term && String(e.year) === String(year));
