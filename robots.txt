@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+
+# Internal files that don't need to appear in search results
+Disallow: /sql/
+Disallow: /supabase/
+Disallow: /android-gateway/
+
+Sitemap: https://bcbe.co.ke/sitemap.xml

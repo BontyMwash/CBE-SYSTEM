@@ -10,7 +10,7 @@
 // have the app installed — without it, the cache-first fetch strategy below
 // keeps serving the OLD file indefinitely (this is why a shipped fix can
 // look like it "didn't take" until this number changes).
-const CACHE_VERSION = 'v32';
+const CACHE_VERSION = 'v33';
 const CACHE_NAME = `cbe-shell-${CACHE_VERSION}`;
 
 const APP_SHELL = [
@@ -19,6 +19,7 @@ const APP_SHELL = [
   './offline.html',
   './manifest.json',
   './css/style.css',
+  './js/guard.js',
   './js/supabaseClient.js',
   './js/data.js',
   './js/grading.js',
@@ -29,8 +30,10 @@ const APP_SHELL = [
   './js/classes.js',
   './js/auth-views.js',
   './js/broadsheet.js',
+  './js/meritlist.js',
   './js/analysis.js',
   './js/notify.js',
+  './js/sms.js',
   './js/teacher.js',
   './js/attendance.js',
   './js/app.js',
