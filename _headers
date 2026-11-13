@@ -1,0 +1,12 @@
+# Same speed settings for Netlify / Cloudflare Pages style hosts
+# (ignored by Apache/cPanel — see .htaccess for that).
+/*.html
+  Cache-Control: no-cache
+/*.js
+  Cache-Control: no-cache
+/*.css
+  Cache-Control: no-cache
+/*.json
+  Cache-Control: no-cache
+/icons/*
+  Cache-Control: public, max-age=2592000

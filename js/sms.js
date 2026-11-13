@@ -536,7 +536,7 @@ Views.sms = async function () {
     // {position} {class_size} {subjects} {strengths} {improvement_areas}
     // resolve here too once a sitting is picked above. ----
     function computeSittingResults(klass, type, term, year) {
-      const exams = st.exams.filter(e => e.klass === klass && e.type === type && e.term === term && String(e.year) === String(year));
+      const exams = st.exams.filter(e => klassKey(e.klass) === klassKey(klass) && e.type === type && e.term === term && String(e.year) === String(year));
       const subjectCols = exams.map(e => ({ exam: e, subject: st.subjects.find(s => s.id === e.subjectId) })).filter(c => c.subject);
       // learners who sat this class's exams — includes those since promoted
       const students = rosterForSitting(st, klass, term, year, type);
@@ -593,19 +593,19 @@ Views.sms = async function () {
     // simply left as literal {tags} in the preview so it's obvious
     // they weren't filled in.
     let resultsMap = new Map();
-    function recomputeResultsMap() {
-      resultsMap = new Map();
-      const sittingId = document.getElementById('smsSittingSel').value;
-      if (!sittingId) return;
-      const group = sittingGroups.get(sittingId);
-      if (!group) return;
+    const groupMapCache = new Map();
+    // studentId -> result placeholder values for ONE sitting group (exam type +
+    // term + year), taken from each learner's own published class.
+    function buildMapForGroup(group) {
+      if (groupMapCache.has(group.key)) return groupMapCache.get(group.key);
+      const map = new Map();
       publishedSorted
         .filter(p => p.type === group.type && p.term === group.term && String(p.year) === String(group.year))
         .forEach(chosen => {
           computeSittingResults(chosen.klass, chosen.type, chosen.term, chosen.year).forEach(r => {
-            if (resultsMap.has(r.student.id)) return;
+            if (map.has(r.student.id)) return;
             const si = strengthsAndImprovements(r.subjectPcts);
-            resultsMap.set(r.student.id, {
+            map.set(r.student.id, {
               sitting: chosen.type, term: chosen.term, academic_year: chosen.year,
               average: r.avg === null ? 'N/A' : r.avg.toFixed(1),
               level: r.avg === null ? 'not yet graded' : r.band.label,
@@ -617,9 +617,31 @@ Views.sms = async function () {
             });
           });
         });
+      groupMapCache.set(group.key, map);
+      return map;
+    }
+    function recomputeResultsMap() {
+      const group = sittingGroups.get(document.getElementById('smsSittingSel').value);
+      resultsMap = group ? buildMapForGroup(group) : new Map();
+    }
+    // Until the admin picks a sitting themselves, quietly choose the published
+    // sitting that actually covers the chosen recipients (the newest one may
+    // belong to other classes). Returns true if it switched.
+    let userPickedSitting = false;
+    function autoPickSitting(recipients) {
+      if (userPickedSitting || sittingList.length < 2) return false;
+      const ids = recipients.filter(r => r.studentId && r.normalizedPhone).map(r => r.studentId);
+      if (!ids.length) return false;
+      const sel = document.getElementById('smsSittingSel');
+      const covered = (g) => { const m = buildMapForGroup(g); return ids.filter(id => m.has(id)).length; };
+      const current = sittingGroups.get(sel.value);
+      let best = current, bestCount = current ? covered(current) : -1;
+      sittingList.forEach(g => { const c = covered(g); if (c > bestCount) { best = g; bestCount = c; } });
+      if (best && (!current || best.key !== current.key)) { sel.value = best.key; recomputeResultsMap(); return true; }
+      return false;
     }
     recomputeResultsMap();
-    document.getElementById('smsSittingSel').onchange = () => { recomputeResultsMap(); refreshPreview(); };
+    document.getElementById('smsSittingSel').onchange = () => { userPickedSitting = true; recomputeResultsMap(); refreshPreview(); };
 
     function placeholderCtx(student, studentId) {
       const base = {
@@ -688,8 +710,24 @@ Views.sms = async function () {
       return UI.esc(message).replace(/\{(\w+)\}/g, '<mark style="background:var(--danger-bg); color:var(--ledger-red); padding:0 3px; border-radius:3px;">{$1}</mark>');
     }
 
+    // Says exactly WHY a learner's result fields couldn't be filled in.
+    function whyUnfilled(r) {
+      const stu = r.student;
+      if (!r.studentId || !stu) return 'a typed-in phone number has no learner, so result figures cannot be filled in for it';
+      const sel = document.getElementById('smsSittingSel');
+      const group = sittingGroups.get(sel.value);
+      if (!group) return 'no Results sitting is selected';
+      const label = `${group.type} · ${group.term} ${group.year}`;
+      const mine = st.published.filter(p => klassKey(p.klass) === klassKey(stu.klass));
+      if (!mine.length) return `${stu.klass} has no published results at all — publish it on the Marks Analysis page`;
+      const sameGroup = mine.some(p => p.type === group.type && p.term === group.term && String(p.year) === String(group.year));
+      if (!sameGroup) return `${stu.klass} has published ${mine.map(p => `${p.type} · ${p.term} ${p.year}`).join(', ')} but not ${label} — choose one of those in "Results sitting"`;
+      return `${stu.klass} has published ${label}, but ${stu.name} has no marks recorded in it`;
+    }
+
     function refreshPreview() {
-      const recipients = currentRecipients();
+      let recipients = currentRecipients();
+      if (autoPickSitting(recipients)) recipients = currentRecipients();
       const valid = recipients.filter(r => r.normalizedPhone);
       const invalid = recipients.length - valid.length;
       document.getElementById('smsRecipientCount').textContent = `${valid.length}${invalid ? ` (${invalid} invalid number${invalid === 1 ? '' : 's'} will be skipped)` : ''}`;
@@ -704,7 +742,10 @@ Views.sms = async function () {
       const { tokens, affected } = unresolvedPlaceholders(valid);
       if (tokens.length) {
         warnEl.style.display = '';
-        warnEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> ${tokens.map(t => UI.esc(t)).join(', ')} will go out as literal text (not filled in) for ${affected} of ${valid.length} recipient${valid.length === 1 ? '' : 's'} — pick a "Results sitting" above to fill result placeholders, or remove them from the message.`;
+        const unfilled = valid.filter(r => /\{\w+\}/.test(r.message));
+        const reasons = [...new Set(unfilled.map(r => whyUnfilled(r)))].slice(0, 4);
+        const sample = unfilled.slice(0, 3).map(r => `${UI.esc(r.student ? r.student.name : r.phone)}`).join(', ');
+        warnEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> ${tokens.map(t => UI.esc(t)).join(', ')} will go out as literal text (not filled in) for ${affected} of ${valid.length} recipient${valid.length === 1 ? '' : 's'}.<br><strong>Why:</strong> ${reasons.map(x => UI.esc(x)).join('; ')}.${sample ? `<br><span class="field-hint">e.g. ${sample}${unfilled.length > 3 ? '…' : ''}</span>` : ''}`;
       } else {
         warnEl.style.display = 'none';
         warnEl.innerHTML = '';

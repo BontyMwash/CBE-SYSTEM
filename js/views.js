@@ -122,70 +122,93 @@ function openHistoricReport(st, s, g) {
 // with klass set to the class they were in at the time (previousClass:true),
 // so report cards, positions, broadsheets etc. read their old class's exams.
 
-// Which classes each learner has marks in, per term+year (cached while the
-// results/exams arrays are unchanged). This is how we tell, for a past
-// sitting, that a learner currently in "Grade 9" was really in "Grade 8"
-// at the time: their marks that term sit in Grade 8's exams.
-function termYearKlassIndex(st) {
-  const c = st._tyIndex;
-  if (c && c.r === st.results && c.rl === st.results.length && c.e === st.exams && c.el === st.exams.length) return c.index;
+// One-time lookup tables for the roster helpers below, rebuilt only when the
+// underlying arrays change. Without these, every roster call re-scanned every
+// result and every student, which made the Exams page and "print whole class"
+// slow on big schools.
+function stIndex(st) {
+  const c = st._idx;
+  if (c && c.r === st.results && c.rl === st.results.length && c.e === st.exams && c.el === st.exams.length && c.s === st.students && c.sl === st.students.length) return c;
+  const studentById = new Map(st.students.map(s => [s.id, s]));
+  const membersByKey = new Map();          // klassKey -> [student]
+  st.students.forEach(s => {
+    const k = klassKey(s.klass);
+    if (!membersByKey.has(k)) membersByKey.set(k, []);
+    membersByKey.get(k).push(s);
+  });
+  const resultIdsByExam = new Map();       // examId -> [studentId]
   const examById = new Map(st.exams.map(e => [e.id, e]));
-  const index = new Map();
+  const tyKlasses = new Map();             // "term|year" -> Map(studentId -> Set(klass))
   st.results.forEach(r => {
+    if (!resultIdsByExam.has(r.examId)) resultIdsByExam.set(r.examId, []);
+    resultIdsByExam.get(r.examId).push(r.studentId);
     const e = examById.get(r.examId);
     if (!e) return;
     const key = `${e.term}|${e.year}`;
-    if (!index.has(key)) index.set(key, new Map());
-    const m = index.get(key);
+    if (!tyKlasses.has(key)) tyKlasses.set(key, new Map());
+    const m = tyKlasses.get(key);
     if (!m.has(r.studentId)) m.set(r.studentId, new Set());
     m.get(r.studentId).add(e.klass);
   });
-  st._tyIndex = { r: st.results, rl: st.results.length, e: st.exams, el: st.exams.length, index };
-  return index;
+  const idx = { r: st.results, rl: st.results.length, e: st.exams, el: st.exams.length, s: st.students, sl: st.students.length,
+                studentById, membersByKey, resultIdsByExam, tyKlasses };
+  st._idx = idx;
+  return idx;
 }
+function termYearKlassIndex(st) { return stIndex(st).tyKlasses; }
+
+// Class names are typed by hand, so "Grade 9 South", "GRADE 9 SOUTH" and
+// "Grade 9  South " must count as the same class when matching results to
+// learners.
+function klassKey(label) { return String(label || '').trim().replace(/\s+/g, ' ').toLowerCase(); }
 
 // Learners currently in the class label(s) who really belong to that class
 // for this term/year: not ruled out by having marks only in a DIFFERENT class
 // that term (e.g. promoted Grade 8 -> 9 learners are not part of Grade 9's
 // earlier-term sitting, which belongs to the old Grade 9 who have graduated).
 function currentMembersForSitting(st, labelSet, term, year) {
-  const members = st.students.filter(s => labelSet.has(s.klass));
+  const idx = stIndex(st);
+  const keys = new Set([...labelSet].map(klassKey));
+  let members = [];
+  keys.forEach(k => { members = members.concat(idx.membersByKey.get(k) || []); });
   if (!term || year === undefined || year === null || year === '') return members;
-  const m = termYearKlassIndex(st).get(`${term}|${year}`);
+  const m = idx.tyKlasses.get(`${term}|${year}`);
   if (!m) return members;
   return members.filter(s => {
     const ks = m.get(s.id);
     if (!ks) return true;                       // nothing recorded that term: pending, keep
-    for (const k of ks) if (labelSet.has(k)) return true;
+    for (const k of ks) if (keys.has(klassKey(k))) return true;
     return false;                               // marks only in another class: was elsewhere then
   });
 }
 
 function rosterForLabels(st, labels, term, year, type) {
-  const labelSet = new Set(Array.isArray(labels) ? labels : [labels]);
+  const labelSet = new Set((Array.isArray(labels) ? labels : [labels]).map(klassKey));
+  const idx = stIndex(st);
   const current = currentMembersForSitting(st, labelSet, term, year);
   const currentIds = new Set(current.map(s => s.id));
   const examKlass = new Map();
   st.exams.forEach(e => {
-    if (!labelSet.has(e.klass)) return;
+    if (!labelSet.has(klassKey(e.klass))) return;
     if (term && e.term !== term) return;
     if (year !== undefined && year !== null && year !== '' && String(e.year) !== String(year)) return;
     if (type && e.type !== type) return;
     examKlass.set(e.id, e.klass);
   });
   if (!examKlass.size) return current;
-  const byId = new Map(st.students.map(s => [s.id, s]));
   const past = new Map();
-  st.results.forEach(r => {
-    if (!examKlass.has(r.examId) || currentIds.has(r.studentId) || past.has(r.studentId)) return;
-    const s = byId.get(r.studentId);
-    if (s) past.set(r.studentId, { ...s, klass: examKlass.get(r.examId), previousClass: true });
+  const sat = new Set();
+  examKlass.forEach((klass, examId) => {
+    (idx.resultIdsByExam.get(examId) || []).forEach(sid => {
+      sat.add(sid);
+      if (currentIds.has(sid) || past.has(sid)) return;
+      const stu = idx.studentById.get(sid);
+      if (stu) past.set(sid, { ...stu, klass, previousClass: true });
+    });
   });
   // If most of the learners who sat this sitting have since left the class
   // (e.g. the whole old Grade 9 graduated), it is an ARCHIVED sitting: show only
   // those who sat it, not whoever happens to sit in the class label today.
-  const sat = new Set();
-  st.results.forEach(r => { if (examKlass.has(r.examId)) sat.add(r.studentId); });
   const currentWhoSat = current.filter(s => sat.has(s.id));
   if (past.size > currentWhoSat.length) return currentWhoSat.concat([...past.values()]);
   return current.concat([...past.values()]);

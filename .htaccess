@@ -1,0 +1,33 @@
+# ------------------------------------------------------------
+# Speed settings for Apache / cPanel hosting (bcbe.co.ke).
+# GitHub Pages did all of this automatically; a normal web host
+# usually does NOT, which is the most common reason a site feels
+# slower after moving off GitHub Pages. Safe to leave in place —
+# every block is skipped if the server module isn't available.
+# ------------------------------------------------------------
+
+# 1) Compress text files (the app's JS/CSS is ~800 KB raw, ~200 KB gzipped)
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/css text/plain text/xml
+  AddOutputFilterByType DEFLATE application/javascript text/javascript application/json
+  AddOutputFilterByType DEFLATE application/manifest+json image/svg+xml
+</IfModule>
+<IfModule mod_brotli.c>
+  AddOutputFilterByType BROTLI_COMPRESS text/html text/css text/plain text/xml
+  AddOutputFilterByType BROTLI_COMPRESS application/javascript text/javascript application/json
+  AddOutputFilterByType BROTLI_COMPRESS application/manifest+json image/svg+xml
+</IfModule>
+
+# 2) Caching. Code files: always re-check with the server (a quick "304 not
+#    modified" when unchanged) so updates show up straight away. Images/fonts
+#    rarely change, so the browser may keep them for 30 days.
+<IfModule mod_headers.c>
+  <FilesMatch "\.(html|js|css|json|webmanifest)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+  <FilesMatch "\.(png|jpg|jpeg|gif|svg|ico|webp|woff|woff2)$">
+    Header set Cache-Control "public, max-age=2592000"
+  </FilesMatch>
+</IfModule>
+
+AddType application/manifest+json .webmanifest
