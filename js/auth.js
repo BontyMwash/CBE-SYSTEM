@@ -20,8 +20,11 @@ const Auth = {
     admin: [
       'dashboard', 'classes', 'students', 'subjects', 'exams', 'results', 'gradebook',
       'reports', 'attendance', 'competency', 'broadsheet', 'meritList', 'analysis',
-      'notify', 'sms', 'users', 'settings', 'diagnostics'
+      'sms', 'users', 'settings', 'diagnostics'
+      // 'notify' (Send Results to Parents) is hidden from admins for now — only
+      // the superadmin gets it (see SUPERADMIN_EXTRA_ROUTES / allowedRoutes).
     ],
+    SUPERADMIN_EXTRA_ROUTES: ['notify'],
     // Teacher section — kept in this order because it's the order the
     // sidebar is meant to walk a teacher through their day:
     // Dashboard -> My Classes -> Learners -> Marks Entry -> Marks
@@ -144,7 +147,7 @@ const Auth = {
     const user = this._profile;
     if (!user) return [];
     if (user.role === 'superadmin') {
-      return this.isViewingSchool() ? [...this.ROLE_ROUTES.admin, 'schools'] : ['schools'];
+      return this.isViewingSchool() ? [...this.ROLE_ROUTES.admin, ...this.ROLE_ROUTES.SUPERADMIN_EXTRA_ROUTES, 'schools'] : ['schools'];
     }
     if (user.role === 'user') {
       return user.isClassTeacher

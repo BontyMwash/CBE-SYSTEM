@@ -190,9 +190,12 @@ const SmsStore = {
     }).select().single();
     Store._throwIfError('createCampaign', cErr);
 
+    const cfg = await SmsStore.settings(schoolId);
+    const maxAttempts = Math.max(1, Math.min(Number(cfg.max_retry_attempts) || 3, 10));
     const rows = recipients.map((r, i) => ({
       school_id: schoolId,
       campaign_id: campaign.id,
+      max_attempts: maxAttempts,
       device_id: (deviceIds && deviceIds.length) ? deviceIds[i % deviceIds.length] : null,
       student_id: r.studentId || null,
       phone_number: r.phone,
@@ -369,11 +372,26 @@ Views.sms = async function () {
   async function renderCompose() {
     const [templates, devices, settings] = await Promise.all([SmsStore.templates(schoolId), SmsStore.devices(schoolId), SmsStore.settings(schoolId)]);
     const classLabels = classOptionLabels(st);
-    const onlineDevices = devices.filter(d => d.status !== 'disabled');
+    // Only phones that have actually been paired can receive messages. A
+    // device still at 'pending' (a pair code that was never entered on a phone)
+    // used to be counted here, so messages were assigned to a phone that
+    // would never poll and never went out.
+    const onlineDevices = devices.filter(d => d.status === 'online' || d.status === 'offline');
     // Published sittings, newest first — same source "Send Results to
     // Parents" (notify.js) uses, so a template built there drops in
     // here unchanged once the matching sitting is selected below.
     const publishedSorted = [...st.published].filter(p => levelAllows(p.klass)).sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+    // One choice per exam type + term + year (e.g. "Endterm · Term 2 2026"),
+    // covering every published class. Each learner's result fields come from
+    // THEIR class's sitting, so an "All parents" campaign fills in for everyone
+    // instead of only the one class the sitting happened to belong to.
+    const sittingGroups = new Map();
+    publishedSorted.forEach(p => {
+      const k = `${p.type}|${p.term}|${p.year}`;
+      if (!sittingGroups.has(k)) sittingGroups.set(k, { key: k, type: p.type, term: p.term, year: p.year, klasses: [] });
+      sittingGroups.get(k).klasses.push(p.klass);
+    });
+    const sittingList = [...sittingGroups.values()];
 
     document.getElementById('smsBody').innerHTML = `
       <div class="card">
@@ -417,9 +435,9 @@ Views.sms = async function () {
             <label>Results sitting (optional — fills in result placeholders)</label>
             <select id="smsSittingSel">
               <option value="">— none — (only the placeholders below will work)</option>
-              ${publishedSorted.map((p, i) => `<option value="${p.id}" ${i === 0 ? 'selected' : ''}>${UI.esc(p.klass)} · ${UI.esc(p.type)} · ${UI.esc(p.term)} ${UI.esc(String(p.year))}</option>`).join('')}
+              ${sittingList.map((g, i) => `<option value="${UI.esc(g.key)}" ${i === 0 ? 'selected' : ''}>${UI.esc(g.type)} · ${UI.esc(g.term)} ${UI.esc(String(g.year))} — ${g.klasses.length} class${g.klasses.length === 1 ? '' : 'es'} published</option>`).join('')}
             </select>
-            <p class="field-hint" style="margin-top:2px;">Pick a published sitting to use {sitting}, {term}, {academic_year}, {position}, {class_size}, {subjects}, {strengths} and {improvement_areas} — a recipient outside that sitting's class will get those left blank in their message.${publishedSorted.length ? ' Defaults to the most recently published sitting.' : ''}</p>
+            <p class="field-hint" style="margin-top:2px;">Pick a published sitting to fill {average}, {level}, {sitting}, {term}, {academic_year}, {position}, {class_size}, {subjects}, {strengths} and {improvement_areas}. Each learner gets the figures from their own class's published results for that sitting; a learner whose class hasn't published it is flagged below.${sittingList.length ? ' Defaults to the most recently published sitting.' : ' Nothing is published yet — publish a sitting on the Analysis page first.'}</p>
           </div>
           <div class="field full">
             <label>Message</label>
@@ -446,7 +464,7 @@ Views.sms = async function () {
         <div class="modal-actions" style="justify-content:flex-start;">
           <button class="btn btn-primary" id="smsSendBtn"><i class="fa-solid fa-paper-plane"></i> Send Bulk SMS</button>
         </div>
-        ${onlineDevices.filter(SmsUtil.isOnline).length === 0 ? `<p class="field-hint" style="color:var(--ledger-red);"><i class="fa-solid fa-triangle-exclamation"></i> No SMS gateway is currently online — messages will still be queued and sent once a paired phone comes back online.</p>` : ''}
+        ${onlineDevices.length === 0 ? `<p class="field-hint" style="color:var(--ledger-red);"><i class="fa-solid fa-triangle-exclamation"></i> No phone is paired yet. Go to <strong>Gateway Devices → Pair a phone</strong>. Messages you queue now will wait and be sent as soon as a phone is paired and started.</p>` : (onlineDevices.filter(SmsUtil.isOnline).length === 0 ? `<p class="field-hint" style="color:var(--ledger-red);"><i class="fa-solid fa-triangle-exclamation"></i> No SMS gateway is currently online — open the CBE SMS Gateway app on the paired phone and tap <strong>Start Gateway</strong>. Messages are queued and go out once it is running.</p>` : '')}
       </div>
     `;
 
@@ -520,7 +538,8 @@ Views.sms = async function () {
     function computeSittingResults(klass, type, term, year) {
       const exams = st.exams.filter(e => e.klass === klass && e.type === type && e.term === term && String(e.year) === String(year));
       const subjectCols = exams.map(e => ({ exam: e, subject: st.subjects.find(s => s.id === e.subjectId) })).filter(c => c.subject);
-      const students = st.students.filter(s => s.klass === klass);
+      // learners who sat this class's exams — includes those since promoted
+      const students = rosterForSitting(st, klass, term, year, type);
       const rows = students.map(stu => {
         const pcts = [];
         const subjectPcts = [];
@@ -578,22 +597,26 @@ Views.sms = async function () {
       resultsMap = new Map();
       const sittingId = document.getElementById('smsSittingSel').value;
       if (!sittingId) return;
-      const chosen = publishedSorted.find(p => p.id === sittingId);
-      if (!chosen) return;
-      const rows = computeSittingResults(chosen.klass, chosen.type, chosen.term, chosen.year);
-      rows.forEach(r => {
-        const si = strengthsAndImprovements(r.subjectPcts);
-        resultsMap.set(r.student.id, {
-          sitting: chosen.type, term: chosen.term, academic_year: chosen.year,
-          average: r.avg === null ? 'not yet available' : r.avg.toFixed(1),
-          level: r.avg === null ? 'not yet graded' : r.band.label,
-          position: r.position === null || r.position === 'Z' ? '—' : r.position,
-          class_size: r.outOf,
-          subjects: subjectBreakdown(r.subjectPcts),
-          strengths: si.strengths,
-          improvement_areas: si.improvement_areas
+      const group = sittingGroups.get(sittingId);
+      if (!group) return;
+      publishedSorted
+        .filter(p => p.type === group.type && p.term === group.term && String(p.year) === String(group.year))
+        .forEach(chosen => {
+          computeSittingResults(chosen.klass, chosen.type, chosen.term, chosen.year).forEach(r => {
+            if (resultsMap.has(r.student.id)) return;
+            const si = strengthsAndImprovements(r.subjectPcts);
+            resultsMap.set(r.student.id, {
+              sitting: chosen.type, term: chosen.term, academic_year: chosen.year,
+              average: r.avg === null ? 'N/A' : r.avg.toFixed(1),
+              level: r.avg === null ? 'not yet graded' : r.band.label,
+              position: r.position === null || r.position === 'Z' ? '—' : r.position,
+              class_size: r.outOf,
+              subjects: subjectBreakdown(r.subjectPcts),
+              strengths: si.strengths,
+              improvement_areas: si.improvement_areas
+            });
+          });
         });
-      });
     }
     recomputeResultsMap();
     document.getElementById('smsSittingSel').onchange = () => { recomputeResultsMap(); refreshPreview(); };
@@ -857,13 +880,43 @@ Views.sms = async function () {
         <h2>${existing ? 'Edit template' : 'New template'}</h2>
         <div class="form-grid">
           <div class="field full"><label>Name</label><input type="text" id="tplName" value="${UI.esc(existing ? existing.name : (seed ? seed.name : ''))}"></div>
-          <div class="field full"><label>Message</label><textarea id="tplBody" rows="5">${UI.esc(existing ? existing.body : (seed ? seed.body : ''))}</textarea></div>
+          <div class="field full">
+            <label>Message</label>
+            <div style="margin-bottom:6px;">${[...SmsUtil.PLACEHOLDERS, ...SmsUtil.RESULT_PLACEHOLDERS].filter((p, i, a) => a.indexOf(p) === i).map(p => `<button type="button" class="sms-placeholder-btn" data-ph="${p}">{${p}}</button>`).join('')}</div>
+            <textarea id="tplBody" rows="5">${UI.esc(existing ? existing.body : (seed ? seed.body : ''))}</textarea>
+            <div class="sms-char-counter" id="tplCounter"></div>
+          </div>
+          <div class="field full">
+            <label>Preview <span class="field-hint" style="font-weight:400;">(sample learner — real figures come from the published results when you send)</span></label>
+            <div class="sms-preview-box" id="tplPreview"></div>
+          </div>
         </div>
+        <p class="field-hint">{average}, {level}, {position}, {class_size}, {subjects}, {strengths}, {improvement_areas}, {sitting}, {term} and {academic_year} are filled from published results — choose a <strong>Results sitting</strong> on the Bulk SMS tab when sending.</p>
         <div class="modal-actions">
           <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
           <button class="btn btn-primary" id="saveBtn">Save</button>
         </div>
       `, (root) => {
+        const SAMPLE = {
+          student_name: 'Amina Wanjiru', name: 'Amina Wanjiru', parent_name: 'Mr. Kamau', class: 'Grade 7 East',
+          school_name: st.settings.schoolName || 'Your School', school: st.settings.schoolName || 'Your School',
+          average: '72.4', level: 'Meeting Expectation', position: '5', class_size: '42',
+          sitting: 'Endterm', term: 'Term 2', academic_year: '2026',
+          subjects: 'Mathematics: 78% (ME); English: 65% (ME)', strengths: 'Mathematics (78%)', improvement_areas: 'Kiswahili (51%)'
+        };
+        const tplBody = root.querySelector('#tplBody');
+        const refreshTplPreview = () => {
+          const seg = SmsUtil.segments(SmsUtil.render(tplBody.value, SAMPLE));
+          root.querySelector('#tplPreview').textContent = SmsUtil.render(tplBody.value, SAMPLE) || 'Type a message to see a preview.';
+          root.querySelector('#tplCounter').textContent = `${seg.length} characters (${seg.encoding}) · SMS parts: ${seg.parts || 0}`;
+        };
+        tplBody.oninput = refreshTplPreview;
+        root.querySelectorAll('.sms-placeholder-btn').forEach(btn => btn.onclick = () => {
+          const pos = tplBody.selectionStart === undefined ? tplBody.value.length : tplBody.selectionStart;
+          tplBody.value = tplBody.value.slice(0, pos) + `{${btn.dataset.ph}}` + tplBody.value.slice(pos);
+          tplBody.focus(); refreshTplPreview();
+        });
+        refreshTplPreview();
         root.querySelector('#cancelBtn').onclick = () => UI.closeModal();
         root.querySelector('#saveBtn').onclick = async () => {
           const name = root.querySelector('#tplName').value.trim();
@@ -906,7 +959,36 @@ Views.sms = async function () {
         `}
         <p class="field-hint" style="margin-top:12px;">Full setup steps (installing the Android app, permissions, pairing) are in <code>SMS_GATEWAY_SETUP.md</code>.</p>
       </div>
+      <div class="card" style="margin-top:14px;">
+        <h3 style="margin:0 0 6px 0; font-size:15px;">Send a test SMS</h3>
+        <p class="field-hint">Check that a paired phone really sends before you message parents. The test goes to the number below through your gateway.</p>
+        <div class="form-grid">
+          <div class="field"><label>Your phone number</label><input type="text" id="testSmsPhone" placeholder="e.g. 0712345678"></div>
+          <div class="field"><label>&nbsp;</label><button class="btn btn-primary" id="testSmsBtn"><i class="fa-solid fa-vial"></i> Send test SMS</button></div>
+        </div>
+        <p class="field-hint" id="testSmsHint"></p>
+      </div>
     `;
+    document.getElementById('testSmsBtn').onclick = async () => {
+      const phone = SmsUtil.normalizeKenyanPhone(document.getElementById('testSmsPhone').value);
+      const hint = document.getElementById('testSmsHint');
+      if (!phone) { UI.toast('Enter a valid Kenyan number, e.g. 0712345678'); return; }
+      const active = devices.filter(d => d.status !== 'disabled' && d.status !== 'pending');
+      if (!active.length) { UI.toast('Pair a phone first — no active gateway device yet'); return; }
+      const pick = active.find(SmsUtil.isOnline) || active[0];
+      try {
+        await SmsStore.createCampaign(schoolId, {
+          campaignName: 'Gateway test', source: 'manual',
+          message: `Test from ${st.settings.schoolName || 'your school'}: the SMS gateway is working.`,
+          recipients: [{ phone, message: `Test from ${st.settings.schoolName || 'your school'}: the SMS gateway is working.` }],
+          deviceIds: [pick.id]
+        });
+        hint.textContent = SmsUtil.isOnline(pick)
+          ? `Queued for ${pick.device_name}. It should arrive within a few seconds — check the History tab for its status.`
+          : `Queued, but ${pick.device_name} is offline. Open the gateway app on that phone and tap Start Gateway; it will send then.`;
+        UI.toast('Test SMS queued');
+      } catch (e) { UI.toast('Could not queue the test: ' + (e.message || e)); }
+    };
     document.getElementById('addDeviceBtn').onclick = async () => {
       const device = await SmsStore.createDevice(schoolId, 'CBE SMS Gateway');
       showPairCode(device);
@@ -941,11 +1023,25 @@ Views.sms = async function () {
       UI.openModal(`
         <h2>Pair "${UI.esc(device.device_name)}"</h2>
         ${SmsUtil.GATEWAY_APK_URL ? `<p class="field-hint">Don't have the app on that phone yet? <a href="${UI.esc(SmsUtil.GATEWAY_APK_URL)}" target="_blank" rel="noopener">Download the CBE SMS Gateway app</a> first.</p>` : ''}
-        <p>On the Android phone, open the <strong>CBE SMS Gateway</strong> app and enter this code:</p>
+        <p>On the Android phone, open the <strong>CBE SMS Gateway</strong> app and fill in these two things:</p>
+        <div class="field full" style="margin-bottom:10px;">
+          <label>1. Project URL <span class="field-hint" style="font-weight:400;">(paste under "Project setup" and tap Save)</span></label>
+          <div style="display:flex; gap:6px;">
+            <input type="text" id="pairProjectUrl" readonly value="${UI.esc(SUPABASE_URL)}" onclick="this.select()">
+            <button type="button" class="btn btn-sm" id="copyUrlBtn">Copy</button>
+          </div>
+        </div>
+        <p style="margin-bottom:0;">2. Pairing code <span class="field-hint">(under "Pair this phone")</span>:</p>
         <p style="font-size:32px; font-weight:800; letter-spacing:4px; text-align:center; margin:18px 0;">${UI.esc(device.pair_code)}</p>
         <p class="field-hint">Expires in 15 minutes. The phone needs its own internet connection (Wi-Fi or mobile data) and a Kenyan SIM inserted for sending SMS.</p>
         <div class="modal-actions"><button class="btn btn-primary" id="closeBtn">Done</button></div>
-      `, (root) => { root.querySelector('#closeBtn').onclick = () => { UI.closeModal(); Views.sms(); }; });
+      `, (root) => {
+        root.querySelector('#closeBtn').onclick = () => { UI.closeModal(); Views.sms(); };
+        root.querySelector('#copyUrlBtn').onclick = async () => {
+          try { await navigator.clipboard.writeText(SUPABASE_URL); UI.toast('Project URL copied'); }
+          catch (e) { root.querySelector('#pairProjectUrl').select(); UI.toast('Press Ctrl+C to copy'); }
+        };
+      });
     }
   }
 
@@ -956,13 +1052,13 @@ Views.sms = async function () {
       <div class="card">
         <div class="form-grid">
           <div class="field full">
-            <label><input type="checkbox" id="setAutoResults" ${settings.auto_results_sms ? 'checked' : ''}> Automatic results SMS after publishing</label>
+            <label><input type="checkbox" id="setAutoResults" disabled ${settings.auto_results_sms ? 'checked' : ''}> Automatic results SMS after publishing <em class="field-hint">(not connected yet)</em></label>
           </div>
           <div class="field full">
-            <label><input type="checkbox" id="setAutoAttendance" ${settings.auto_attendance_sms ? 'checked' : ''}> Automatic SMS when a learner is marked absent</label>
+            <label><input type="checkbox" id="setAutoAttendance" disabled ${settings.auto_attendance_sms ? 'checked' : ''}> Automatic SMS when a learner is marked absent <em class="field-hint">(not connected yet)</em></label>
           </div>
           <div class="field full">
-            <label><input type="checkbox" id="setAutoFee" ${settings.auto_fee_reminder_sms ? 'checked' : ''}> Automatic fee reminder SMS</label>
+            <label><input type="checkbox" id="setAutoFee" disabled ${settings.auto_fee_reminder_sms ? 'checked' : ''}> Automatic fee reminder SMS <em class="field-hint">(not connected yet)</em></label>
           </div>
           <div class="field full">
             <label><input type="checkbox" id="setConfirm" ${settings.require_confirmation ? 'checked' : ''}> Require confirmation before every bulk send</label>
@@ -974,15 +1070,12 @@ Views.sms = async function () {
         <div class="modal-actions" style="justify-content:flex-start;">
           <button class="btn btn-primary" id="saveSettingsBtn">Save settings</button>
         </div>
-        <p class="field-hint">The three "Automatic" toggles above are switches for other modules to check before auto-queueing SMS (e.g. Results, Attendance) — wire each one up from its own screen when you're ready to turn it on there.</p>
+        <p class="field-hint">The three "Automatic" options are greyed out because nothing sends automatically yet — send from the Bulk SMS tab. Batch size, delay and retry limit above <strong>do</strong> take effect: the phone reads them every time it checks for messages (a re-built gateway app is needed for the delay).</p>
       </div>
     `;
     document.getElementById('saveSettingsBtn').onclick = async () => {
       try {
         await SmsStore.saveSettings(schoolId, {
-          auto_results_sms: document.getElementById('setAutoResults').checked,
-          auto_attendance_sms: document.getElementById('setAutoAttendance').checked,
-          auto_fee_reminder_sms: document.getElementById('setAutoFee').checked,
           require_confirmation: document.getElementById('setConfirm').checked,
           max_retry_attempts: Number(document.getElementById('setMaxRetry').value) || 3,
           batch_size: Number(document.getElementById('setBatch').value) || 10,

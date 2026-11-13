@@ -19,7 +19,7 @@
 //
 // Header:    X-Device-Token: <token from sms-register-device>
 // Request:   { batchSize?: number }
-// Response:  { ok: true, messages: [{ id, phone, message, campaignId, attempts }] }
+// Response:  { ok: true, messages: [{ id, phone, message, campaignId, attempts }], delayMs, batchSize, maxRetry }
 // ============================================================
 
 import { serve } from "https://deno.land/std@0.203.0/http/server.ts";
@@ -41,8 +41,17 @@ serve(async (req) => {
     if (!device) return json({ error: "Unknown, disabled, or missing device token" }, 401);
 
     const body = await req.json().catch(() => ({}));
-    let batchSize = Number(body.batchSize) || DEFAULT_BATCH;
+
+    // The school's SMS Settings (batch size / delay / retries) rule — the
+    // phone's own numbers are only a fallback if the school has never saved
+    // any settings.
+    const { data: cfg } = await admin.from("sms_settings")
+      .select("batch_size, delay_between_ms, max_retry_attempts")
+      .eq("school_id", device.school_id).maybeSingle();
+    let batchSize = Number(cfg?.batch_size) || Number(body.batchSize) || DEFAULT_BATCH;
     batchSize = Math.max(1, Math.min(batchSize, MAX_BATCH));
+    const delayMs = cfg && cfg.delay_between_ms !== null && cfg.delay_between_ms !== undefined
+      ? Math.max(0, Math.min(Number(cfg.delay_between_ms) || 0, 60000)) : null;
 
     // Recover this school's messages this device left stuck mid-send.
     await admin.rpc("sms_recover_stuck_queue", { p_school_id: device.school_id, p_stuck_minutes: 10 });
@@ -67,7 +76,7 @@ serve(async (req) => {
       attempts: row.attempts,
     }));
 
-    return json({ ok: true, messages });
+    return json({ ok: true, messages, delayMs, batchSize, maxRetry: cfg?.max_retry_attempts ?? null });
   } catch (e) {
     return json({ error: String(e) }, 500);
   }

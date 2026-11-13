@@ -695,7 +695,7 @@ toggle.addEventListener('click', () => {
       // password" (e.g. a local dev server), since that link would
       // be dead for anyone else who opens the email.
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: 'https://bontymwash.github.io/CBE-SYSTEM/'
+        redirectTo: 'https://bcbe.co.ke/'
       });
       btn.disabled = false;
       btn.textContent = 'Send reset link';
@@ -1299,13 +1299,19 @@ Views.users = async function () {
       </p>
       <div style="max-height:56vh; overflow-y:auto; display:flex; flex-direction:column; gap:12px; padding-right:4px;">
         ${sortedClasses.map(c => {
-          const subjectsHere = subjectsForKlass(st, c.label).slice().sort((a, b) => a.name.localeCompare(b.name));
           const assigned = assignedByClass.get(c.id) || new Set();
+          // A class with no grade level (e.g. "Graduated") has no curriculum, and
+          // subjectsForKlass() falls back to "every subject" for it — which flooded
+          // this list. For such a class only show subjects already ticked for this
+          // teacher (so old allocations can be cleared), not the whole catalogue.
+          const hasLevel = !!sectionForKlassLabel(st, c.label);
+          const subjectsHere = (hasLevel ? subjectsForKlass(st, c.label) : st.subjects.filter(s => assigned.has(s.id)))
+            .slice().sort((a, b) => a.name.localeCompare(b.name));
           const inScope = classInScope(c);
           return `
             <div class="field full" style="border:1px solid var(--border, #e5e7eb); border-radius:8px; padding:10px 12px; margin:0;">
               <label style="font-weight:600; display:block; margin-bottom:8px;">${UI.esc(c.label)}${inScope ? ' <span class="badge badge-none" style="font-size:0.75em; font-weight:400;">every subject already via Section</span>' : ''}</label>
-              ${subjectsHere.length === 0 ? '<p class="field-hint" style="margin:0;">No subjects set up for this level yet.</p>' : `
+              ${subjectsHere.length === 0 ? `<p class="field-hint" style="margin:0;">${hasLevel ? 'No subjects set up for this level yet.' : 'Not a teaching class (no grade level, e.g. Graduated) — nothing to allocate.'}</p>` : `
               <div style="display:flex; flex-wrap:wrap; gap:8px;">
                 ${subjectsHere.map(s => `
                   <label style="display:flex; align-items:center; gap:6px; border:1px solid var(--border, #e5e7eb); border-radius:6px; padding:4px 10px; font-weight:400; cursor:pointer;">

@@ -64,8 +64,8 @@ serve(async (req) => {
     const { data: callerProfile, error: profileErr } = await adminClient
       .from("profiles").select("role").eq("id", caller.id).single();
     if (profileErr || !callerProfile) return json({ error: "Caller has no profile" }, 403);
-    if (!["admin", "superadmin"].includes(callerProfile.role)) {
-      return json({ error: "Only an admin can send results SMS." }, 403);
+    if (callerProfile.role !== "superadmin") {
+      return json({ error: "Sending results to parents is currently restricted to the superadmin." }, 403);
     }
 
     if (!AT_USERNAME || !AT_API_KEY) {

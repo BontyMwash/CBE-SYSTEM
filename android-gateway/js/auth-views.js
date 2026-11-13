@@ -695,7 +695,7 @@ toggle.addEventListener('click', () => {
       // password" (e.g. a local dev server), since that link would
       // be dead for anyone else who opens the email.
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: 'https://bontymwash.github.io/CBE-SYSTEM/'
+        redirectTo: 'https://bcbe.co.ke/'
       });
       btn.disabled = false;
       btn.textContent = 'Send reset link';

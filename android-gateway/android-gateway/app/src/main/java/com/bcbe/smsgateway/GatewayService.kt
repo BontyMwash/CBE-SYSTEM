@@ -98,6 +98,10 @@ class GatewayService : Service() {
                     } else {
                         setStatus("Sending $count message${if (count == 1) "" else "s"}…")
                         val reports = ArrayList<JSONObject>()
+                        // Delay between messages comes from the school's SMS Settings
+                        // (falls back to the built-in default if the server didn't send one).
+                        val sendDelayMs = if (result.body.has("delayMs") && !result.body.isNull("delayMs"))
+                            result.body.optLong("delayMs", SEND_DELAY_MS).coerceIn(0L, 60_000L) else SEND_DELAY_MS
                         for (i in 0 until count) {
                             val m = messages!!.getJSONObject(i)
                             val outcome = SmsSender.send(this, m.getString("phone"), m.getString("message"))
@@ -106,7 +110,7 @@ class GatewayService : Service() {
                                 put("status", if (outcome.success) "sent" else "failed")
                                 if (!outcome.success) put("errorMessage", outcome.errorMessage ?: "Unknown error")
                             })
-                            delay(SEND_DELAY_MS)
+                            delay(sendDelayMs)
                         }
                         ApiClient.updateResults(this, token, reports)
                         setStatus("Sent batch of $count")

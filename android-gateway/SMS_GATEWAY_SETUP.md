@@ -138,3 +138,54 @@ means generating a fresh code from Gateway Devices and repeating step
   (a WorkManager job also nudges things along roughly every 15
   minutes even if the app's foreground service gets killed by the
   OS).
+
+
+---
+
+## Update notes (settings now take effect, test SMS, pairing screen)
+
+- **Settings tab**: batch size, retry limit and delay between messages now really
+  apply. The phone gets them from the server on every poll. Retries are stored on
+  each queued message when a campaign is created.
+- **Pairing**: the "Pair a phone" window now shows your Project URL (with a Copy
+  button) next to the 8-character code, so you don't have to look it up.
+- **Gateway Devices -> Send a test SMS**: send one message to your own number to
+  prove the phone is sending before messaging parents.
+- The three "Automatic ..." switches are greyed out — nothing sends automatically yet.
+- **Send Results to Parents** is hidden from admins; only the superadmin sees it.
+
+### To apply this update
+1. Redeploy two Edge Functions:
+   `supabase functions deploy sms-get-queue` and `supabase functions deploy send-sms`
+2. (Only for the delay setting to reach the phone) rebuild and reinstall the
+   gateway APK from `android-gateway/`. Without it, everything else works and the
+   phone keeps its built-in 1.5 s delay.
+3. Hard-refresh the web app.
+
+
+---
+
+## Update 2 — fix for "campaign queued but nothing sends"
+
+Cause: messages were being assigned to phones that were never paired (or to no
+phone at all), and the server only ever handed a phone the messages assigned to
+*it* — so those messages were never picked up.
+
+**Run this once in Supabase -> SQL Editor:** `sql/038_sms_claim_unassigned.sql`
+(a paired phone now also picks up unassigned messages for its own school, and
+messages stuck on an unpaired/disabled device). Stuck campaigns will send as
+soon as the phone next polls — no need to re-queue them.
+
+Also changed in the web app:
+- Messages are only assigned to phones that are actually paired.
+- Results sitting in Bulk SMS is now chosen by exam type + term + year across all
+  published classes, so every learner gets figures from their own class
+  (including learners since promoted). Missing values show "N/A"/"—".
+- Template editor has placeholder buttons and a live preview.
+- Subjects allocation no longer lists every subject under classes with no grade
+  level (e.g. "Graduated").
+
+If it still does not send, check in order: (1) Gateway Devices shows the phone
+**Online**, (2) the gateway app says "Idle — waiting for messages" or "Sending…",
+(3) the Edge Functions `sms-get-queue` and `sms-update-result` are deployed,
+(4) History -> View on the campaign shows the error text for each message.
