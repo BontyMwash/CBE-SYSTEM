@@ -1,4 +1,16 @@
 # ------------------------------------------------------------
+# One canonical address for search engines: https://bcbe.co.ke/
+# (http -> https, and www -> non-www). Without this Google can see
+# several copies of the site and may pick the wrong one.
+# ------------------------------------------------------------
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{HTTPS} !=on [OR]
+  RewriteCond %{HTTP_HOST} ^www\. [NC]
+  RewriteRule ^ https://bcbe.co.ke%{REQUEST_URI} [L,R=301]
+</IfModule>
+
+# ------------------------------------------------------------
 # Speed settings for Apache / cPanel hosting (bcbe.co.ke).
 # GitHub Pages did all of this automatically; a normal web host
 # usually does NOT, which is the most common reason a site feels

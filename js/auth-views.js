@@ -106,8 +106,9 @@ Views.home = function (onLogin) {
       <section class="home-hero" id="home">
         <div class="home-hero-inner">
           <div class="home-hero-text reveal">
-            <span class="home-badge">SMART CBE ASSESSMENT PLATFORM</span>
+            <span class="home-badge">BCBE ANALYTICS &middot; SMART CBE ASSESSMENT PLATFORM</span>
             <h1>
+              <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;">BCBE Analytics (B~CBE) &mdash; </span>
               <span class="home-hero-line-dark">Smarter CBE Assessment.</span>
               <span class="home-hero-line-grad">Better Learner Outcomes.</span>
             </h1>
