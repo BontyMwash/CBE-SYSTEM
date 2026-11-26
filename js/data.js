@@ -26,7 +26,7 @@ const Store = {
   }),
   _mapSubject: (r) => ({ id: r.id, name: r.name, code: r.code || '', section: r.section || '' }),
   _mapExamType: (r) => ({ id: r.id, name: r.name, sortOrder: r.sort_order || 0 }),
-  _mapExam: (r) => ({ id: r.id, type: r.type, term: r.term, year: r.year, klass: r.klass, subjectId: r.subject_id, totalMarks: Number(r.total_marks), date: r.exam_date || '' }),
+  _mapExam: (r) => ({ id: r.id, type: r.type, term: r.term, year: r.year, klass: r.klass, subjectId: r.subject_id, totalMarks: Number(r.total_marks), date: r.exam_date || '', createdAt: r.created_at || '' }),
   _mapResult: (r) => ({ id: r.id, examId: r.exam_id, studentId: r.student_id, marks: Number(r.marks) }),
   _mapTeacherSubject: (r) => ({ id: r.id, teacherId: r.teacher_id, subjectId: r.subject_id }),
   _mapTeacherClass: (r) => ({ id: r.id, teacherId: r.teacher_id, classId: r.class_id }),
@@ -542,11 +542,30 @@ const Store = {
   },
 
   // ---- Exams ----
-  async addExam(e) {
+  // An exam is one (class, subject, exam type, term, year). Creating a second
+  // one with the same five values would overlap the first (two sets of marks
+  // for the same paper), so it is refused here and, as a backstop, by the
+  // unique index in sql/039_exam_no_overlap.sql.
+  async _findOverlappingExam({ klass, subjectId, type, term, year }, excludeId) {
+    let q = supabase.from('exams').select('id')
+      .eq('school_id', this.activeSchoolId)
+      .eq('klass', String(klass).trim()).eq('subject_id', subjectId)
+      .eq('type', type).eq('term', term).eq('year', Number(year));
+    if (excludeId) q = q.neq('id', excludeId);
+    const { data, error } = await q.limit(1);
+    this._throwIfError('check for an existing exam', error);
+    return (data || [])[0] || null;
+  },
+  _overlapMessage(e) {
+    return `${e.type} for this subject already exists for ${String(e.klass).trim()} in ${e.term} ${e.year}. Edit that exam instead, or choose a different term, year or exam type.`;
+  },
+  async addExam(e, opts = {}) {
+    if (!opts.skipCheck && await this._findOverlappingExam(e)) throw new Error(this._overlapMessage(e));
     const { data, error } = await supabase.from('exams').insert({
       school_id: this.activeSchoolId, type: e.type, term: e.term, year: e.year, klass: e.klass.trim(),
       subject_id: e.subjectId, total_marks: Number(e.totalMarks) || 100, exam_date: e.date || null
     }).select().single();
+    if (error && error.code === '23505') throw new Error(this._overlapMessage(e));
     this._throwIfError('add exam', error);
     return this._mapExam(data);
   },
@@ -559,7 +578,20 @@ const Store = {
     if (patch.subjectId !== undefined) dbPatch.subject_id = patch.subjectId;
     if (patch.totalMarks !== undefined) dbPatch.total_marks = patch.totalMarks;
     if (patch.date !== undefined) dbPatch.exam_date = patch.date || null;
+    // Only re-check when something that identifies the exam is changing.
+    const identity = ['type', 'term', 'year', 'klass', 'subjectId'];
+    if (identity.some(k => patch[k] !== undefined)) {
+      const { data: cur } = await supabase.from('exams').select('type,term,year,klass,subject_id').eq('id', id).single();
+      if (cur) {
+        const merged = {
+          type: patch.type ?? cur.type, term: patch.term ?? cur.term, year: patch.year ?? cur.year,
+          klass: patch.klass ?? cur.klass, subjectId: patch.subjectId ?? cur.subject_id
+        };
+        if (await this._findOverlappingExam(merged, id)) throw new Error(this._overlapMessage(merged));
+      }
+    }
     const { data, error } = await supabase.from('exams').update(dbPatch).eq('id', id).select().single();
+    if (error && error.code === '23505') throw new Error('Another exam already exists for that class, subject, type, term and year.');
     this._throwIfError('update exam', error);
     return this._mapExam(data);
   },

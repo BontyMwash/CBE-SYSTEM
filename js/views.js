@@ -2027,18 +2027,25 @@ Views.exams = async function () {
       const distinctSubjectIds = new Set(group.map(r => r.exam.subjectId));
       if (distinctSubjectIds.size > 1) group.forEach(r => { r.duplicateSuspect = true; });
     });
-    return rows.sort((a, b) => (b.exam.year - a.exam.year) || a.exam.term.localeCompare(b.exam.term) || a.exam.klass.localeCompare(b.exam.klass));
+    // Newest created exam first, so a freshly created exam is always at the
+    // top. Exams with no timestamp (old data) fall back to year/term/class.
+    return rows.sort((a, b) =>
+      String(b.exam.createdAt || '').localeCompare(String(a.exam.createdAt || '')) ||
+      (b.exam.year - a.exam.year) || a.exam.term.localeCompare(b.exam.term) || a.exam.klass.localeCompare(b.exam.klass));
   }
 
   const allRows = buildRows();
 
   const PAGE_SIZE = 10;
-  const filters = { search: '', term: '', year: '', klass: '', type: '', subject: '', status: '' };
+  // Default to the school's CURRENT term and year so the page shows this
+  // term's exams, not every exam ever created. "All terms"/"All years"
+  // in the filters still shows everything.
+  const filters = { search: '', term: st.settings.term || '', year: String(st.settings.year || ''), klass: '', type: '', subject: '', status: '' };
   let page = 1;
 
   // ---- dropdown option sources ----
   const termOptions = ['Term 1', 'Term 2', 'Term 3'];
-  const yearOptions = [...new Set(allRows.map(r => String(r.exam.year)))].sort((a, b) => b - a);
+  const yearOptions = [...new Set([...allRows.map(r => String(r.exam.year)), String(st.settings.year || '')].filter(Boolean))].sort((a, b) => b - a);
   const klassOptions = classOptionLabels(st).length ? classOptionLabels(st) : [...new Set(allRows.map(r => r.exam.klass))].sort();
   const typeOptions = st.examTypes.length ? st.examTypes.map(t => t.name) : [...new Set(allRows.map(r => r.exam.type))].sort();
 
@@ -2085,17 +2092,19 @@ Views.exams = async function () {
   // ---- Exam Summary stat cards (calculated from the full, unfiltered
   // level-scoped set, so they always reflect the whole picture) ----
   function renderStatCards() {
-    const total = allRows.length;
-    const active = allRows.filter(r => r.status === 'in-progress').length;
-    const completed = allRows.filter(r => r.status === 'complete').length;
-    const pending = allRows.filter(r => r.status === 'not-started').length;
+    const scoped = allRows.filter(r => (!filters.term || r.exam.term === filters.term) && (!filters.year || String(r.exam.year) === filters.year));
+    const total = scoped.length;
+    const active = scoped.filter(r => r.status === 'in-progress').length;
+    const completed = scoped.filter(r => r.status === 'complete').length;
+    const pending = scoped.filter(r => r.status === 'not-started').length;
+    const scopeLabel = [filters.term || 'All terms', filters.year || 'All years'].join(' · ');
     return `
-      <div class="grid grid-4 section-block">
+      <div class="grid grid-4 section-block" id="examStatCards" title="${UI.esc(scopeLabel)}">
         <div class="card stat-card-compact plain">
           <i class="fa-solid fa-file-pen stat-icon"></i>
           <p class="stat-label">Total Exams</p>
           <p class="stat-value">${total}</p>
-          <p class="stat-sub">currently configured</p>
+          <p class="stat-sub">${UI.esc(scopeLabel)}</p>
         </div>
         <div class="card stat-card-compact plain">
           <i class="fa-solid fa-circle-dot stat-icon" style="color:var(--warning);"></i>
@@ -2144,7 +2153,7 @@ Views.exams = async function () {
             <option value="in-progress" ${filters.status === 'in-progress' ? 'selected' : ''}>In Progress</option>
             <option value="complete" ${filters.status === 'complete' ? 'selected' : ''}>Complete</option>
           </select>
-          <button class="btn btn-sm btn-ghost" id="fReset">Reset filters</button>
+          <button class="btn btn-sm btn-ghost" id="fReset" title="Back to the current term and year">Reset filters</button>
         </div>
       </div>
     `;
@@ -2176,7 +2185,7 @@ Views.exams = async function () {
     }
     const filtered = applyFilters(allRows);
     if (filtered.length === 0) {
-      return `<div class="empty"><div class="empty-title">No exams match your filters</div><p>Try widening your search or resetting the filters below.</p><button class="btn btn-ghost" id="noMatchResetBtn">Reset filters</button></div>`;
+      return `<div class="empty"><div class="empty-title">No exams match your filters</div><p>${filters.term && filters.year ? `No exams yet for ${UI.esc(filters.term)} ${UI.esc(filters.year)}. Create one, or pick another term/year above.` : 'Try widening your search or resetting the filters.'}</p><button class="btn btn-ghost" id="noMatchResetBtn">Reset filters</button></div>`;
     }
     const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
     if (page > totalPages) page = totalPages;
@@ -2228,15 +2237,7 @@ Views.exams = async function () {
     const items = [
       { label: 'View Results', icon: 'fa-chart-simple', onClick: () => { App.state.selectedExamId = e.id; App.navigate('analysis'); } },
       { label: 'Edit Exam', icon: 'fa-pen', onClick: () => openForm(e) },
-      {
-        label: 'Duplicate Exam', icon: 'fa-clone', onClick: async () => {
-          try {
-            await Store.addExam({ type: e.type, term: e.term, year: e.year, klass: e.klass, subjectId: e.subjectId, totalMarks: e.totalMarks, date: e.date });
-            UI.toast('Exam duplicated');
-            Views.exams();
-          } catch (err) { UI.toast('Could not duplicate: ' + err.message); }
-        }
-      },
+      { label: 'Copy to another term/year', icon: 'fa-clone', onClick: () => openForm(null, e) },
       { label: 'Import Marks', icon: 'fa-file-import', onClick: () => Importer.openImportMarksModal(e, subjectName(e.subjectId), () => Views.exams()) },
       { label: 'Export Marks', icon: 'fa-file-export', onClick: () => exportExamMarksCSV(e) },
       { label: 'Delete Exam', icon: 'fa-trash', danger: true, onClick: () => {
@@ -2337,13 +2338,15 @@ Views.exams = async function () {
   }
 
   function repaintTable() {
+    const cards = document.getElementById('examStatCards');
+    if (cards) cards.outerHTML = renderStatCards();
     document.getElementById('examsTableArea').innerHTML = renderTableArea();
     wireRowActions();
     wirePagination();
   }
 
   function resetFilters() {
-    filters.search = ''; filters.term = ''; filters.year = ''; filters.klass = ''; filters.type = ''; filters.subject = ''; filters.status = '';
+    filters.search = ''; filters.term = st.settings.term || ''; filters.year = String(st.settings.year || ''); filters.klass = ''; filters.type = ''; filters.subject = ''; filters.status = '';
     page = 1;
     document.getElementById('examsFilterBar').outerHTML = renderFilterBar();
     wireFilterBar();
@@ -2403,25 +2406,26 @@ Views.exams = async function () {
   wireRowActions();
   wirePagination();
 
-  function openForm(existing) {
+  function openForm(existing, copyFrom) {
     const isEdit = !!existing;
+    const src = existing || copyFrom || null; // values to pre-fill
     if (st.subjects.length === 0) { UI.toast('Add a subject first'); return; }
     if (st.examTypes.length === 0) { UI.toast('Add an exam type first, from Settings -> Exam types'); return; }
     const classOpts = classOptionLabels(st);
     const classField = classOpts.length
       ? `<select id="f_klass">
            <option value="">Select class</option>
-           ${classOpts.map(c => `<option value="${UI.esc(c)}" ${isEdit && existing.klass === c ? 'selected' : ''}>${UI.esc(c)}</option>`).join('')}
+           ${classOpts.map(c => `<option value="${UI.esc(c)}" ${src && src.klass === c ? 'selected' : ''}>${UI.esc(c)}</option>`).join('')}
          </select>`
-      : `<input type="text" id="f_klass" value="${isEdit ? UI.esc(existing.klass) : ''}" placeholder="e.g. Grade 7">
+      : `<input type="text" id="f_klass" value="${src ? UI.esc(src.klass) : ''}" placeholder="e.g. Grade 7">
          <p class="field-hint">Tip: set up classes on the <a href="#classes">Classes</a> page for a dropdown here.</p>`;
     UI.openModal(`
-      <h2>${isEdit ? 'Edit exam' : 'New exam'}</h2>
+      <h2>${isEdit ? 'Edit exam' : copyFrom ? 'Copy exam to another term/year' : 'New exam'}</h2>
       <div class="form-grid">
         <div class="field">
           <label>Exam type</label>
           <select id="f_type">
-            ${st.examTypes.map(t => `<option value="${UI.esc(t.name)}" ${isEdit && existing.type === t.name ? 'selected' : ''}>${UI.esc(t.name)}</option>`).join('')}
+            ${st.examTypes.map(t => `<option value="${UI.esc(t.name)}" ${src && src.type === t.name ? 'selected' : ''}>${UI.esc(t.name)}</option>`).join('')}
           </select>
           <p class="field-hint">Manage the list of exam types from <a href="#settings">Settings</a>.</p>
         </div>
@@ -2446,7 +2450,7 @@ Views.exams = async function () {
         </div>
         <div class="field">
           <label>Total marks</label>
-          <input type="number" id="f_total" value="${isEdit ? existing.totalMarks : 100}">
+          <input type="number" id="f_total" value="${src ? src.totalMarks : 100}">
         </div>
         <div class="field">
           <label>Date (optional)</label>
@@ -2455,7 +2459,7 @@ Views.exams = async function () {
       </div>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="cancelBtn">Cancel</button>
-        <button class="btn btn-primary" id="saveBtn">${isEdit ? 'Save changes' : 'Create exam'}</button>
+        <button class="btn btn-primary" id="saveBtn">${isEdit ? 'Save changes' : copyFrom ? 'Create copy' : 'Create exam'}</button>
       </div>
     `, (root) => {
       const klassField = root.querySelector('#f_klass');
@@ -2475,7 +2479,7 @@ Views.exams = async function () {
         }
         const prevValue = subjectField.value;
         subjectField.innerHTML = options.map(s => `<option value="${s.id}">${UI.esc(s.name)}</option>`).join('');
-        const keep = isEdit && !subjectField.dataset.touched ? existing.subjectId : prevValue;
+        const keep = src && !subjectField.dataset.touched ? src.subjectId : prevValue;
         if (options.some(s => s.id === keep)) subjectField.value = keep;
         const section = klass ? sectionForKlassLabel(st, klass) : null;
         subjectHint.textContent = section ? `Showing subjects for ${section.label}${options.length !== st.subjects.length ? ` (${options.length} of ${st.subjects.length} total)` : ''}.` : 'Pick a class to narrow this list to its level.';
@@ -2596,7 +2600,7 @@ Views.exams = async function () {
           const exists = st.exams.some(e => e.type === type && e.term === term && String(e.year) === String(year) && e.klass === klass && e.subjectId === subj.id);
           if (exists) { skipped++; continue; }
           try {
-            await Store.addExam({ type, term, year, klass, subjectId: subj.id, totalMarks: 100, date });
+            await Store.addExam({ type, term, year, klass, subjectId: subj.id, totalMarks: 100, date }, { skipCheck: true });
             created++;
           } catch (err) {
             Store.logClientError('add_exam', { klass, subjectId: subj.id, subjectName: subj.name, type, term, year }, err);
@@ -2658,7 +2662,9 @@ Views.results = async function () {
   // marks for. This keeps the pickers short even with many exams.
   const startExam = App.state.selectedExamId && st.exams.find(e => e.id === App.state.selectedExamId)
     ? st.exams.find(e => e.id === App.state.selectedExamId)
-    : [...st.exams].sort((a, b) => (b.year - a.year) || a.term.localeCompare(b.term))[0];
+    : ([...st.exams].filter(e => e.term === st.settings.term && String(e.year) === String(st.settings.year))
+        .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0]
+      || [...st.exams].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')) || (b.year - a.year) || a.term.localeCompare(b.term))[0]);
 
   let picked = { klass: startExam.klass, type: startExam.type, term: startExam.term, year: String(startExam.year) };
   let selectedId = startExam.id;
@@ -2689,9 +2695,13 @@ Views.results = async function () {
     const seen = new Map();
     st.exams.forEach(e => {
       const key = `${e.type}||${e.term}||${e.year}`;
-      if (!seen.has(key)) seen.set(key, { key, type: e.type, term: e.term, year: e.year });
+      const made = String(e.createdAt || '');
+      if (!seen.has(key)) seen.set(key, { key, type: e.type, term: e.term, year: e.year, created: made });
+      else if (made > seen.get(key).created) seen.get(key).created = made;
     });
+    // Newest created sitting first; ties fall back to year/term/type.
     return [...seen.values()].sort((a, b) =>
+      b.created.localeCompare(a.created) ||
       (Number(b.year) - Number(a.year)) || a.term.localeCompare(b.term) || a.type.localeCompare(b.type)
     );
   };
